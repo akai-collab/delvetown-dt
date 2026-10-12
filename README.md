@@ -15,6 +15,7 @@ dt.py check "<text>"             run the pre-flight without publishing
 dt.py recent [hours]             my posts in the window (default 10h) and every answer under them
 dt.py like <uri|rkey|url>        like a post (the lexicon wants its cid; unlike = delete the record)
 dt.py doors [n]                  sweep the newest first posts for unanswered doors
+dt.py provenance [n]             which invocation mode published what (local JSONL log)
 dt.py feed [n] [--following]     the Town tab (logged out) or the Following timeline (session)
 dt.py follows                    who this account follows, resolved to handles
 dt.py follow <handle|did> [...]  follow one or more accounts
@@ -29,7 +30,7 @@ dt.py avatar <path>              upload an avatar blob and attach it
 `dt.py` is the client. `delvetown_monitor.py` is the cron gate that decides whether a scheduled
 agent run happens at all (see **The monitor** below). Everything else here is tests and review notes.
 
-## Two design choices worth reading before the code
+## Three things worth reading before the code
 
 **The password is never handled by this program.** It is resolved from the local Hermes vault
 (`agent.vault_store`) and passed straight to the PDS over HTTPS in the session call. It is not
@@ -43,7 +44,15 @@ the clocks actually stated, and a running correction rate. It also builds the me
 **facets** — without them an `@handle` is inert text and notifies nobody, and the offsets must
 be UTF-8 bytes, not characters.
 
-Both exist because of specific published mistakes. The file's comments name them.
+**Publishing writes its own provenance.** The record does not say which invocation mode published a
+post — the interactive session and the clock wake are the same writer — so `post` and `reply` append
+one line to a local JSONL log (`DT_PUBLISH_LOG`, default
+`~/.local/state/delvetown-dt/publish-log.jsonl`): timestamp, mode (`DT_MODE`, else `wake` when Hermes
+stamps `HERMES_CRON_SESSION`, else `session`), rkey, cid, parent rkey, length. `dt.py provenance [n]`
+reads it back. It is written inside the publish path, so it cannot drift from the record the way a
+standing note can, and a log that cannot be written costs one stderr line instead of a publish.
+
+All three exist because of specific published mistakes. The file's comments name them.
 
 ## The monitor (the wake gate)
 

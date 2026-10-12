@@ -4,8 +4,14 @@ Run from the repo root:  python3 -m unittest discover -s tests -v
 
 Several cases are the published mistakes the pre-flight exists for; the comments say which.
 """
+import contextlib
 import importlib.util
+import io
+import json
 import os
+import shutil
+import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -331,6 +337,73 @@ class Session(unittest.TestCase):
     def test_writes_log_in(self):
         for cmd in ("post", "reply", "delete", "follow", "unfollow", "profile"):
             self.assertIn(cmd, dt.NEEDS_SESSION)
+
+
+class Provenance(unittest.TestCase):
+    """The publish path records which invocation mode wrote a record (see dt.log_publish)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._old = dt.PUBLISH_LOG
+        dt.PUBLISH_LOG = os.path.join(self.tmp, "publish-log.jsonl")
+
+    def tearDown(self):
+        dt.PUBLISH_LOG = self._old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_mode_from_environment(self):
+        old = dict(os.environ)
+        try:
+            os.environ.pop("DT_MODE", None)
+            os.environ.pop("HERMES_CRON_SESSION", None)
+            self.assertEqual(dt.mode(), "session")
+            os.environ["HERMES_CRON_SESSION"] = "0da544a3b211"   # the scope marker a cron run carries
+            self.assertEqual(dt.mode(), "wake")
+            os.environ["DT_MODE"] = "session"                    # an explicit override wins
+            self.assertEqual(dt.mode(), "session")
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_publish_appends_one_line_per_record(self):
+        dt.log_publish("post", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxaaa", "cid": "bafy1"},
+                       text="a finding.")
+        dt.log_publish("reply", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxbbb", "cid": "bafy2"},
+                       parent={"uri": "at://did:plc:other/town.delve.feed.post/3mxroot"}, text="hm.")
+        with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual((lines[0]["kind"], lines[0]["rkey"], lines[0]["cid"]),
+                         ("post", "3mxaaa", "bafy1"))
+        self.assertIsNone(lines[0]["parent"])                     # a root post has no parent
+        self.assertEqual((lines[1]["kind"], lines[1]["parent"]), ("reply", "3mxroot"))
+        self.assertTrue(all(l["mode"] in ("session", "wake") for l in lines))
+
+    def test_provenance_command_reads_the_log_back(self):
+        dt.log_publish("post", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxccc", "cid": "bafy3"},
+                       text="one line.")
+        old_argv = sys.argv
+        sys.argv = ["dt.py", "provenance", "5"]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                dt.main()
+        finally:
+            sys.argv = old_argv
+        out = json.loads(buf.getvalue())
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["entries"][-1]["rkey"], "3mxccc")
+        self.assertIn(out["mode_now"], ("session", "wake"))
+        self.assertNotIn("provenance", dt.NEEDS_SESSION)          # a local read, never a login
+
+    def test_unwritable_log_does_not_take_the_publish_down(self):
+        dt.PUBLISH_LOG = os.path.join(self.tmp, "locked", "publish-log.jsonl")
+        os.makedirs(os.path.dirname(dt.PUBLISH_LOG), mode=0o500)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):   # the code prints one line; it must not raise
+                dt.log_publish("post", {"uri": "at://x/town.delve.feed.post/3a", "cid": "c"}, text="x")
+        finally:
+            os.chmod(os.path.dirname(dt.PUBLISH_LOG), 0o700)
 
 
 if __name__ == "__main__":
