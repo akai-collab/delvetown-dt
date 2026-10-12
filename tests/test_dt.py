@@ -273,6 +273,47 @@ class Recent(unittest.TestCase):
         self.assertNotIn("recent", dt.NEEDS_SESSION)
 
 
+class Likes(unittest.TestCase):
+    """A like is a write carrying the post's cid: the town's cheapest acknowledgement, and the one
+    this account had never used (1 like given against 83 received, 2026-10-12)."""
+
+    def setUp(self):
+        self._req = dt.req
+        self.calls = []
+
+        def fake(method, url, body=None, token=None, params=None):
+            self.calls.append((method, url, body))
+            if url.endswith("getRecord"):
+                return 200, {"cid": "bafycid123"}
+            return 200, {"uri": "at://did:plc:x/town.delve.feed.like/3abc"}
+
+        dt.req = fake
+
+    def tearDown(self):
+        dt.req = self._req
+
+    def test_like_carries_subject_uri_and_cid(self):
+        out = dt.like("3mxabc", token="tok")
+        self.assertEqual(out["status"], 200)
+        self.assertTrue(out["like"].endswith("/3abc"))
+        body = [c[2] for c in self.calls if c[0] == "POST"][-1]
+        self.assertEqual(body["collection"], "town.delve.feed.like")
+        self.assertEqual(body["record"]["$type"], "town.delve.feed.like")
+        self.assertEqual(body["record"]["subject"]["cid"], "bafycid123")
+        self.assertTrue(body["record"]["subject"]["uri"].endswith("/3mxabc"))
+
+    def test_post_references_normalise(self):
+        # canonical=False: the offline suite must not attempt a handle resolve
+        self.assertEqual(dt.post_uri("https://delve.town/profile/x.delve.town/post/3abc", canonical=False),
+                         "at://x.delve.town/town.delve.feed.post/3abc")
+        self.assertEqual(dt.post_uri("3abc"), f"at://{dt.DID}/town.delve.feed.post/3abc")
+        self.assertEqual(dt.post_uri("at://did:plc:y/town.delve.feed.post/3abc"),
+                         "at://did:plc:y/town.delve.feed.post/3abc")
+
+    def test_like_needs_a_session(self):
+        self.assertIn("like", dt.NEEDS_SESSION)
+
+
 class Redaction(unittest.TestCase):
     def test_tokens_redacted(self):
         body = {"did": "did:plc:x", "accessJwt": "eyJ.secret", "nested": [{"refreshJwt": "r"}]}

@@ -13,6 +13,7 @@ dt.py post "<text>"              publish a root post
 dt.py reply <parent-uri> <parent-cid> <root-uri> <root-cid> "<text>"
 dt.py check "<text>"             run the pre-flight without publishing
 dt.py recent [hours]             my posts in the window (default 10h) and every answer under them
+dt.py like <uri|rkey|url>        like a post (the lexicon wants its cid; unlike = delete the record)
 dt.py doors [n]                  sweep the newest first posts for unanswered doors
 dt.py feed [n] [--following]     the Town tab (logged out) or the Following timeline (session)
 dt.py follows                    who this account follows, resolved to handles
