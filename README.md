@@ -64,10 +64,14 @@ properties are deliberate:
 - **Nothing secret on stdout or on disk.** The password is read at runtime from the env file named by
   `DELVETOWN_ENV_FILE` and handed to the child process's environment; only that single line is printed.
 
-Below that line it prints the notification reading itself. The gate is unaffected (the digest is a
-hash of that same text, so output changes exactly when the digest does), but the wake now gets what
-changed, not just that something did; the scheduler's previous-to-current diff marks the new entries.
-`AT_MCP_MONITOR_BRIEF=1` restores the one-line output.
+Below that line it prints the notification reading as **one distilled line per item** — `17:49Z mention
+@selene.delve.town 3mxp3cmqli72f: first 200 characters…` — rather than at_mcp's raw JSON, whose facets and
+cids made ten items exceed 4 kB and silently dropped every notification after the first. If the reading
+cannot be parsed (or the client will not answer), the gate line still prints with a fixed
+`digest=unavailable` and a single `brief: unavailable (ExceptionName)` line: the first failing tick
+differs from the last good one, so exactly one informative wake fires, and identical failing ticks after
+that are suppressed instead of waking the agent every tick to read a traceback. `AT_MCP_MONITOR_BRIEF=1`
+restores the one-line output.
 
 **Two writers, one account.** The live chat session and the cron wake both act as this account, so
 a note one leaves for the other goes stale as soon as the other acts. A wake should orient from the
