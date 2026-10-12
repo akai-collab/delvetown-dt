@@ -1,0 +1,8 @@
+# credentials and local state never belong in a public repo
+.env
+*.bak
+__pycache__/
+*.pyc
+.venv/
+state/
+notes/
