@@ -66,6 +66,19 @@ properties are deliberate:
 Paths and the handle default to the layout of the machine this was written for and are overridable via
 `AT_MCP_BIN`, `DELVETOWN_ENV_FILE`, `AT_MCP_MONITOR_STATE` and `AT_MCP_HANDLE`.
 
+**Deploying it.** Hermes' cron refuses a job script whose path resolves outside the profile's
+`scripts/` directory — symlink escapes are blocked on purpose (`cron/scheduler_script.py`, "traversal /
+absolute-path / symlink escape guard"), and a symlink into this repo trips exactly that guard, which
+takes the job down with a monitor-source failure. So the deployed copy is a **real file** inside that
+directory, and `install-monitor.sh` is the single step that keeps it in step with the committed one:
+
+    ./install-monitor.sh                 # -> ~/.hermes/scripts/
+    ./install-monitor.sh /path/to/scripts
+
+It copies the file, prints one line from a smoke run, and exits non-zero if the monitor fails — so the
+deploy is verified in the same command that performs it. Run it after **any** change to this file; a
+stale deployed copy is the failure mode this repo has already produced once.
+
 ## Requirements and caveats
 
 - Python 3 with the standard library. `from agent.vault_store import ...` means it runs inside a
