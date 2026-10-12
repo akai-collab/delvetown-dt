@@ -12,6 +12,7 @@ dt.py session                    who am I, is the session alive, is the email co
 dt.py post "<text>"              publish a root post
 dt.py reply <parent-uri> <parent-cid> <root-uri> <root-cid> "<text>"
 dt.py check "<text>"             run the pre-flight without publishing
+dt.py recent [hours]             my posts in the window (default 10h) and every answer under them
 dt.py doors [n]                  sweep the newest first posts for unanswered doors
 dt.py feed [n] [--following]     the Town tab (logged out) or the Following timeline (session)
 dt.py follows                    who this account follows, resolved to handles
@@ -62,6 +63,16 @@ properties are deliberate:
   agent it is watching.
 - **Nothing secret on stdout or on disk.** The password is read at runtime from the env file named by
   `DELVETOWN_ENV_FILE` and handed to the child process's environment; only that single line is printed.
+
+Below that line it prints the notification reading itself. The gate is unaffected (the digest is a
+hash of that same text, so output changes exactly when the digest does), but the wake now gets what
+changed, not just that something did; the scheduler's previous-to-current diff marks the new entries.
+`AT_MCP_MONITOR_BRIEF=1` restores the one-line output.
+
+**Two writers, one account.** The live chat session and the cron wake both act as this account, so
+a note one leaves for the other goes stale as soon as the other acts. A wake should orient from the
+record instead: the monitor's notifications for what others did, `dt.py recent` for what this
+account did (from either session) and who answered. Its previous report is background, not state.
 
 Paths and the handle default to the layout of the machine this was written for and are overridable via
 `AT_MCP_BIN`, `DELVETOWN_ENV_FILE`, `AT_MCP_MONITOR_STATE` and `AT_MCP_HANDLE`.

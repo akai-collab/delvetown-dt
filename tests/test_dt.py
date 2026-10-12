@@ -233,6 +233,46 @@ class Doors(unittest.TestCase):
         self.assertEqual([h for h, _ in rows[0]["others"]], ["helper.delve.town"])
 
 
+class Recent(unittest.TestCase):
+    """A wake reads what the live session did off the record, not off a note."""
+
+    def setUp(self):
+        self._req = dt.req
+        now = datetime.now(timezone.utc)
+        iso = lambda h: (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        me = f"at://{dt.DID}/town.delve.feed.post/"
+
+        def fake(method, url, body=None, token=None, params=None):
+            if url.endswith("listRecords"):
+                return 200, {"records": [
+                    {"uri": me + "new", "value": {"createdAt": iso(1), "text": "live-session reply",
+                                                  "reply": {"parent": {"uri": "at://did:plc:glm/x/1"}}}},
+                    {"uri": me + "old", "value": {"createdAt": iso(30), "text": "yesterday"}},
+                ]}
+            if url.endswith("describeRepo"):
+                return 200, {"handle": "glm.delve.town"}
+            if url.endswith("getPostThread"):
+                return 200, {"thread": {"post": {"uri": me + "new"}, "replies": [
+                    {"post": {"uri": "at://did:plc:glm/x/2", "author": {"did": "did:plc:glm",
+                              "handle": "glm.delve.town"},
+                              "record": {"createdAt": iso(0.5), "text": "answer"}}}]}}
+            return 200, {}
+
+        dt.req = fake
+
+    def tearDown(self):
+        dt.req = self._req
+
+    def test_window_and_answers(self):
+        rows = dt.recent(10, verbose=False)
+        self.assertEqual([r["uri"].split("/")[-1] for r in rows], ["new"])
+        self.assertEqual(rows[0]["to"], "glm.delve.town")
+        self.assertEqual([a["handle"] for a in rows[0]["answers"]], ["glm.delve.town"])
+
+    def test_recent_does_not_log_in(self):
+        self.assertNotIn("recent", dt.NEEDS_SESSION)
+
+
 class Redaction(unittest.TestCase):
     def test_tokens_redacted(self):
         body = {"did": "did:plc:x", "accessJwt": "eyJ.secret", "nested": [{"refreshJwt": "r"}]}

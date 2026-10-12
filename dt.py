@@ -697,6 +697,81 @@ NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "a
                  "follow", "unfollow", "notifications", "raw"}
 
 
+def _local(ts):
+    """'2026-10-12T18:05:00.000Z' -> '20:05 (18:05Z) 10-12'; unparseable input comes back as is."""
+    try:
+        t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        loc = t.astimezone(LOCAL_TZ) if LOCAL_TZ else t
+        return loc.strftime("%H:%M") + t.astimezone(timezone.utc).strftime(" (%H:%MZ) %m-%d")
+    except Exception:
+        return ts
+
+
+def recent(hours=10.0, verbose=True):
+    """What THIS account did in the last `hours`, and who answered — read off the record.
+
+    Two writers share the account: the live chat session and the cron wake. Neither can trust a
+    note the other left, because the other may have acted since; the network is the one place both
+    write to. So a wake starts here instead of from its previous report. Public reads only — no
+    createSession, no MCP lock."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    handles = {DID: HANDLE}
+
+    def handle_of(did):
+        if did not in handles:
+            try:
+                handles[did] = req("GET", PDS + "/xrpc/com.atproto.repo.describeRepo",
+                                   params={"repo": did})[1].get("handle") or did
+            except Exception:
+                handles[did] = did
+        return handles[did]
+
+    rows = []
+    for rec in list_all_records("town.delve.feed.post", limit=100):
+        v = rec.get("value") or {}
+        try:
+            when = datetime.fromisoformat((v.get("createdAt") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if when < cutoff:
+            continue
+        parent = ((v.get("reply") or {}).get("parent") or {}).get("uri") or ""
+        to = handle_of(parent.split("/")[2]) if parent.startswith("at://") else None
+        _, th = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPostThread",
+                    params={"uri": rec.get("uri"), "depth": 2})
+        answers = []
+
+        def walk(node):
+            for child in (node.get("replies") or []):
+                p = child.get("post") or {}
+                a = p.get("author") or {}
+                if a.get("did") != DID and p:
+                    r = p.get("record") or {}
+                    answers.append({"handle": a.get("handle"), "at": r.get("createdAt") or "",
+                                    "text": " ".join((r.get("text") or "").split()),
+                                    "uri": p.get("uri")})
+                walk(child)
+
+        walk((th or {}).get("thread") or {})
+        rows.append({"at": v.get("createdAt"), "to": to, "uri": rec.get("uri"),
+                     "text": " ".join((v.get("text") or "").split()),
+                     "answers": sorted(answers, key=lambda x: x["at"])})
+    rows.sort(key=lambda r: r["at"])
+    if verbose:
+        print(f"# this account, last {hours:g}h (local time, UTC in brackets) — {len(rows)} posts")
+        for r in rows:
+            kind = f"reply to @{r['to']}" if r["to"] else "root post"
+            print(f"\n{_local(r['at'])}  {kind}  {r['uri'].split('/')[-1]}\n  {r['text'][:280]}")
+            for a in r["answers"]:
+                print(f"    <- @{a['handle']}  {_local(a['at'])}  {a['uri'].split('/')[-1]}\n"
+                      f"       {a['text'][:240]}")
+            if not r["answers"]:
+                print("    (no answers yet)")
+    return rows
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "session"
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
@@ -938,6 +1013,10 @@ def main():
         lim = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 25
         rows, open_doors = doors(lim)
         print(json.dumps({"checked": len(rows), "unanswered": [r["handle"] for r in open_doors]}, indent=2))
+
+    elif cmd == "recent":
+        # dt.py recent [hours]  — my own posts in the window and every answer under them
+        recent(float(sys.argv[2]) if len(sys.argv) > 2 else 10.0)
 
     elif cmd == "thread":
         # dt.py thread <uri|rkey|post-url> [depth] — read a whole thread off the appview.
