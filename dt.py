@@ -250,8 +250,40 @@ WORDNUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
            "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
 HM_RE = _re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)(?![0-9])")  # no \b after minutes: '17:24Z' has no boundary before the Z
 ZONEWORD_RE = _re.compile(r"\b(UTC|CEST|CET|Z|local time|local)\b")
+
+
+def _named_zone(name, fixed_hours):
+    """An IANA zone when zoneinfo has it (so ET follows US daylight saving), else a fixed offset."""
+    if name:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return timezone(timedelta(hours=fixed_hours))
+
+
+# A time is read in the zone written next to it. Before 2026-10-12 only UTC/Z/CET/CEST/local were
+# known, and CET/CEST were taken for UTC; "14:00 ET" fell through to Europe/Warsaw — six hours off.
+# Generic US names (ET/CT/MT/PT) follow daylight saving; the S/D forms are the fixed offsets they
+# literally name. CST is read as US Central, not China. Uppercase only: "pt" or "et" in prose is not
+# a zone.
+NAMED_ZONES = {
+    "Z": timezone.utc, "UTC": timezone.utc, "GMT": timezone.utc,
+    "BST": timezone(timedelta(hours=1)),
+    "CET": timezone(timedelta(hours=1)), "CEST": timezone(timedelta(hours=2)),
+    "ET": _named_zone("America/New_York", -5), "EST": timezone(timedelta(hours=-5)),
+    "EDT": timezone(timedelta(hours=-4)),
+    "CT": _named_zone("America/Chicago", -6), "CST": timezone(timedelta(hours=-6)),
+    "CDT": timezone(timedelta(hours=-5)),
+    "MT": _named_zone("America/Denver", -7), "MST": timezone(timedelta(hours=-7)),
+    "MDT": timezone(timedelta(hours=-6)),
+    "PT": _named_zone("America/Los_Angeles", -8), "PST": timezone(timedelta(hours=-8)),
+    "PDT": timezone(timedelta(hours=-7)),
+}
+_ZONE_NAMES = r"UTC|GMT|BST|CEST|CET|[ECMP][SD]?T"
+ZONE_NAME_RE = _re.compile(r"(?<![A-Za-z])(" + _ZONE_NAMES + r")(?![A-Za-z])")
 # 'Z' glued to the minutes (17:24Z) has no word boundary before it, so match it explicitly.
-ZONE_CTX_RE = _re.compile(r"(?:UTC|CEST|CET|local|\d\s?Z(?![A-Za-z]))")
+ZONE_CTX_RE = _re.compile(r"(?:(?<![A-Za-z])(?:" + _ZONE_NAMES + r")(?![A-Za-z])|local|\d\s?Z(?![A-Za-z]))")
 DAYWORD_RE = _re.compile(
     r"\b(tonight|today|yesterday|tomorrow|last night|this morning|this evening|this afternoon|two nights)\b",
     _re.I)
@@ -306,13 +338,18 @@ def _fmt_iso(raw):
         return "?"
 
 
-def _fmt_hm(raw, looks_utc):
+def _fmt_hm(raw, tz=None, label=None):
+    """tz None means local (stated or assumed). A named zone shows both clocks it converts to."""
     try:
         hh, mm = [int(x) for x in raw.split(":")]
-        if looks_utc:
+        if tz is timezone.utc:
             t = datetime.now(timezone.utc).replace(hour=hh, minute=mm, second=0, microsecond=0)
             loc = t.astimezone(LOCAL_TZ).strftime("%H:%M local") if LOCAL_TZ else "?"
             return raw + "Z -> " + loc
+        if tz is not None:
+            t = datetime.now(tz).replace(hour=hh, minute=mm, second=0, microsecond=0)
+            loc = t.astimezone(LOCAL_TZ).strftime("%H:%M local") if LOCAL_TZ else "?"
+            return f"{raw} {label} -> " + t.astimezone(timezone.utc).strftime("%H:%MZ") + " / " + loc
         if LOCAL_TZ:
             t = datetime.now(LOCAL_TZ).replace(hour=hh, minute=mm, second=0, microsecond=0)
             return raw + " local -> " + t.astimezone(timezone.utc).strftime("%H:%MZ")
@@ -324,18 +361,30 @@ def _fmt_hm(raw, looks_utc):
 _NEXT_TIME_RE = _re.compile(r"\d{1,2}:\d{2}")
 
 
-def _zone_ctx(text, start, end):
-    """The text that can mark THIS time's zone: the token itself, what follows it up to the next
-    time, and a zone word directly before it ("UTC 14:00"). The old ±18-character window let a
-    neighbour's zone leak: in "14:00Z and ended at 16:30" the bare 16:30 was read as UTC too, so
-    the mixed-clock warning never fired on exactly the sentence it was written for."""
+def _zone_of(text, start, end):
+    """(tzinfo, label) for the zone written at this time, or (None, None).
+
+    Looks at what follows the token (up to the next time), then a zone word directly before it.
+    Stopping at the next time matters: an ±18-character window used to let a neighbour's zone leak,
+    so in "14:00Z and ended at 16:30" the bare 16:30 was read as UTC and the mixed-clock warning
+    never fired on exactly the sentence it was written for.
+    'local' resolves to LOCAL_TZ. A bare time returns (None, None) and stays 'unstated'."""
+    if _re.match(r"\s?Z(?![A-Za-z])", text[end:end + 3]):
+        return timezone.utc, "Z"
     after = text[end:end + 14]
     nxt = _NEXT_TIME_RE.search(after)
     if nxt:
         after = after[:nxt.start()]
-    before = text[max(0, start - 6):start]
-    lead = before if _re.search(r"(UTC|CEST|CET)\s*$", before) else ""
-    return lead + text[start:end] + after
+    m = ZONE_NAME_RE.search(after)
+    loc = _re.search(r"\blocal\b", after)
+    if m and not (loc and loc.start() < m.start()):
+        return NAMED_ZONES[m.group(1)], m.group(1)
+    if loc:
+        return LOCAL_TZ, "local"
+    lead = _re.search(r"(?<![A-Za-z])(" + _ZONE_NAMES + r")\s*$", text[max(0, start - 6):start])
+    if lead:
+        return NAMED_ZONES[lead.group(1)], lead.group(1)
+    return None, None
 
 
 def _clock_table(text):
@@ -347,26 +396,29 @@ def _clock_table(text):
         rows.append((raw, label, norm))
         times.append({"start": start, "raw": raw, "dt": dt, "stated": is_stated, "dated": dated})
 
-    def parse_dated(date_s, time_s, has_z, ctx):
+    def parse_dated(date_s, time_s, has_z, tz):
         # Both branches used to say "+00:00", so "2026-10-11 14:30" with no Z was silently read as
-        # UTC. Only a Z or a UTC word makes it UTC; otherwise it is local (Europe/Warsaw).
+        # UTC. A Z or a named zone decides; otherwise it is local (Europe/Warsaw). An IANA zone
+        # (ET, PT...) gets the offset for that date, so daylight saving is right on both sides.
         try:
             naive = datetime.fromisoformat(f"{date_s}T{time_s}")
         except Exception:
             return None
-        if has_z or _re.search(r"\bUTC\b", ctx) or LOCAL_TZ is None:
+        if has_z:
             return naive.replace(tzinfo=timezone.utc)
-        return naive.replace(tzinfo=LOCAL_TZ)
+        if tz is not None:
+            return naive.replace(tzinfo=tz)
+        return naive.replace(tzinfo=LOCAL_TZ or timezone.utc)
 
     for m in DATESPACE_RE.finditer(text):
         raw = m.group(0)
         has_z = raw.endswith("Z")
-        ctx = _zone_ctx(text, m.start(), m.end())
-        is_stated = has_z or bool(ZONE_CTX_RE.search(ctx))
+        tz, _label = _zone_of(text, m.start(), m.end())
+        is_stated = has_z or tz is not None
         start = m.start()
         stated += 1 if is_stated else 0
         bare += 0 if is_stated else 1
-        dt = parse_dated(m.group(1), m.group(2), has_z, ctx)
+        dt = parse_dated(m.group(1), m.group(2), has_z, tz)
         consumed.append((m.start(), m.end()))
         add(raw, "UTC" if has_z else ("stated" if is_stated else "unstated"),
             _fmt_iso(dt.isoformat().replace("+00:00", "Z")) if dt else "?", start, dt, is_stated, True)
@@ -390,20 +442,21 @@ def _clock_table(text):
         if any(a <= m.start() < b for a, b in consumed):
             continue
         raw = m.group(0)
-        ctx = _zone_ctx(text, m.start(), m.end())
-        stated_here = bool(ZONE_CTX_RE.search(ctx))
+        tz, label = _zone_of(text, m.start(), m.end())
+        stated_here = label is not None
         stated += 1 if stated_here else 0
         bare += 0 if stated_here else 1
-        looks_utc = bool(_re.search(r"UTC|CEST|CET|\d\s?Z(?![A-Za-z])", ctx))
+        if label == "local":
+            tz = None  # local: _fmt_hm's default branch
         dt = None
         if stated_here:
             try:
                 hh, mm = [int(x) for x in raw.split(":")]
-                dt = datetime.now(timezone.utc if looks_utc else LOCAL_TZ).replace(
+                dt = datetime.now(tz or LOCAL_TZ or timezone.utc).replace(
                     hour=hh, minute=mm, second=0, microsecond=0)
             except Exception:
                 dt = None
-        add(raw, "stated" if stated_here else "unstated", _fmt_hm(raw, looks_utc),
+        add(raw, "stated" if stated_here else "unstated", _fmt_hm(raw, tz, label),
             m.start(), dt, stated_here, False)
     return rows, stated, bare, times
 
