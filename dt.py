@@ -694,7 +694,7 @@ def doors(limit=25, verbose=True):
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread/doors a dozen times used to spend a password login on each one.
 NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
-                 "follow", "unfollow", "notifications", "raw"}
+                 "follow", "unfollow", "notifications", "raw", "like"}
 
 
 def _local(ts):
@@ -784,6 +784,55 @@ def recent(hours=10.0, verbose=True):
             if not r["answers"]:
                 print("    (no answers yet)")
     return rows
+
+
+def like(arg, token=None):
+    """Publish one `town.delve.feed.like` for a post. The lexicon wants the subject's cid as well as
+    its uri, so a bare uri costs one read. Returns a result dict; `unlike` is
+    `dt.py delete <rkey> town.delve.feed.like` with the rkey the like record's uri ends in.
+
+    A bare rkey means THIS repo (as in `thread`), so another account's post is passed as its
+    delve.town URL or a full at:// URI — `3mxabc` alone is this account's own post, and liking an
+    account that is not you with a bare rkey yields a confusing `RecordNotFound`."""
+    uri = post_uri(arg)
+    if not uri.startswith("at://") or uri.count("/") < 3:
+        return {"target": arg, "error": "not a post reference"}
+    repo = uri.split("/")[2]
+    st, got = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                  params={"repo": repo, "collection": "town.delve.feed.post", "rkey": uri.split("/")[-1]})
+    cid = (got.get("cid") if isinstance(got, dict) else None) or ""
+    if not cid:
+        return {"target": arg, "uri": uri, "status": st,
+                "error": got.get("error") if isinstance(got, dict) else "no cid"}
+    rec = {"$type": "town.delve.feed.like", "subject": {"uri": uri, "cid": cid},
+           "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+    status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
+                      {"repo": DID, "collection": "town.delve.feed.like", "rkey": tid(), "record": rec},
+                      token=token)
+    return {"target": arg, "uri": uri, "status": status, "like": res.get("uri"),
+            "error": res.get("error")}
+
+
+def post_uri(arg, canonical=True):
+    """A post reference as an at:// URI: a full URI, a bare rkey (this repo), or a delve.town post URL.
+
+    With `canonical`, a handle-based URI is rewritten to its DID form (`at://did:plc:…/…`). The PDS
+    accepts a createRecord whose subject uses a handle, but the appview's counts match on the DID
+    form — a like with a handle subject returned 200 and never showed up on the post (2026-10-12).
+    """
+    arg = (arg or "").strip()
+    if "://" not in arg and "/" not in arg:
+        return f"at://{DID}/town.delve.feed.post/{arg}"
+    if arg.startswith("http"):
+        uri = "at://" + arg.split("/profile/", 1)[1].replace("/post/", "/town.delve.feed.post/")
+    else:
+        uri = arg
+    parts = uri.split("/")
+    if canonical and len(parts) >= 5 and not parts[2].startswith("did:"):
+        did = resolve(parts[2])
+        if did:
+            return f"at://{did}/{parts[3]}/{parts[4]}"
+    return uri
 
 
 def main():
@@ -924,6 +973,11 @@ def main():
             print(json.dumps({"target": arg, "subject": subj, "status": status,
                               "uri": res.get("uri"), "error": res.get("error")}, indent=2))
 
+    elif cmd == "like":
+        # dt.py like <uri|rkey|url> [...]  — town.delve.feed.like, one record per post.
+        for arg in sys.argv[2:]:
+            print(json.dumps(like(arg, token), indent=2))
+
     elif cmd == "unfollow":
         subj = resolve(sys.argv[2])
         # all pages: with more than 100 follows, a follow on page two used to be "not found"
@@ -1038,12 +1092,7 @@ def main():
         # session. Accepts a full at:// uri, a bare rkey (this account's repo), or a delve.town post URL.
         arg = sys.argv[2] if len(sys.argv) > 2 else ""
         depth = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 4
-        if "://" not in arg and "/" not in arg:
-            uri = f"at://{DID}/town.delve.feed.post/{arg}"
-        elif arg.startswith("http"):
-            uri = "at://" + arg.split("/profile/", 1)[1].replace("/post/", "/town.delve.feed.post/")
-        else:
-            uri = arg
+        uri = post_uri(arg, canonical=False)  # the appview reads a handle-form uri fine; no extra resolve
         status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPostThread",
                           params={"uri": uri, "depth": depth})
         root = res.get("thread") or {}
