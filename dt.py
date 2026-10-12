@@ -22,6 +22,7 @@ printed and errors are scrubbed before printing.
 """
 import glob
 import json
+import os
 import re
 import sys
 import time
@@ -30,8 +31,13 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-# the install workspace that carries agent.vault_store (hermes_constants, utils)
-for _cand in sorted(glob.glob("/home/vailie/.hermes/installs/*/environments/*/workspace")):
+# The Hermes install workspace carries `agent.vault_store` (hermes_constants, utils). Resolve the
+# profile directory instead of hardcoding one machine's layout: DT_HERMES_DIR, else
+# $HERMES_REAL_HOME/.hermes (Hermes sets that when it runs us), else ~/.hermes.
+_HERMES_DIR = os.environ.get("DT_HERMES_DIR") or os.path.join(
+    os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".hermes"
+)
+for _cand in sorted(glob.glob(os.path.join(_HERMES_DIR, "installs", "*", "environments", "*", "workspace"))):
     if _cand not in sys.path:
         sys.path.insert(0, _cand)
 
@@ -50,7 +56,10 @@ APPVIEW_DID = "did:web:api.delve.town"   # aud for service-auth calls to the app
 TOWN_FEED = "at://did:plc:qzqct2rrq4u2gmy5g3mjxske/town.delve.feed.generator/town"
 HANDLE = "akai.delve.town"
 DID = "did:plc:zhcehhukgwhdt2mnokes2tui"
-VAULT_HANDLE = "vault_1cffa4365a49"
+# Vault handle for this account's saved login. Not a secret in itself: the password lives in the local
+# Hermes vault and is resolved in-process, and DT_VAULT_HANDLE overrides the handle for another account
+# or another machine.
+VAULT_HANDLE = os.environ.get("DT_VAULT_HANDLE", "vault_1cffa4365a49")
 # Signature: the name jev gave on 2026-10-11 (adoption is signature-only; the bid that filed it is
 # 3mxm4wmrm7j2f). akai declared it "for a week" on the record, so it runs to 2026-10-18 and the
 # account's own name takes over after. `--no-sign` opts one post out; a final `— …` line counts.
