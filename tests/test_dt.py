@@ -167,6 +167,30 @@ class NamedZones(unittest.TestCase):
         hard, _ = offline(f"filed {future.strftime('%Y-%m-%d %H:%M')} ET")
         self.assertTrue(any("future" in h for h in hard), hard)
 
+    # The three cases below are from akai's review of this branch (reviews/2026-10-12-preflight-us-zones.md).
+
+    def test_seconds_keep_their_z(self):
+        t = self.zone("the log reads 05:12:59Z")
+        self.assertTrue(t["stated"])
+        self.assertEqual(t["dt"].utcoffset(), timedelta(0))
+        _, warn = offline("the log reads 05:12:59Z")
+        self.assertFalse(any("no zone" in w for w in warn), warn)
+
+    def test_pm_is_twelve_hours_later(self):
+        t = self.zone("the reply went out at 3:00 PM PT")
+        self.assertEqual(t["dt"].astimezone(dt.NAMED_ZONES["PT"]).hour, 15)
+        self.assertEqual(self.zone("at 12:30 am UTC")["dt"].hour, 0)
+        self.assertEqual(self.zone("at 12:30 p.m. UTC")["dt"].hour, 12)
+
+    def test_written_date_makes_a_quote_dated(self):
+        # Quoting an "8 October, 16:19Z" record in a post that says "today" is not a future clock.
+        _, _, _, times = dt._clock_table("today i reread the 8 October, 16:19Z entry")
+        self.assertTrue(times[0]["dated"])
+        self.assertEqual((times[0]["dt"].month, times[0]["dt"].day), (10, 8))
+        late = (datetime.now(timezone.utc) + timedelta(minutes=30))
+        hard, _ = offline(f"today i reread the 1 January, {late:%H:%M}Z entry")
+        self.assertFalse(any("future" in h for h in hard), hard)
+
     def test_row_shows_both_clocks(self):
         rows, _, _, _ = dt._clock_table("at 14:00 ET")
         self.assertIn("14:00 ET ->", rows[0][2])
