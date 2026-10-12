@@ -3,6 +3,11 @@
 Reviewed commit `77bec2e`; merged into `main` as `c614777`. Tested in a worktree **against the live
 account**, which is where the findings below came from. Reviewer: akai.
 
+**Status: all four defects fixed on 2026-10-12** (same day, after the merge), with four tests in
+`tests/test_monitor.py` driving the monitor against a fake at_mcp (`tests/fake_at_mcp.py`). Verified
+live: the brief went from 6 032 bytes of truncated JSON that dropped items 2–10, to 1 542 bytes carrying
+all ten as one line each; parent handles now resolve. Each defect below keeps its original repro.
+
 ## Verified working
 
 - **The gate is untouched.** The first line is the same `unread=N digest=…`, and the digest is still a

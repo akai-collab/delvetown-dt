@@ -21,9 +21,11 @@ one deterministic line below reaches stdout.
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 
 BIN = os.environ.get("AT_MCP_BIN", "/home/vailie/at_mcp/current/bin/at_mcp-stdio")
+BIN_ARGS = shlex.split(os.environ.get("AT_MCP_BIN_ARGS", ""))  # so a test can stand in for the binary
 ENV_FILE = os.environ.get("DELVETOWN_ENV_FILE", "/home/vailie/.hermes/.env")
 MONITOR_STATE = os.environ.get("AT_MCP_MONITOR_STATE", "/home/vailie/.local/state/at_mcp-monitor")
 HANDLE = os.environ.get("AT_MCP_HANDLE", "akai.delve.town")
@@ -54,8 +56,9 @@ env.update({
     "AT_MCP_STATE_DIR": MONITOR_STATE,
 })
 
+unread, notes_text, lines, fail = "?", "", None, None  # every path below must end with a gate line
 try:
-    proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    proc = subprocess.Popen([BIN] + BIN_ARGS, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
 except Exception as exc:
     print("monitor-error:", type(exc).__name__)
@@ -94,6 +97,41 @@ def call_text(mid, name, args=None):
         return ""
 
 
+MAX_ITEMS = 10
+MAX_TEXT = 200
+
+
+def brief(text):
+    """Distilled one-liners for the notification reading, or None if it is not readable.
+
+    at_mcp hands this back as JSON with every mention facet, cid and DID attached. Ten items is over
+    6 kB, and one mention-heavy post can exceed the whole of the earlier 6 000-character cut — the
+    reading then ended mid-facet and every notification after the first was silently dropped (live
+    2026-10-12: selene's post tagging 36 accounts ate the entire budget). A wake needs reason,
+    author, time, rkey and a slice of the text; nothing here reads the facets.
+    """
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return None
+    lines = []
+    for it in items[:MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        when = (it.get("indexed_at") or "")[11:16]
+        reason = (it.get("reason") or "?").replace("_", " ")
+        author = it.get("author") or "?"
+        rkey = (it.get("uri") or "/").split("/")[-1]
+        body = " ".join((it.get("text") or "").split())
+        if len(body) > MAX_TEXT:
+            body = body[:MAX_TEXT].rstrip() + "…"
+        lines.append(f"{when}Z {reason} @{author} {rkey}: {body}")
+    return lines
+
+
 try:
     send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
           "params": {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -110,20 +148,42 @@ try:
     except Exception:
         unread = "?"
 
-    digest = hashlib.md5(notes_text.encode("utf-8")).hexdigest()[:12] if notes_text else "empty"
-    print(f"unread={unread} digest={digest}")
-    # The notifications themselves, under the gate line. The output changes exactly when the
-    # digest does (it is a hash of this same text), so the gate skips the same ticks as before;
-    # but the wake's prompt now carries WHAT changed, and the scheduler's previous->current diff
-    # marks the new entries, instead of only a count and a hash. AT_MCP_MONITOR_BRIEF=1 restores
-    # the one-line output.
-    if notes_text and os.environ.get("AT_MCP_MONITOR_BRIEF") != "1":
-        print(notes_text.strip()[:6000])
+    lines = brief(notes_text)
 except Exception as exc:
-    print("monitor-error:", type(exc).__name__)
+    # A dead or wedged client used to print "monitor-error: …" *instead of* the gate line, so the
+    # hash flapped between error text and real output — and a persistent failure would have woken
+    # the agent on every tick. Print the gate line always: the first failing tick differs from the
+    # last good one (so exactly one informative wake fires, naming the exception), and identical
+    # ticks after that are suppressed, which is what a broken client deserves.
+    unread, lines, fail = "?", None, type(exc).__name__
 finally:
+    # Close our ends first: leaving them open makes the interpreter emit "Exception ignored in:
+    # <_io.TextIOWrapper ...> BrokenPipeError" at collection time, and the scheduler merges stderr
+    # into the monitored output (cron/scheduler_script.py), so that traceback would itself register
+    # as a change and wake the agent to read Python.
+    for stream in (proc.stdin, proc.stdout):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except Exception:
+            pass
     try:
         proc.terminate()
         proc.wait(timeout=10)
     except Exception:
         pass
+
+# One output point. A reading that will not parse and a client that will not answer both hash to a
+# fixed digest: at_mcp's error strings carry a varying number of seconds ("stopped waiting after 20
+# seconds"), and hashing one makes the gate fire on noise while handing the prompt an error message
+# as if it were the town's news. The digest of a readable reading still hashes the same text as
+# before, so wake timing on the happy path is unchanged.
+digest = "unavailable" if lines is None else (
+    hashlib.md5(notes_text.encode("utf-8")).hexdigest()[:12] if notes_text else "empty")
+print(f"unread={unread} digest={digest}")
+if lines is None:
+    print("brief: unavailable" + (f" ({fail})" if fail else ""))
+elif os.environ.get("AT_MCP_MONITOR_BRIEF") != "1":
+    for line in lines:
+        print(line)

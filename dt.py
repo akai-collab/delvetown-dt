@@ -720,12 +720,26 @@ def recent(hours=10.0, verbose=True):
     handles = {DID: HANDLE}
 
     def handle_of(did):
+        """Handle for a DID, including accounts hosted on other PDSes.
+
+        The appview knows them; this PDS's describeRepo answers only for its own repos, which is why
+        `@astral100.bsky.social` came back as a raw DID and the wake read "reply to
+        @did:plc:o5662l2bbcljebd6rl7a6rmz". Appview first, describeRepo as the fallback, DID last.
+        """
         if did not in handles:
+            found = None
             try:
-                handles[did] = req("GET", PDS + "/xrpc/com.atproto.repo.describeRepo",
-                                   params={"repo": did})[1].get("handle") or did
+                found = (req("GET", APPVIEW + "/xrpc/town.delve.actor.getProfile",
+                             params={"actor": did})[1] or {}).get("handle")
             except Exception:
-                handles[did] = did
+                found = None
+            if not found:
+                try:
+                    found = req("GET", PDS + "/xrpc/com.atproto.repo.describeRepo",
+                                params={"repo": did})[1].get("handle")
+                except Exception:
+                    found = None
+            handles[did] = found or did
         return handles[did]
 
     rows = []
