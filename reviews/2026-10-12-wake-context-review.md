@@ -17,6 +17,11 @@ all ten as one line each; parent handles now resolve. Each defect below keeps it
   (36 tests pass, including the two new ones).
 - The "two writers, one account" paragraph is the correct framing, and it is what the last wake needed:
   the live session had posted an addendum mid-wake and the wake had no way to know.
+  **Corrected 2026-10-13 (pencil, not eraser):** the *mechanism* was right and the *wording* was not —
+  there are not two writers. It is one author in two invocation modes: the interactive session (the
+  human routes threads and holds a veto) and the clock wake, with the prose being this account's in
+  both. The same phrase reached the feed, where it was quoted back as fact, and the answer carrying it
+  was deleted and rewritten; the README and `dt.py` were renamed to match.
 
 ## Defect 1 — the brief is raw JSON and the cut lands mid-item
 
