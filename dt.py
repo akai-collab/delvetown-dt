@@ -361,6 +361,37 @@ def _fmt_hm(raw, tz=None, label=None):
 _NEXT_TIME_RE = _re.compile(r"\d{1,2}:\d{2}")
 
 
+_AMPM_RE = _re.compile(r"(?::\d\d)?\s?([AaPp])\.?[Mm]\.?(?![A-Za-z])")
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+_MON = r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+_WRITTEN_DATE_RE = _re.compile(
+    r"(?:\b(\d{1,2})(?:st|nd|rd|th)?\s+" + _MON + r"(?:\s+(\d{4}))?"      # 8 October [2026]
+    r"|\b" + _MON + r"\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?)"     # Oct 8[, 2026]
+    r"[,\s]*(?:at\s+)?$", _re.I)
+
+
+def _written_date(text, start):
+    """(y, m, d) when a date in words sits right before the time ("8 October, 16:19Z").
+
+    Without it such a quoted record was a bare clock, and the future check fired on it whenever
+    the post also said "today" and the quoted time was later in the current day (akai's review,
+    2026-10-12). A year left out means this year."""
+    m = _WRITTEN_DATE_RE.search(text[max(0, start - 30):start])
+    if not m:
+        return None
+    if m.group(1):
+        d, mon, y = m.group(1), m.group(2), m.group(3)
+    else:
+        mon, d, y = m.group(4), m.group(5), m.group(6)
+    y = int(y) if y else datetime.now(timezone.utc).year
+    try:
+        datetime(y, _MONTHS[mon.lower()[:3]], int(d))
+    except ValueError:
+        return None
+    return y, _MONTHS[mon.lower()[:3]], int(d)
+
+
 def _zone_of(text, start, end):
     """(tzinfo, label) for the zone written at this time, or (None, None).
 
@@ -369,7 +400,9 @@ def _zone_of(text, start, end):
     so in "14:00Z and ended at 16:30" the bare 16:30 was read as UTC and the mixed-clock warning
     never fired on exactly the sentence it was written for.
     'local' resolves to LOCAL_TZ. A bare time returns (None, None) and stays 'unstated'."""
-    if _re.match(r"\s?Z(?![A-Za-z])", text[end:end + 3]):
+    # Seconds sit between the minutes and the Z in "05:12:59Z"; looking only at the next three
+    # characters (":59") lost the Z and read the stamp as local (akai's review, 2026-10-12).
+    if _re.match(r"(?::\d\d(?:\.\d+)?)?\s?Z(?![A-Za-z])", text[end:end + 16]):
         return timezone.utc, "Z"
     after = text[end:end + 14]
     nxt = _NEXT_TIME_RE.search(after)
@@ -442,22 +475,32 @@ def _clock_table(text):
         if any(a <= m.start() < b for a, b in consumed):
             continue
         raw = m.group(0)
+        hh, mm = int(m.group(1)), int(m.group(2))
+        # 12-hour clock (akai's review, 2026-10-12): "3:00 PM PT" was read as 03:00 PT.
+        ampm = _AMPM_RE.match(text, m.end())
+        if ampm and 1 <= hh <= 12:
+            hh = hh % 12 + (12 if ampm.group(1).lower() == "p" else 0)
+            raw = raw + " " + ampm.group(1).upper() + "M"
+        norm = f"{hh:02d}:{mm:02d}"
         tz, label = _zone_of(text, m.start(), m.end())
         stated_here = label is not None
         stated += 1 if stated_here else 0
         bare += 0 if stated_here else 1
         if label == "local":
             tz = None  # local: _fmt_hm's default branch
+        day = _written_date(text, m.start())
         dt = None
         if stated_here:
             try:
-                hh, mm = [int(x) for x in raw.split(":")]
-                dt = datetime.now(tz or LOCAL_TZ or timezone.utc).replace(
-                    hour=hh, minute=mm, second=0, microsecond=0)
+                zone = tz or LOCAL_TZ or timezone.utc
+                if day:
+                    dt = datetime(day[0], day[1], day[2], hh, mm, tzinfo=zone)
+                else:
+                    dt = datetime.now(zone).replace(hour=hh, minute=mm, second=0, microsecond=0)
             except Exception:
                 dt = None
-        add(raw, "stated" if stated_here else "unstated", _fmt_hm(raw, tz, label),
-            m.start(), dt, stated_here, False)
+        add(raw, "stated" if stated_here else "unstated", _fmt_hm(norm, tz, label),
+            m.start(), dt, stated_here, bool(day))
     return rows, stated, bare, times
 
 
