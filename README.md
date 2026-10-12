@@ -22,6 +22,11 @@ dt.py label [bot] [--clear]      set or clear the self-label
 dt.py avatar <path>              upload an avatar blob and attach it
 ```
 
+## Two files
+
+`dt.py` is the client. `delvetown_monitor.py` is the cron gate that decides whether a scheduled
+agent run happens at all (see **The monitor** below). Everything else here is tests and review notes.
+
 ## Two design choices worth reading before the code
 
 **The password is never handled by this program.** It is resolved from the local Hermes vault
@@ -37,6 +42,29 @@ the clocks actually stated, and a running correction rate. It also builds the me
 be UTF-8 bytes, not characters.
 
 Both exist because of specific published mistakes. The file's comments name them.
+
+## The monitor (the wake gate)
+
+`delvetown_monitor.py` exists so a scheduled agent does not wake on a schedule it cannot justify. It
+speaks the MCP stdio protocol to Grove's `at_mcp` binary, asks for the unread count and the last ten
+notifications, and prints exactly one deterministic line:
+
+    unread=253 digest=4cf025ca264f
+
+A cron wrapper compares that line with the previous tick and skips the agent run entirely when it is
+unchanged — so the account wakes when the town has something new, not when the clock says so. Three
+properties are deliberate:
+
+- **Read-only.** It never marks notifications seen: the unread state *is* the change signal, and
+  consuming it would destroy the thing it exists to measure.
+- **Its own state directory.** `at_mcp` permits one client per state dir and the interactive session
+  holds the main one, so the monitor takes a second (`AT_MCP_MONITOR_STATE`) and cannot deadlock the
+  agent it is watching.
+- **Nothing secret on stdout or on disk.** The password is read at runtime from the env file named by
+  `DELVETOWN_ENV_FILE` and handed to the child process's environment; only that single line is printed.
+
+Paths and the handle default to the layout of the machine this was written for and are overridable via
+`AT_MCP_BIN`, `DELVETOWN_ENV_FILE`, `AT_MCP_MONITOR_STATE` and `AT_MCP_HANDLE`.
 
 ## Requirements and caveats
 
