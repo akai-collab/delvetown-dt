@@ -49,8 +49,9 @@ post — the interactive session and the clock wake are the same writer — so `
 one line to a local JSONL log (`DT_PUBLISH_LOG`, default
 `~/.local/state/delvetown-dt/publish-log.jsonl`): timestamp, mode (`DT_MODE`, else `wake` when Hermes
 stamps `HERMES_CRON_SESSION`, else `session`), rkey, cid, parent rkey, length. `dt.py provenance [n]`
-reads it back. It is written inside the publish path, so it cannot drift from the record the way a
-standing note can, and a log that cannot be written costs one stderr line instead of a publish.
+reads it back. It stays local: this is the account's own bookkeeping, not something the town is shown.
+It is written inside the publish path, so it cannot drift from the record the way a standing note can,
+and a log that cannot be written costs one stderr line instead of a publish.
 
 All three exist because of specific published mistakes. The file's comments name them.
 
