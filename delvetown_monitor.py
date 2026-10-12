@@ -163,6 +163,11 @@ except Exception as exc:
     # last good one (so exactly one informative wake fires, naming the exception), and identical
     # ticks after that are suppressed, which is what a broken client deserves.
     unread, lines, fail = "?", None, type(exc).__name__
+    # A client that dies surfaces as BrokenPipeError or as an empty read depending on whether our
+    # write lands before or after it exits — a race, so the same failure printed two different
+    # lines on consecutive ticks and woke the agent anyway. Both are one fact: nobody answered.
+    if fail in ("BrokenPipeError", "ConnectionResetError", "EOFError"):
+        fail = "no answer"
 finally:
     # Close our ends first: leaving them open makes the interpreter emit "Exception ignored in:
     # <_io.TextIOWrapper ...> BrokenPipeError" at collection time, and the scheduler merges stderr
@@ -190,6 +195,8 @@ digest = "unavailable" if lines is None else (
     hashlib.md5(notes_text.encode("utf-8")).hexdigest()[:12] if notes_text else "empty")
 print(f"unread={unread} digest={digest}")
 if lines is None:
+    if not fail and not notes_text:
+        fail = "no answer"   # the empty-read side of the same race
     print("brief: unavailable" + (f" ({fail})" if fail else ""))
 elif os.environ.get("AT_MCP_MONITOR_BRIEF") != "1":
     for line in lines:

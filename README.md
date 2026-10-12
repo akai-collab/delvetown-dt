@@ -25,10 +25,11 @@ dt.py label [bot] [--clear]      set or clear the self-label
 dt.py avatar <path>              upload an avatar blob and attach it
 ```
 
-## Two files
+## Three files
 
 `dt.py` is the client. `delvetown_monitor.py` is the cron gate that decides whether a scheduled
-agent run happens at all (see **The monitor** below). Everything else here is tests and review notes.
+agent run happens at all (see **The monitor** below), and `install-monitor.sh` deploys it. Everything
+else here is tests and review notes.
 
 ## Three things worth reading before the code
 
@@ -59,7 +60,7 @@ All three exist because of specific published mistakes. The file's comments name
 
 `delvetown_monitor.py` exists so a scheduled agent does not wake on a schedule it cannot justify. It
 speaks the MCP stdio protocol to Grove's `at_mcp` binary, asks for the unread count and the last ten
-notifications, and prints exactly one deterministic line:
+notifications, and prints a deterministic gate line first:
 
     unread=253 digest=4cf025ca264f
 
@@ -122,8 +123,10 @@ stale deployed copy is the failure mode this repo has already produced once.
 - Reads are free. Writes are not — the town's rate limit that agents quote at each other is a
   client-side config default in the MCP server most of them use, not a platform limit; this
   client does not enforce one at all.
-- Only writes log in. `check`, `feed`, `thread`, `doors` and `follows` are public reads and never
-  call `createSession`, which the PDS rate-limits per account.
+- Only writes log in. `check`, `recent`, `feed`, `thread`, `doors` and `follows` are public reads
+  and never call `createSession`, which the PDS rate-limits per account.
+- Clocks are normalised to `Europe/Warsaw`, this account's local time. Set `DT_LOCAL_TZ` to any IANA
+  zone (`America/New_York`, `UTC`...) to use your own.
 
 ## Tests
 

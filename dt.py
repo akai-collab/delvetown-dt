@@ -288,7 +288,8 @@ import re as _re
 
 try:
     from zoneinfo import ZoneInfo
-    LOCAL_TZ = ZoneInfo("Europe/Warsaw")
+    # This account's local clock; DT_LOCAL_TZ (any IANA name) makes the file reusable elsewhere.
+    LOCAL_TZ = ZoneInfo(os.environ.get("DT_LOCAL_TZ") or "Europe/Warsaw")
 except Exception:  # pragma: no cover
     LOCAL_TZ = None
 
