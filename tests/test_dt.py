@@ -113,6 +113,67 @@ class Clocks(unittest.TestCase):
         self.assertEqual(times[0]["dt"].utcoffset(), timedelta(0))
 
 
+class NamedZones(unittest.TestCase):
+    """2026-10-12, from the cron run's own report: the pre-flight read 'ET' as local time."""
+
+    def zone(self, text):
+        _, _, _, times = dt._clock_table(text)
+        return times[0]
+
+    def test_et_is_stated_and_us_eastern(self):
+        t = self.zone("the call is at 14:00 ET")
+        self.assertTrue(t["stated"])
+        if dt.LOCAL_TZ is None:
+            self.skipTest("no zoneinfo")
+        from zoneinfo import ZoneInfo
+        self.assertEqual(t["dt"].utcoffset(), datetime.now(ZoneInfo("America/New_York")).utcoffset())
+
+    def test_dated_et_follows_that_dates_dst(self):
+        if dt.LOCAL_TZ is None:
+            self.skipTest("no zoneinfo")
+        summer = self.zone("2026-07-01 14:00 ET")["dt"]
+        winter = self.zone("2026-12-01 14:00 ET")["dt"]
+        self.assertEqual(summer.utcoffset(), timedelta(hours=-4))
+        self.assertEqual(winter.utcoffset(), timedelta(hours=-5))
+
+    def test_fixed_us_offsets(self):
+        self.assertEqual(self.zone("at 09:00 PDT")["dt"].utcoffset(), timedelta(hours=-7))
+        self.assertEqual(self.zone("at 09:00 CST")["dt"].utcoffset(), timedelta(hours=-6))
+
+    def test_cest_is_plus_two_not_utc(self):
+        # CET/CEST used to be lumped in with UTC.
+        self.assertEqual(self.zone("at 14:00 CEST")["dt"].utcoffset(), timedelta(hours=2))
+        self.assertEqual(self.zone("at 14:00 CET")["dt"].utcoffset(), timedelta(hours=1))
+
+    def test_leading_zone_word(self):
+        self.assertEqual(self.zone("PT 09:00 standup")["dt"].utcoffset(),
+                         self.zone("09:00 PT standup")["dt"].utcoffset())
+
+    def test_lowercase_is_prose_not_zone(self):
+        self.assertFalse(self.zone("at 14:00 et cetera")["stated"])
+
+    def test_neighbour_zone_does_not_leak(self):
+        _, _, _, times = dt._clock_table("14:00 ET and later 16:30")
+        self.assertTrue(times[0]["stated"])
+        self.assertFalse(times[1]["stated"])
+
+    def test_two_stated_zones_do_not_warn(self):
+        _, warn = offline("14:00 ET, which is 20:00 local")
+        self.assertFalse(any("mixes" in w for w in warn), warn)
+
+    def test_et_in_the_future_is_caught(self):
+        from zoneinfo import ZoneInfo
+        future = datetime.now(ZoneInfo("America/New_York")) + timedelta(hours=2)
+        hard, _ = offline(f"filed {future.strftime('%Y-%m-%d %H:%M')} ET")
+        self.assertTrue(any("future" in h for h in hard), hard)
+
+    def test_row_shows_both_clocks(self):
+        rows, _, _, _ = dt._clock_table("at 14:00 ET")
+        self.assertIn("14:00 ET ->", rows[0][2])
+        self.assertIn("Z /", rows[0][2])
+        self.assertIn("local", rows[0][2])
+
+
 class Doors(unittest.TestCase):
     """The newcomer's only direct reply is her own follow-up; the answer hangs below the depth cut."""
 
