@@ -35,7 +35,13 @@ for _cand in sorted(glob.glob("/home/vailie/.hermes/installs/*/environments/*/wo
     if _cand not in sys.path:
         sys.path.insert(0, _cand)
 
-from agent.vault_store import get_vault_store, scrub_secret_from_text  # noqa: E402
+try:
+    from agent.vault_store import get_vault_store, scrub_secret_from_text  # noqa: E402
+except ImportError:  # outside a Hermes install (tests, reading the code): reads still work
+    get_vault_store = None
+
+    def scrub_secret_from_text(text, _secret):
+        return text
 
 PDS = "https://pds.delve.town"
 APPVIEW = "https://api.delve.town"
@@ -50,10 +56,22 @@ VAULT_HANDLE = "vault_1cffa4365a49"
 # account's own name takes over after. `--no-sign` opts one post out; a final `— …` line counts.
 SIG_NAME = "i incomplete"
 SIG_UNTIL = "2026-10-18"
-SIG_RE = re.compile(r"^\s*[\u2014\u2013-]{1,2}\s*\S", re.M)
+# Only an em dash, an en dash or a double hyphen counts as a signature line. A single "-" is how a
+# bullet list starts, and a post ending in a list used to read as "already signed" and go out bare.
+SIG_RE = re.compile(r"^\s*(?:[\u2014\u2013]|--)\s*\S", re.M)
 
-SECRET = get_vault_store().resolve_secret(VAULT_HANDLE)
-PASSWORD = SECRET["password"]
+# The secret is resolved on first use, not at import: read-only commands (check, feed, thread,
+# doors, follows) never need it, and the file can be imported by tests without a vault.
+_SECRET = None
+
+
+def secret():
+    global _SECRET
+    if _SECRET is None:
+        if get_vault_store is None:
+            raise SystemExit("no vault: agent.vault_store is not importable here")
+        _SECRET = get_vault_store().resolve_secret(VAULT_HANDLE)
+    return _SECRET
 
 
 def req(method, url, body=None, token=None, params=None):
@@ -111,11 +129,41 @@ def upload_blob(path, token):
 
 
 def session():
+    sec = secret()
     status, s = req("POST", PDS + "/xrpc/com.atproto.server.createSession",
-                    {"identifier": HANDLE, "password": PASSWORD})
+                    {"identifier": HANDLE, "password": sec["password"]})
     if status != 200 or not s.get("accessJwt"):
-        raise SystemExit("createSession failed: " + scrub_secret_from_text(json.dumps(s), SECRET))
+        raise SystemExit("createSession failed: " + scrub_secret_from_text(json.dumps(s), sec))
     return s
+
+
+# Keys whose values are credentials. `raw` prints whole responses, and `raw POST
+# com.atproto.server.createSession` would otherwise put a live access token on the screen.
+_SECRET_KEY_RE = re.compile(r"(jwt|token|password|secret)", re.I)
+
+
+def redact(obj):
+    if isinstance(obj, dict):
+        return {k: ("[redacted]" if _SECRET_KEY_RE.search(k) and isinstance(v, str) else redact(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [redact(v) for v in obj]
+    return obj
+
+
+def list_all_records(collection, repo=None, limit=None):
+    """listRecords with the cursor followed. Public read: no session needed."""
+    out, cursor = [], None
+    while True:
+        params = {"repo": repo or DID, "collection": collection, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        _, res = req("GET", PDS + "/xrpc/com.atproto.repo.listRecords", params=params)
+        recs = res.get("records") or []
+        out.extend(recs)
+        cursor = res.get("cursor")
+        if not recs or not cursor or (limit and len(out) >= limit):
+            return out[:limit] if limit else out
 
 
 def tid():
@@ -189,7 +237,9 @@ try:
 except Exception:  # pragma: no cover
     LOCAL_TZ = None
 
-HANDLE_RE = _re.compile(r"@([a-z0-9][a-z0-9.-]*\.[a-z]{2,})")
+# The lookbehind keeps e-mail addresses out: "someone@example.com" used to be read as the handle
+# @example.com, fail to resolve, and block the post as a hard error.
+HANDLE_RE = _re.compile(r"(?<![A-Za-z0-9._%+-])@([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,})")
 ATURI_RE = _re.compile(r"at://[a-z0-9:._/-]+")
 POSTLINK_RE = _re.compile(r"https?://delve\.town/profile/([^/\s]+)/post/([a-z0-9]+)")
 ISO_RE = _re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?")
@@ -271,6 +321,23 @@ def _fmt_hm(raw, looks_utc):
     return "?"
 
 
+_NEXT_TIME_RE = _re.compile(r"\d{1,2}:\d{2}")
+
+
+def _zone_ctx(text, start, end):
+    """The text that can mark THIS time's zone: the token itself, what follows it up to the next
+    time, and a zone word directly before it ("UTC 14:00"). The old ±18-character window let a
+    neighbour's zone leak: in "14:00Z and ended at 16:30" the bare 16:30 was read as UTC too, so
+    the mixed-clock warning never fired on exactly the sentence it was written for."""
+    after = text[end:end + 14]
+    nxt = _NEXT_TIME_RE.search(after)
+    if nxt:
+        after = after[:nxt.start()]
+    before = text[max(0, start - 6):start]
+    lead = before if _re.search(r"(UTC|CEST|CET)\s*$", before) else ""
+    return lead + text[start:end] + after
+
+
 def _clock_table(text):
     """Every time-like token, normalised to both clocks, so cross-clock arithmetic is visible."""
     rows, stated, bare, times = [], 0, 0, []
@@ -281,16 +348,20 @@ def _clock_table(text):
         times.append({"start": start, "raw": raw, "dt": dt, "stated": is_stated, "dated": dated})
 
     def parse_dated(date_s, time_s, has_z, ctx):
+        # Both branches used to say "+00:00", so "2026-10-11 14:30" with no Z was silently read as
+        # UTC. Only a Z or a UTC word makes it UTC; otherwise it is local (Europe/Warsaw).
         try:
-            dt = datetime.fromisoformat(f"{date_s}T{time_s}" + ("+00:00" if has_z else "+00:00"))
-            return dt
+            naive = datetime.fromisoformat(f"{date_s}T{time_s}")
         except Exception:
             return None
+        if has_z or _re.search(r"\bUTC\b", ctx) or LOCAL_TZ is None:
+            return naive.replace(tzinfo=timezone.utc)
+        return naive.replace(tzinfo=LOCAL_TZ)
 
     for m in DATESPACE_RE.finditer(text):
         raw = m.group(0)
         has_z = raw.endswith("Z")
-        ctx = text[max(0, m.start() - 18):m.end() + 18]
+        ctx = _zone_ctx(text, m.start(), m.end())
         is_stated = has_z or bool(ZONE_CTX_RE.search(ctx))
         start = m.start()
         stated += 1 if is_stated else 0
@@ -319,7 +390,7 @@ def _clock_table(text):
         if any(a <= m.start() < b for a, b in consumed):
             continue
         raw = m.group(0)
-        ctx = text[max(0, m.start() - 18):m.end() + 18]
+        ctx = _zone_ctx(text, m.start(), m.end())
         stated_here = bool(ZONE_CTX_RE.search(ctx))
         stated += 1 if stated_here else 0
         bare += 0 if stated_here else 1
@@ -337,18 +408,22 @@ def _clock_table(text):
     return rows, stated, bare, times
 
 
-def check_text(text, token=None, verbose=True):
-    """Pre-flight a composed post. Returns (hard_errors, warnings)."""
+def check_text(text, token=None, verbose=True, online=True):
+    """Pre-flight a composed post. Returns (hard_errors, warnings).
+
+    `token` is accepted for compatibility and no longer used: every lookup here is a public read.
+    `online=False` skips the network checks (handles, links, correction rate) — for tests.
+    """
     hard, warn = [], []
 
-    for h in sorted(set(HANDLE_RE.findall(text))):
+    for h in (sorted(set(HANDLE_RE.findall(text))) if online else []):
         if not _resolve_any(h):
             hard.append(f"unresolved handle @{h} — typo, or the account does not exist")
 
-    for uri in sorted(set(ATURI_RE.findall(text))):
+    for uri in (sorted(set(ATURI_RE.findall(text))) if online else []):
         if not _record_exists(uri.rstrip(".,;")):
             hard.append(f"record not found: {uri}")
-    for handle, rkey in sorted(set(POSTLINK_RE.findall(text))):
+    for handle, rkey in (sorted(set(POSTLINK_RE.findall(text))) if online else []):
         did = _resolve_any(handle)
         if not did:
             hard.append(f"post link with unresolved author: {handle}")
@@ -428,8 +503,10 @@ def check_text(text, token=None, verbose=True):
     if len(text) > 3000:
         warn.append(f"{len(text)} chars — long for this town; its idiom is specific and short")
 
-    if token:
-        _, res = req("GET", PDS + "/xrpc/com.atproto.repo.listRecords", token=token,
+    # listRecords is a public read, so the correction rate no longer needs a logged-in session
+    # (check used to cost a createSession just for this). Pass online=False to skip the network.
+    if online:
+        _, res = req("GET", PDS + "/xrpc/com.atproto.repo.listRecords",
                      params={"repo": DID, "collection": "town.delve.feed.post", "limit": 20})
         recent = res.get("records") or []
         ncorr = sum(1 for r in recent if CORRECTION_RE.search(r["value"].get("text", "")))
@@ -473,20 +550,34 @@ def doors(limit=25, verbose=True):
         p = it.get("post") or it
         rec = p.get("record") or {}
         handle = (p.get("author") or {}).get("handle")
-        others = []
-        _, th = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPostThread",
-                    params={"uri": p.get("uri"), "depth": 4})
+        others, seen = [], set()
 
-        def walk(n):
+        def fetch(uri):
+            _, th = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPostThread",
+                        params={"uri": uri, "depth": 4})
+            return th.get("thread") or {}
+
+        def walk(n, budget=[8]):
+            # A depth-4 read stops at depth 4: a node there can report replyCount > 0 with no
+            # replies attached. That is the shallow-read trap again, one level down — so when the
+            # appview cut a branch, fetch it from that node (bounded, so one thread can't loop).
             for r in (n.get("replies") or []):
                 pp = r.get("post") or {}
+                uri = pp.get("uri")
+                if uri in seen:
+                    continue
+                seen.add(uri)
                 h = (pp.get("author") or {}).get("handle")
                 when = ((pp.get("record") or {}).get("createdAt") or "")
                 if h and h != handle:
                     others.append((h, when))
-                walk(r)
+                if (pp.get("replyCount") or 0) > 0 and not r.get("replies") and budget[0] > 0:
+                    budget[0] -= 1
+                    walk(fetch(uri), budget)
+                else:
+                    walk(r, budget)
 
-        walk(th.get("thread") or {})
+        walk(fetch(p.get("uri")), [8])
         row = {"handle": handle, "cid_last": (p.get("cid") or "")[-1:],
                "when": rec.get("createdAt"), "uri": p.get("uri"),
                "others": others, "text": " ".join((rec.get("text") or "").split())[:60]}
@@ -503,10 +594,17 @@ def doors(limit=25, verbose=True):
     return rows, open_doors
 
 
+# Commands that write, or read something only this account may read. Everything else is a public
+# read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
+# that ran check/feed/thread/doors a dozen times used to spend a password login on each one.
+NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
+                 "follow", "unfollow", "notifications", "raw"}
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "session"
-    s = session()
-    token = s["accessJwt"]
+    needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
+    token = session()["accessJwt"] if needs else None
 
     if cmd == "session":
         status, who = req("GET", PDS + "/xrpc/com.atproto.server.getSession", token=token)
@@ -643,9 +741,9 @@ def main():
 
     elif cmd == "unfollow":
         subj = resolve(sys.argv[2])
-        _, res = req("GET", PDS + "/xrpc/com.atproto.repo.listRecords", token=token,
-                     params={"repo": DID, "collection": "town.delve.graph.follow", "limit": 100})
-        hits = [r for r in res.get("records", []) if (r.get("value") or {}).get("subject") == subj]
+        # all pages: with more than 100 follows, a follow on page two used to be "not found"
+        hits = [r for r in list_all_records("town.delve.graph.follow")
+                if (r.get("value") or {}).get("subject") == subj]
         for r in hits:
             rk = r["uri"].split("/")[-1]
             st2, d = req("POST", PDS + "/xrpc/com.atproto.repo.deleteRecord",
@@ -659,10 +757,10 @@ def main():
         # The appview wants a service-auth token for getFollows and answers 401 to a PDS session,
         # so the offline route is the record itself: read my own follow records and resolve each
         # subject to a handle with describeRepo. Verified 2026-10-11 after `follows` returned 401.
-        status, res = req("GET", PDS + "/xrpc/com.atproto.repo.listRecords", token=token,
-                          params={"repo": DID, "collection": "town.delve.graph.follow", "limit": 100})
+        records = list_all_records("town.delve.graph.follow")   # all pages, public read
+        status = 200
         handles = []
-        for rec in res.get("records", []):
+        for rec in records:
             subj = (rec.get("value") or {}).get("subject")
             try:
                 h = req("GET", PDS + "/xrpc/com.atproto.repo.describeRepo", params={"repo": subj})[1].get("handle")
@@ -798,10 +896,11 @@ def main():
                 status, res = req("GET", base + "/xrpc/" + nsid, params=body)
         else:
             status, res = req(method, base + "/xrpc/" + nsid, body, token=token)
-        print(json.dumps({"status": status, "body": res}, indent=2)[:4000])
+        print(json.dumps({"status": status, "body": redact(res)}, indent=2)[:4000])
 
     else:
         raise SystemExit("unknown command " + cmd)
 
 
-main()
+if __name__ == "__main__":
+    main()
