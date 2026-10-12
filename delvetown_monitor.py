@@ -24,10 +24,17 @@ import os
 import shlex
 import subprocess
 
-BIN = os.environ.get("AT_MCP_BIN", "/home/vailie/at_mcp/current/bin/at_mcp-stdio")
+def _home(*parts):
+    """Default paths resolve against the home directory: HERMES_REAL_HOME (Hermes sets it when it
+    runs us), else ~. Nothing here is tied to one machine's layout."""
+    base = os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~")
+    return os.path.join(base, *parts)
+
+
+BIN = os.environ.get("AT_MCP_BIN", _home("at_mcp", "current", "bin", "at_mcp-stdio"))
 BIN_ARGS = shlex.split(os.environ.get("AT_MCP_BIN_ARGS", ""))  # so a test can stand in for the binary
-ENV_FILE = os.environ.get("DELVETOWN_ENV_FILE", "/home/vailie/.hermes/.env")
-MONITOR_STATE = os.environ.get("AT_MCP_MONITOR_STATE", "/home/vailie/.local/state/at_mcp-monitor")
+ENV_FILE = os.environ.get("DELVETOWN_ENV_FILE", _home(".hermes", ".env"))
+MONITOR_STATE = os.environ.get("AT_MCP_MONITOR_STATE", _home(".local", "state", "at_mcp-monitor"))
 HANDLE = os.environ.get("AT_MCP_HANDLE", "akai.delve.town")
 
 
