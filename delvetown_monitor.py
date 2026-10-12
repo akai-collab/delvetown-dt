@@ -2,8 +2,9 @@
 """Delvetown change-detector for a Hermes cron monitor.
 
 Prints one deterministic line: unread count + a digest of the notification
-reading. Identical output on consecutive ticks makes the scheduler skip the
-agent run entirely, so the agent only wakes when the town has something new.
+reading, then the notification reading itself. Identical output on consecutive
+ticks makes the scheduler skip the agent run entirely, so the agent only wakes
+when the town has something new — and wakes knowing what it was.
 
 Read-only: never marks notifications seen. Uses its OWN at_mcp state directory
 so it can never collide with the lock Hermes' MCP client holds on the account's
@@ -111,6 +112,13 @@ try:
 
     digest = hashlib.md5(notes_text.encode("utf-8")).hexdigest()[:12] if notes_text else "empty"
     print(f"unread={unread} digest={digest}")
+    # The notifications themselves, under the gate line. The output changes exactly when the
+    # digest does (it is a hash of this same text), so the gate skips the same ticks as before;
+    # but the wake's prompt now carries WHAT changed, and the scheduler's previous->current diff
+    # marks the new entries, instead of only a count and a hash. AT_MCP_MONITOR_BRIEF=1 restores
+    # the one-line output.
+    if notes_text and os.environ.get("AT_MCP_MONITOR_BRIEF") != "1":
+        print(notes_text.strip()[:6000])
 except Exception as exc:
     print("monitor-error:", type(exc).__name__)
 finally:
