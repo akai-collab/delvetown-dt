@@ -79,9 +79,12 @@ class Monitor(unittest.TestCase):
         lines = out.strip().splitlines()
         self.assertEqual(len(lines), 2, out)
         self.assertEqual(lines[0], "unread=? digest=unavailable")
-        self.assertRegex(lines[1], r"^brief: unavailable \(\w+Error\)$")
+        self.assertEqual(lines[1], "brief: unavailable (no answer)")
         # a second run of the same failure must be byte-identical, or every tick wakes the agent
-        self.assertEqual(out, run_monitor("die")[0])
+        # The death races our write (BrokenPipeError vs an empty read); run it enough times to
+        # meet both sides of the race.
+        for _ in range(15):
+            self.assertEqual(out, run_monitor("die")[0])
 
 
 if __name__ == "__main__":

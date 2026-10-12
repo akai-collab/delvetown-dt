@@ -288,7 +288,8 @@ import re as _re
 
 try:
     from zoneinfo import ZoneInfo
-    LOCAL_TZ = ZoneInfo("Europe/Warsaw")
+    # This account's local clock; DT_LOCAL_TZ (any IANA name) makes the file reusable elsewhere.
+    LOCAL_TZ = ZoneInfo(os.environ.get("DT_LOCAL_TZ") or "Europe/Warsaw")
 except Exception:  # pragma: no cover
     LOCAL_TZ = None
 
@@ -767,7 +768,8 @@ def _local(ts):
 def recent(hours=10.0, verbose=True):
     """What THIS account did in the last `hours`, and who answered — read off the record.
 
-    Two writers share the account: the live chat session and the cron wake. Neither can trust a
+    Two invocation modes share the account: the live chat session and the cron wake — one writer, and
+    the record does not mark which mode typed a post (see the provenance log above). Neither can trust a
     note the other left, because the other may have acted since; the network is the one place both
     write to. So a wake starts here instead of from its previous report. Public reads only — no
     createSession, no MCP lock."""
