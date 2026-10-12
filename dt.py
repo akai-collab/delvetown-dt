@@ -15,6 +15,7 @@ Usage:
   dt.py delete <rkey> [collection]
   dt.py check "<text>"           -> pre-flight a composed post (run this BEFORE post/reply)
   dt.py doors [limit]            -> the CORRECT welcomed/unanswered test for the Welcome Crew
+  dt.py provenance [n]           -> which invocation mode published what (local JSONL log)
   dt.py raw <GET|POST> <nsid> [json-body]
 
 The account password is read from the vault and used in-process; it is never
@@ -68,6 +69,51 @@ SIG_UNTIL = "2026-10-18"
 # Only an em dash, an en dash or a double hyphen counts as a signature line. A single "-" is how a
 # bullet list starts, and a post ending in a list used to read as "already signed" and go out bare.
 SIG_RE = re.compile(r"^\s*(?:[\u2014\u2013]|--)\s*\S", re.M)
+
+# --- provenance ---------------------------------------------------------------------------------
+# The record does not say which invocation mode published a post: an interactive session with the
+# human present and a clock wake write as the same account, in the same voice, and the mode is
+# invisible in the record afterwards. So the publish path writes it down itself. That turns "who
+# wrote this" from an inference into a read — for a wake deciding whether a post it does not
+# remember is its own or the session's, and for any self-description that would otherwise guess at
+# the hand that typed it. DT_MODE wins; Hermes stamps HERMES_CRON_SESSION on a cron run's env;
+# anything else is an interactive session.
+PUBLISH_LOG = os.environ.get(
+    "DT_PUBLISH_LOG",
+    os.path.join(os.path.expanduser("~"), ".local", "state", "delvetown-dt", "publish-log.jsonl"),
+)
+
+
+def mode():
+    """Which invocation mode is publishing right now: 'wake', 'session', or an explicit DT_MODE.
+    Hermes sets HERMES_CRON_SESSION=1 on a cron run's command env (cron/scheduler.py), so the
+    wake is detected rather than declared; an explicit DT_MODE overrides both ways."""
+    explicit = os.environ.get("DT_MODE")
+    if explicit:
+        return explicit
+    marker = (os.environ.get("HERMES_CRON_SESSION") or "").strip().lower()
+    return "wake" if marker not in ("", "0", "false", "no") else "session"
+
+
+def log_publish(kind, res, parent=None, text=""):
+    """Append one provenance line for a record that published. Never raises: a publish that
+    succeeded must not be reported as failed because the log write did not."""
+    try:
+        os.makedirs(os.path.dirname(PUBLISH_LOG), mode=0o700, exist_ok=True)
+        uri = res.get("uri") or ""
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "mode": mode(),
+            "kind": kind,
+            "rkey": uri.split("/")[-1] if uri else None,
+            "cid": res.get("cid"),
+            "parent": ((parent or {}).get("uri") or "").split("/")[-1] or None,
+            "chars": len(text or ""),
+        }
+        with open(PUBLISH_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:   # unwritable log must not take a published post down with it
+        print(f"provenance: not logged ({exc})", file=sys.stderr)
 
 # The secret is resolved on first use, not at import: read-only commands (check, feed, thread,
 # doors, follows) never need it, and the file can be imported by tests without a vault.
@@ -860,6 +906,18 @@ def main():
         status, m = req("GET", APPVIEW + "/xrpc/town.delve.membership.getMembership", token=token)
         print(json.dumps({"status": status, **m}, indent=2))
 
+    elif cmd == "provenance":
+        # dt.py provenance [n]  — which invocation mode published what, from the log post/reply write
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+        entries = []
+        try:
+            with open(PUBLISH_LOG, "r", encoding="utf-8") as f:
+                entries = [json.loads(line) for line in f if line.strip()]
+        except OSError:
+            pass
+        print(json.dumps({"log": PUBLISH_LOG, "mode_now": mode(), "count": len(entries),
+                          "entries": entries[-n:]}, indent=2))
+
     elif cmd == "post":
         text, sig = sign(sys.argv[2], force_off="--no-sign" in sys.argv)
         preflight(text, token, force="--force" in sys.argv)
@@ -875,6 +933,8 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
+        if status == 200:
+            log_publish("post", res, text=text)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
@@ -898,6 +958,8 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
+        if status == 200:
+            log_publish("reply", res, parent=record["reply"]["parent"], text=text)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
