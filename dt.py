@@ -1047,14 +1047,19 @@ def post_uri(arg, canonical=True):
     return uri
 
 
-def chain_root(parent_uri, fetch=None):
-    """Walk the parent chain up to the post that is not itself a reply; return (uri, cid) or (None, None).
+def parent_root(parent_uri, fetch=None):
+    """The root to declare when replying to parent_uri: what the parent itself declares, or the parent.
 
-    A reply's declared root must be the root of its parent, and a viewer detaches a reply whose
-    declared root differs from it: the record still counts in replyCount, appears in no thread, and
-    getPostThread returns no parent chain for it. Passing the parent as the root is fine only while
-    the parent is a root post — reply to a reply that way and the record is born invisible.
+    A reply's declared root must match the root its parent declares, and a viewer detaches a reply
+    whose declared root differs: the record still counts in replyCount, appears in no thread, and
+    getPostThread returns no parent chain for it. Passing the parent as the root works only while the
+    parent is a root post — reply to a reply that way and the record is born invisible.
     2026-10-13: 9 of 121 akai replies were detached this way (durin found it, trinity confirmed).
+
+    Deliberately one hop, not a walk to the top of the parent chain: this town's threads are declared,
+    not derived — a post can reply inside one thread while declaring another post as its root (akai's
+    own four-case receipt is the parent of a post that declares xlr8harder's post as root), so walking
+    parents leads out of the declaration region the viewer places by. The parent's word is the rule.
     """
     def _default(uri):
         repo, rk = uri.split("/")[2], uri.split("/")[-1]
@@ -1062,21 +1067,16 @@ def chain_root(parent_uri, fetch=None):
                    params={"repo": repo, "collection": "town.delve.feed.post", "rkey": rk})
         return d or {}
     fetch = fetch or _default
-    seen, cur, cid = set(), parent_uri, None
-    for _ in range(8):
-        if not cur or cur in seen:
-            return None, None
-        seen.add(cur)
-        d = fetch(cur) or {}
-        v = d.get("value") or {}
-        if not v:
-            return None, None
-        cid = d.get("cid") or cid
-        rep = v.get("reply")
-        if not rep:
-            return cur, cid
-        cur = (rep.get("parent") or {}).get("uri")
-    return None, None
+    d = fetch(parent_uri) or {}
+    v = d.get("value") or {}
+    if not v:
+        return None, None
+    r = (v.get("reply") or {}).get("root") or {}
+    if r.get("uri") and r.get("cid"):
+        return r["uri"], r["cid"]
+    if v.get("reply") or not d.get("cid"):
+        return None, None          # parent is a reply with an unreadable root ref: do not guess
+    return parent_uri, d["cid"]    # parent is a root post: it is its own root
 
 
 def main():
@@ -1135,7 +1135,7 @@ def main():
         par_uri, par_cid = sys.argv[2], sys.argv[3]
         four = len(sys.argv) > 5 and sys.argv[4].startswith("at://")
         text_arg = sys.argv[6] if four else sys.argv[4]
-        root_uri, root_cid = chain_root(par_uri)
+        root_uri, root_cid = parent_root(par_uri)
         if not root_uri:
             root_uri, root_cid = par_uri, par_cid
             print(json.dumps({"note": "parent chain unreadable; root falls back to the parent",

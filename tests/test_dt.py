@@ -639,35 +639,34 @@ class Addressed(unittest.TestCase):
         self.assertEqual(dt._addressed([None, 3, "x", {}]), [])
 
 
-class ChainRoot(unittest.TestCase):
-    """A reply whose declared root is not the root of its parent is born invisible: still counted in
-    replyCount, in no thread, no parent chain (durin found it on nine akai replies, 2026-10-13)."""
+class ParentRoot(unittest.TestCase):
+    """A reply must declare the root its parent declares. A wrong one is born invisible — still counted
+    in replyCount, in no thread, no parent chain (durin found nine akai replies this way, 2026-10-13).
+
+    One hop, not a walk: this town's threads are declared, a post can reply inside a thread while
+    declaring another root, so the parent's own word is the only rule the viewer places by.
+    """
 
     @staticmethod
     def _fetch(tree):
-        def f(uri):
-            return tree.get(uri) or {}
-        return f
+        return lambda uri: tree.get(uri, {})
 
-    def test_walks_up_to_the_post_that_is_not_a_reply(self):
-        tree = {"at://a": {"cid": "ca", "value": {"reply": {"parent": {"uri": "at://b"}}}},
-                "at://b": {"cid": "cb", "value": {"reply": {"parent": {"uri": "at://c"}}}},
-                "at://c": {"cid": "cc", "value": {"text": "root"}}}
-        self.assertEqual(dt.chain_root("at://a", self._fetch(tree)), ("at://c", "cc"))
+    def test_a_parent_that_is_a_reply_lends_its_own_root(self):
+        tree = {"at://p": {"cid": "cp", "value": {"reply": {"root": {"uri": "at://r", "cid": "cr"},
+                                                            "parent": {"uri": "at://x", "cid": "cx"}}}}}
+        self.assertEqual(dt.parent_root("at://p", self._fetch(tree)), ("at://r", "cr"))
 
     def test_a_root_post_is_its_own_root(self):
-        tree = {"at://a": {"cid": "ca", "value": {"text": "root"}}}
-        self.assertEqual(dt.chain_root("at://a", self._fetch(tree)), ("at://a", "ca"))
+        tree = {"at://p": {"cid": "cp", "value": {"text": "a root post"}}}
+        self.assertEqual(dt.parent_root("at://p", self._fetch(tree)), ("at://p", "cp"))
 
-    def test_cycle_and_missing_records_return_nothing(self):
-        tree = {"at://a": {"value": {"reply": {"parent": {"uri": "at://b"}}}},
-                "at://b": {"value": {"reply": {"parent": {"uri": "at://a"}}}}}
-        self.assertEqual(dt.chain_root("at://a", self._fetch(tree)), (None, None))
-        self.assertEqual(dt.chain_root("at://gone", self._fetch(tree)), (None, None))
+    def test_a_reply_with_an_unreadable_root_ref_is_not_guessed(self):
+        tree = {"at://p": {"cid": "cp", "value": {"reply": {"root": {"uri": "at://r"}}}}}
+        self.assertEqual(dt.parent_root("at://p", self._fetch(tree)), (None, None))
 
-    def test_junk_is_not_an_error(self):
-        self.assertEqual(dt.chain_root("", self._fetch({})), (None, None))
-        self.assertEqual(dt.chain_root("at://x", lambda u: {"value": None}), (None, None))
+    def test_missing_and_junk_records_return_nothing(self):
+        self.assertEqual(dt.parent_root("at://gone", self._fetch({})), (None, None))
+        self.assertEqual(dt.parent_root("", lambda u: {"value": None}), (None, None))
 
 
 if __name__ == "__main__":
