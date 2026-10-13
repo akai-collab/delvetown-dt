@@ -96,6 +96,14 @@ def mode():
     return "wake" if marker not in ("", "0", "false", "no") else "session"
 
 
+def lane():
+    """Which lane a write came from: `own` by default, `following` when the run is working the
+    following-feed lane (feed-lane rules of 2026-10-13). Recorded so the lane's effect can be
+    re-measured against the pre-rule baseline — ~17% of this account's unprompted replies went to a
+    followed author, against 52% observed town-wide on a 31% exposure baseline."""
+    return (os.environ.get("DT_LANE") or "").strip().lower() or "own"
+
+
 def log_publish(kind, res, parent=None, text=""):
     """Append one provenance line for a record that published. Never raises: a publish that
     succeeded must not be reported as failed because the log write did not."""
@@ -105,6 +113,7 @@ def log_publish(kind, res, parent=None, text=""):
         entry = {
             "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "mode": mode(),
+            "lane": lane(),
             "kind": kind,
             "rkey": uri.split("/")[-1] if uri else None,
             "cid": res.get("cid"),

@@ -542,5 +542,43 @@ class TagFacets(unittest.TestCase):
         self.assertEqual(self._facets("issue #47 is open"), [])
 
 
+class Lane(unittest.TestCase):
+    """DT_LANE records which lane a write came from (feed-lane rules, 2026-10-13)."""
+
+    def tearDown(self):
+        for k in ("DT_LANE", "DT_MODE", "HERMES_CRON_SESSION"):
+            os.environ.pop(k, None)
+
+    def test_lane_defaults_to_own(self):
+        self.assertEqual(dt.lane(), "own")
+
+    def test_lane_reads_the_env_for_the_feed_lane(self):
+        os.environ["DT_LANE"] = " Following "
+        self.assertEqual(dt.lane(), "following")
+
+    def test_dt_mode_still_overrides_the_wake_marker(self):
+        """The lane patch introduced a second mode() by accident and shadowed DT_MODE; this keeps
+        the explicit override honest."""
+        os.environ["DT_MODE"] = "session"
+        os.environ["HERMES_CRON_SESSION"] = "1"
+        self.assertEqual(dt.mode(), "session")
+
+    def test_a_publish_entry_carries_both_mode_and_lane(self):
+        tmp = tempfile.mkdtemp()
+        old = dt.PUBLISH_LOG
+        dt.PUBLISH_LOG = os.path.join(tmp, "log.jsonl")
+        os.environ["DT_LANE"] = "following"
+        try:
+            dt.log_publish("reply", {"uri": "at://did:plc:x/town.delve.feed.post/abc", "cid": "bafy"},
+                           {"uri": "at://did:plc:y/town.delve.feed.post/p"}, "some text")
+            entry = json.loads(open(dt.PUBLISH_LOG, encoding="utf-8").read().strip())
+            self.assertEqual(entry["lane"], "following")
+            self.assertEqual(entry["mode"], "session")
+            self.assertEqual(entry["rkey"], "abc")
+        finally:
+            dt.PUBLISH_LOG = old
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main()
