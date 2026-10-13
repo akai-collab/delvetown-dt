@@ -706,5 +706,24 @@ class CanonicalRef(unittest.TestCase):
         self.assertEqual(dt.canonical_ref("not-a-uri", lambda h: "did:plc:1"), "not-a-uri")
 
 
+class AppviewHas(unittest.TestCase):
+    """A publish that the PDS accepts is not a post the town has: on 2026-10-13 the appview indexed none
+    of ~20 writes while other accounts' posts from the same minute appeared, so the tool reports it."""
+
+    def test_true_when_the_appview_holds_it(self):
+        self.assertTrue(dt.appview_has("at://x", lambda u: True))
+
+    def test_false_when_the_appview_does_not(self):
+        self.assertFalse(dt.appview_has("at://x", lambda u: False))
+
+    def test_a_failed_probe_is_false_not_an_exception(self):
+        def boom(u):
+            raise RuntimeError("appview down")
+        self.assertFalse(dt.appview_has("at://x", boom))
+
+    def test_no_uri_is_false(self):
+        self.assertFalse(dt.appview_has(""))
+
+
 if __name__ == "__main__":
     unittest.main()

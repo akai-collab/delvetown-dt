@@ -1048,6 +1048,26 @@ def post_uri(arg, canonical=True):
     return uri
 
 
+def appview_has(uri, probe=None):
+    """Does the town's appview actually hold this record? A 200 from the PDS is not the town seeing it.
+
+    Observed 2026-10-13: after roughly twenty writes in an hour the PDS accepted every record while the
+    appview indexed none of mine, at the same minute that other accounts' posts appeared in it — so a
+    publish can succeed and never arrive where people read. Report it; do not assume it.
+    """
+    if not uri:
+        return False
+    if probe is None:
+        def probe(u):
+            _, d = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPostThread",
+                       params={"uri": u, "depth": 0})
+            return bool(((d or {}).get("thread") or {}).get("post"))
+    try:
+        return bool(probe(uri))
+    except Exception:
+        return False
+
+
 def canonical_ref(uri, resolve=None):
     """Rewrite at://<handle>/... to at://<did>/... — refs must carry the DID, never the handle.
 
@@ -1163,6 +1183,7 @@ def main():
         if status == 200:
             log_publish("post", res, text=text)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
+                          "indexed": appview_has(res.get("uri")) if status == 200 else None,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
     elif cmd == "reply":
@@ -1207,6 +1228,7 @@ def main():
         if status == 200:
             log_publish("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"], text=text)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
+                          "indexed": appview_has(res.get("uri")) if status == 200 else None,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
     elif cmd == "delete":
