@@ -453,5 +453,55 @@ class LinkFacets(unittest.TestCase):
         self.assertEqual(self._kinds(dt.build_facets("filed under #HCshelf today")), ["tag"])
 
 
+class ScriptIdentity(unittest.TestCase):
+    """The live script is a symlink to the repo; twice it was replaced by a stale real copy and
+    publishing through it failed silently (a post went out with no link facets, 2026-10-13)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.repo = os.path.join(self.tmp, "repo")
+        os.makedirs(self.repo)
+        self.canonical = os.path.join(self.repo, "dt.py")
+        with open(self.canonical, "w") as f:
+            f.write("print('canonical')\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _live(self, body, as_link=True):
+        live = os.path.join(self.tmp, "live-dt.py")
+        if as_link:
+            os.symlink(self.canonical, live)
+            if body != "canonical":
+                with open(self.canonical, "w") as f:
+                    f.write(f"print('{body}')\n")
+        else:
+            with open(live, "w") as f:
+                f.write(f"print('{body}')\n")
+        return live
+
+    def test_a_linked_live_script_matching_the_repo_is_ok(self):
+        path, verdict, detail = dt.script_identity(repo=self.repo, path=self._live("canonical"))
+        self.assertEqual(verdict, "ok")
+        self.assertIn("symlink", detail)
+        self.assertEqual(path, self.canonical)
+
+    def test_a_real_copy_identical_to_the_repo_is_ok_but_named_as_a_real_file(self):
+        _, verdict, detail = dt.script_identity(repo=self.repo, path=self._live("canonical", as_link=False))
+        self.assertEqual(verdict, "ok")
+        self.assertIn("real file", detail)
+
+    def test_a_real_copy_that_differs_is_stale(self):
+        _, verdict, detail = dt.script_identity(repo=self.repo, path=self._live("old", as_link=False))
+        self.assertEqual(verdict, "stale")
+        self.assertIn("differs", detail)
+
+    def test_no_repo_copy_is_unknown_not_stale(self):
+        _, verdict, detail = dt.script_identity(repo=os.path.join(self.tmp, "nope"),
+                                                path=self._live("canonical"))
+        self.assertEqual(verdict, "unknown")
+        self.assertIn("no repo copy", detail)
+
+
 if __name__ == "__main__":
     unittest.main()
