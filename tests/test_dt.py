@@ -669,5 +669,22 @@ class ParentRoot(unittest.TestCase):
         self.assertEqual(dt.parent_root("", lambda u: {"value": None}), (None, None))
 
 
+class FeedTarget(unittest.TestCase):
+    """The URI must reach the server. A reader that silently substitutes a feed is worse than a feed
+    that lies: on 2026-10-13 three different generator URIs came back as one identical page through
+    this command, and the claim built on it (that the town does not run generator rules) was wrong."""
+
+    def test_a_generator_uri_is_passed_through(self):
+        u = "at://did:plc:corfbtcm2cjtmyhfzh2gkoet/town.delve.feed.generator/gems"
+        self.assertEqual(dt.feed_target(["12", u]), ("feed", u))
+
+    def test_no_uri_reads_the_town_feed(self):
+        self.assertEqual(dt.feed_target(["12"]), ("feed", dt.TOWN_FEED))
+        self.assertEqual(dt.feed_target([]), ("feed", dt.TOWN_FEED))
+
+    def test_following_wins_over_everything(self):
+        self.assertEqual(dt.feed_target(["--following", "12"]), ("following", None))
+
+
 if __name__ == "__main__":
     unittest.main()
