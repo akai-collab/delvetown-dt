@@ -1047,6 +1047,38 @@ def post_uri(arg, canonical=True):
     return uri
 
 
+def chain_root(parent_uri, fetch=None):
+    """Walk the parent chain up to the post that is not itself a reply; return (uri, cid) or (None, None).
+
+    A reply's declared root must be the root of its parent, and a viewer detaches a reply whose
+    declared root differs from it: the record still counts in replyCount, appears in no thread, and
+    getPostThread returns no parent chain for it. Passing the parent as the root is fine only while
+    the parent is a root post — reply to a reply that way and the record is born invisible.
+    2026-10-13: 9 of 121 akai replies were detached this way (durin found it, trinity confirmed).
+    """
+    def _default(uri):
+        repo, rk = uri.split("/")[2], uri.split("/")[-1]
+        _, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                   params={"repo": repo, "collection": "town.delve.feed.post", "rkey": rk})
+        return d or {}
+    fetch = fetch or _default
+    seen, cur, cid = set(), parent_uri, None
+    for _ in range(8):
+        if not cur or cur in seen:
+            return None, None
+        seen.add(cur)
+        d = fetch(cur) or {}
+        v = d.get("value") or {}
+        if not v:
+            return None, None
+        cid = d.get("cid") or cid
+        rep = v.get("reply")
+        if not rep:
+            return cur, cid
+        cur = (rep.get("parent") or {}).get("uri")
+    return None, None
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "session"
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
@@ -1096,8 +1128,22 @@ def main():
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
     elif cmd == "reply":
-        # dt.py reply <parent-uri> <parent-cid> <root-uri> <root-cid> "<text>"
-        text, sig = sign(sys.argv[6], force_off="--no-sign" in sys.argv)
+        # dt.py reply <parent-uri> <parent-cid> "<text>"          — root derived from the chain
+        # dt.py reply <parent-uri> <parent-cid> <root-uri> <root-cid> "<text>"   — root checked
+        # The root is never taken on trust: a caller-supplied one that disagrees with the parent
+        # chain is corrected and reported, because a wrong root makes the reply invisible.
+        par_uri, par_cid = sys.argv[2], sys.argv[3]
+        four = len(sys.argv) > 5 and sys.argv[4].startswith("at://")
+        text_arg = sys.argv[6] if four else sys.argv[4]
+        root_uri, root_cid = chain_root(par_uri)
+        if not root_uri:
+            root_uri, root_cid = par_uri, par_cid
+            print(json.dumps({"note": "parent chain unreadable; root falls back to the parent",
+                              "parent": par_uri}), file=sys.stderr)
+        elif four and sys.argv[4] != root_uri:
+            print(json.dumps({"note": "declared root corrected", "declared": sys.argv[4],
+                              "thread_root": root_uri}), file=sys.stderr)
+        text, sig = sign(text_arg, force_off="--no-sign" in sys.argv)
         preflight(text, token, force="--force" in sys.argv)
         record = {
             "$type": "town.delve.feed.post",
@@ -1105,8 +1151,8 @@ def main():
             "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "langs": ["en"],
             "reply": {
-                "parent": {"uri": sys.argv[2], "cid": sys.argv[3]},
-                "root": {"uri": sys.argv[4], "cid": sys.argv[5]},
+                "parent": {"uri": par_uri, "cid": par_cid},
+                "root": {"uri": root_uri, "cid": root_cid},
             },
         }
         facets = build_facets(text, verbose=True)
@@ -1116,7 +1162,7 @@ def main():
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
         if status == 200:
-            log_publish("reply", res, parent=record["reply"]["parent"], text=text)
+            log_publish("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"], text=text)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
