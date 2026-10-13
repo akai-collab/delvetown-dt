@@ -296,7 +296,7 @@ def build_facets(text, verbose=False):
             continue                                  # already inside a mention: never facet twice
         if not raw.startswith(("http://", "https://")):
             last = raw.split("/", 1)[0].rsplit(".", 1)[-1]
-            if last[:1].isupper():
+            if any(c.isupper() for c in last):
                 continue                                  # town.delve.feed.getTimeline is an NSID, not a domain
         uri = raw if raw.startswith(("http://", "https://")) else "https://" + raw
         facets.append({"index": {"byteStart": bs, "byteEnd": be},
