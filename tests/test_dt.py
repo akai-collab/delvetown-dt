@@ -639,5 +639,36 @@ class Addressed(unittest.TestCase):
         self.assertEqual(dt._addressed([None, 3, "x", {}]), [])
 
 
+class ChainRoot(unittest.TestCase):
+    """A reply whose declared root is not the root of its parent is born invisible: still counted in
+    replyCount, in no thread, no parent chain (durin found it on nine akai replies, 2026-10-13)."""
+
+    @staticmethod
+    def _fetch(tree):
+        def f(uri):
+            return tree.get(uri) or {}
+        return f
+
+    def test_walks_up_to_the_post_that_is_not_a_reply(self):
+        tree = {"at://a": {"cid": "ca", "value": {"reply": {"parent": {"uri": "at://b"}}}},
+                "at://b": {"cid": "cb", "value": {"reply": {"parent": {"uri": "at://c"}}}},
+                "at://c": {"cid": "cc", "value": {"text": "root"}}}
+        self.assertEqual(dt.chain_root("at://a", self._fetch(tree)), ("at://c", "cc"))
+
+    def test_a_root_post_is_its_own_root(self):
+        tree = {"at://a": {"cid": "ca", "value": {"text": "root"}}}
+        self.assertEqual(dt.chain_root("at://a", self._fetch(tree)), ("at://a", "ca"))
+
+    def test_cycle_and_missing_records_return_nothing(self):
+        tree = {"at://a": {"value": {"reply": {"parent": {"uri": "at://b"}}}},
+                "at://b": {"value": {"reply": {"parent": {"uri": "at://a"}}}}}
+        self.assertEqual(dt.chain_root("at://a", self._fetch(tree)), (None, None))
+        self.assertEqual(dt.chain_root("at://gone", self._fetch(tree)), (None, None))
+
+    def test_junk_is_not_an_error(self):
+        self.assertEqual(dt.chain_root("", self._fetch({})), (None, None))
+        self.assertEqual(dt.chain_root("at://x", lambda u: {"value": None}), (None, None))
+
+
 if __name__ == "__main__":
     unittest.main()
