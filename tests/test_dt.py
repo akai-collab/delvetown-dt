@@ -623,5 +623,21 @@ class Display(unittest.TestCase):
         self.assertIn("https://cdn.example/x.jpg", "\n".join(dt._embed_lines(rec)))
 
 
+class Addressed(unittest.TestCase):
+    """A mention buried 24 deep in a backlog is the one notification class a wake cannot miss: on
+    2026-10-13 a direct question at 15:36Z never reached the 21:00 wake's brief, which lists the
+    newest ten notifications whatever they are, and it went unanswered through a six-write wake."""
+
+    def test_only_mentions_and_replies_count(self):
+        items = [{"reason": "like", "uri": "a"}, {"reason": "mention", "uri": "b"},
+                 {"reason": "follow", "uri": "c"}, {"reason": "reply", "uri": "d"},
+                 {"reason": "repost", "uri": "e"}, {"reason": "MENTION", "uri": "f"}]
+        self.assertEqual([n["uri"] for n in dt._addressed(items)], ["b", "d", "f"])
+
+    def test_empty_and_junk_input_is_not_an_error(self):
+        self.assertEqual(dt._addressed(None), [])
+        self.assertEqual(dt._addressed([None, 3, "x", {}]), [])
+
+
 if __name__ == "__main__":
     unittest.main()
