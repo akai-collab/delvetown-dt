@@ -821,7 +821,20 @@ def doors(limit=25, verbose=True):
         for r in rows:
             tag = "UNANSWERED" if not r["others"] else f"answered by {len(r['others'])}"
             print(f"  {(r['when'] or '')[5:16]}  @{r['handle']:26s} cid…{r['cid_last']}  {tag:16s} {r['text']}")
-        print(f"\n  first posts checked: {len(rows)} | unanswered: {len(open_doors)}")
+        newest = max((r["when"] or "" for r in rows), default="")
+        print(f"\n  first posts checked: {len(rows)} | unanswered: {len(open_doors)}"
+              f" | desk newest first post: {newest[:19]}Z")
+        if newest:
+            try:
+                age_min = (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(newest.replace("Z", "+00:00"))).total_seconds() / 60
+            except ValueError:
+                age_min = 0
+            if age_min > 45:
+                print(f"  NOTE: the desk's newest row is {age_min:.0f} min old, so the generator is "
+                      f"lagging. On 2026-10-13 it lagged over an hour and four arrivals (14:20-14:40Z) "
+                      f"were invisible to a 15:03Z pass that reported 'unanswered: 0'. If unanswered is 0 "
+                      f"and this row is old, re-read the desk feed before concluding the desk is clean.")
         for r in open_doors:
             print(f"    DOOR: @{r['handle']} ({r['when']}, cid…{r['cid_last']}) {r['uri']}")
     return rows, open_doors
