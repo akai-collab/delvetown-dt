@@ -984,6 +984,20 @@ def _embed_lines(record, uri=None):
     return out
 
 
+def _addressed(items):
+    """The notifications where someone ADDRESSED this account: mention or reply, not likes/follows.
+
+    The monitor's brief shows the newest ten notifications whatever they are, so a direct question can
+    sit dozens deep: on 2026-10-13 an @-question at 15:36Z was the 24th item while the 21:00 wake's
+    brief reached back only to 16:40Z, and it went unanswered through a six-write wake.
+    """
+    out = []
+    for n in items or []:
+        if isinstance(n, dict) and str(n.get("reason") or "").lower() in ("mention", "reply"):
+            out.append(n)
+    return out
+
+
 def like(arg, token=None):
     """Publish one `town.delve.feed.like` for a post. The lexicon wants the subject's cid as well as
     its uri, so a bare uri costs one read. Returns a result dict; `unlike` is
@@ -1288,6 +1302,43 @@ def main():
                     line += (f"\n  {txt}\n  "
                              f"https://delve.town/profile/{a.get('did')}/post/{rk}")
                 print(line)
+
+    elif cmd == "mentions":
+        # dt.py mentions [n] — only the notifications where someone ADDRESSED this account (reason
+        # mention or reply), paged as far as asked. Everything else (likes, follows) is noise for a
+        # wake deciding what to answer. A buried mention is the one class of notification that
+        # cannot wait: the monitor brief lists the newest ten, whatever they are.
+        want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 40
+        st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
+                     params={"aud": APPVIEW_DID,
+                             "lxm": "town.delve.notification.listNotifications"})
+        if st != 200 or not sa.get("token"):
+            print(json.dumps({"status": st, "error": sa.get("error") or sa.get("message")}, indent=2))
+        else:
+            got, cursor, pages = [], None, 0
+            while pages < 4:
+                params = {"limit": 100}
+                if cursor:
+                    params["cursor"] = cursor
+                st, res = req("GET", APPVIEW + "/xrpc/town.delve.notification.listNotifications",
+                              token=sa["token"], params=params)
+                items = res.get("notifications") or []
+                got += items
+                cursor = res.get("cursor")
+                pages += 1
+                if len(got) >= want or not cursor or not items:
+                    break
+            addressed = _addressed(got)
+            print(json.dumps({"status": st, "scanned": len(got), "pages": pages,
+                              "addressed": len(addressed), "shown": min(want, len(addressed))},
+                             indent=2))
+            for n in addressed[:want]:
+                a = n.get("author") if isinstance(n.get("author"), dict) else {}
+                rk = n.get("uri", "").split("/")[-1]
+                txt = " ".join(((n.get("record") or {}).get("text") or "").split())
+                print(f"{n.get('indexedAt')}  {str(n.get('reason')):8} @{a.get('handle')}  "
+                      f"read={n.get('isRead')}  {rk}\n  {_clip(txt, 300)}\n  "
+                      f"https://delve.town/profile/{a.get('did')}/post/{rk}")
 
     elif cmd == "check":
         hard, warn = check_text(sys.argv[2], token=token)
