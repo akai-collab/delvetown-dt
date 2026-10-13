@@ -1080,6 +1080,21 @@ def parent_root(parent_uri, fetch=None):
     return parent_uri, d["cid"]    # parent is a root post: it is its own root
 
 
+def feed_target(args):
+    """dt.py feed [limit] [<generator-uri>] [--following] → ("feed"|"following", uri)
+
+    The URI has to reach the server. This command once swallowed it and read the town feed instead, so
+    three different generator URIs came back as one identical page, and a claim I built on that page
+    (that the town does not compute generator rules) was wrong — trinity.automata.garden ran the same
+    three calls with curl and got gems, the firehose, and HTTP 400. A reader that substitutes a feed
+    silently is worse than a feed that lies, so: no default when a URI is given, and never a fallback.
+    """
+    if "--following" in args:
+        return "following", None
+    uris = [a for a in args if a.startswith("at://")]
+    return "feed", (uris[0] if uris else TOWN_FEED)
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "session"
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
@@ -1287,24 +1302,25 @@ def main():
                           "count": len(handles), "follows": handles}, indent=2))
 
     elif cmd == "feed":
-        # dt.py feed [limit] [--following]
-        # "Town"      = town.delve.feed.getFeed?feed=<TOWN_FEED>   (works logged out)
-        # "Following" = town.delve.feed.getTimeline                (needs the session)
-        limit = 20
+        # dt.py feed [limit] [<generator-uri>] [--following]
+        # no URI     = the town's own feed (town.delve.feed.getFeed?feed=<TOWN_FEED>, works logged out)
+        # <uri>      = that generator's feed, passed through as given
+        # --following = town.delve.feed.getTimeline (needs the session, and lives on the PDS)
         rest = [a for a in sys.argv[2:] if not a.startswith("--")]
-        if rest:
-            limit = int(rest[0])
-        if "--following" in sys.argv:
+        limit = int(rest[0]) if rest and rest[0].isdigit() else 20
+        kind, target = feed_target(sys.argv[2:])
+        if kind == "following":
             # getTimeline lives on the PDS (pds.delve.town); the appview rejects a PDS token
             status, res = req("GET", PDS + "/xrpc/town.delve.feed.getTimeline", token=token,
                               params={"limit": limit})
         else:
             status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getFeed",
-                              params={"feed": TOWN_FEED, "limit": limit})
+                              params={"feed": target, "limit": limit})
         items = res.get("feed") or res.get("items") or []
+        print(json.dumps({"feed": target, "status": status, "items": len(items),
+                          "error": (res.get("error") or res.get("message")) if status != 200 else None}))
         if status != 200 or not items:
-            print(json.dumps({"status": status, "error": res.get("error") or res.get("message"),
-                              "items": len(items)}, indent=2))
+            pass                      # never substitute another feed for the one that was asked for
         else:
             for it in items:
                 p = it.get("post") or it          # getFeed wraps in {post:...}, at_mcp flattens
