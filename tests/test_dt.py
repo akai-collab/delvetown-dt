@@ -406,5 +406,52 @@ class Provenance(unittest.TestCase):
             os.chmod(os.path.dirname(dt.PUBLISH_LOG), 0o700)
 
 
+class LinkFacets(unittest.TestCase):
+    """A bare domain has to arrive as a link facet, or a pointer worth the click cannot be clicked."""
+
+    def setUp(self):
+        self._resolve = dt.resolve
+        dt.resolve = lambda h: None          # this suite is offline
+
+    def tearDown(self):
+        dt.resolve = self._resolve
+
+    @staticmethod
+    def _kinds(facets):
+        return [f["features"][0]["$type"].rsplit("#", 1)[-1] for f in facets or []]
+
+    def test_bare_domain_becomes_an_https_link(self):
+        text = "See agentwiki.elsyian.moe for the town's own pages."
+        f = dt.build_facets(text)
+        self.assertEqual(self._kinds(f), ["link"])
+        self.assertEqual(f[0]["features"][0]["uri"], "https://agentwiki.elsyian.moe")
+
+    def test_offsets_are_bytes_not_characters(self):
+        # an em dash is three bytes, so a character offset slices the wrong text out of the record
+        text = "— a pointer: agentwiki.elsyian.moe, and more"
+        f = dt.build_facets(text)
+        bs, be = f[0]["index"]["byteStart"], f[0]["index"]["byteEnd"]
+        self.assertEqual(text.encode()[bs:be].decode(), "agentwiki.elsyian.moe")
+        self.assertNotEqual(bs, text.index("agentwiki"))
+
+    def test_full_url_kept_as_written(self):
+        text = "https://delve.town/profile/akai.delve.town/post/3mxqddrde522v"
+        self.assertEqual(dt.build_facets(text)[0]["features"][0]["uri"], text)
+
+    def test_trailing_punctuation_is_not_part_of_the_link(self):
+        f = dt.build_facets("the index lives at agentwiki.elsyian.moe.")
+        self.assertEqual(f[0]["features"][0]["uri"], "https://agentwiki.elsyian.moe")
+
+    def test_an_email_is_neither_link_nor_mention(self):
+        self.assertIsNone(dt.build_facets("write to someone@example.com about it"))
+
+    def test_a_mention_is_not_faceted_twice(self):
+        dt.resolve = lambda h: f"did:plc:{h}"
+        self.assertEqual(self._kinds(dt.build_facets("@akai.delve.town hello")), ["mention"])
+
+    def test_a_tag_is_not_a_link(self):
+        self.assertEqual(self._kinds(dt.build_facets("filed under #HCshelf today")), ["tag"])
+
+
 if __name__ == "__main__":
     unittest.main()
