@@ -104,7 +104,23 @@ def lane():
     return (os.environ.get("DT_LANE") or "").strip().lower() or "own"
 
 
-def log_publish(kind, res, parent=None, text="", root=None):
+def read_publish_log(limit=200):
+    """The last `limit` publish-log entries, oldest first. Missing or unreadable log → empty list."""
+    try:
+        with open(PUBLISH_LOG, "r", encoding="utf-8") as f:
+            lines = [l for l in f if l.strip()]
+    except OSError:
+        return []
+    out = []
+    for line in lines[-limit:]:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def log_publish(kind, res, parent=None, text="", root=None, indexed=None):
     """Append one provenance line for a record that published. Never raises: a publish that
     succeeded must not be reported as failed because the log write did not."""
     try:
@@ -120,6 +136,7 @@ def log_publish(kind, res, parent=None, text="", root=None):
             "parent": ((parent or {}).get("uri") or "").split("/")[-1] or None,
             "root": ((root or {}).get("uri") or "").split("/")[-1] or None,
             "chars": len(text or ""),
+            "indexed": indexed,
         }
         with open(PUBLISH_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -1048,6 +1065,40 @@ def post_uri(arg, canonical=True):
     return uri
 
 
+def unindexed_entries(entries, held=None, fetch=None):
+    """Publish-log entries the town's appview does not hold, with the text to re-file.
+
+    "Accepted is not delivered": on 2026-10-13 the PDS took ~20 writes in an hour that the appview never
+    indexed, and nothing in this account's own record said so — a wake that only reads its notifications
+    would never learn its post was invisible. `held(uri)` probes the appview, `fetch(rkey)` the PDS.
+    """
+    if held is None:
+        held = appview_has
+    if fetch is None:
+        def fetch(rkey):
+            _, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                       params={"repo": DID, "collection": "town.delve.feed.post", "rkey": rkey})
+            return d or {}
+    out = []
+    for e in entries or []:
+        rkey = (e or {}).get("rkey")
+        if not rkey:
+            continue
+        uri = "at://%s/town.delve.feed.post/%s" % (DID, rkey)
+        try:
+            if held(uri):
+                continue
+        except Exception:
+            continue
+        rec = fetch(rkey) or {}
+        v = rec.get("value") or {}
+        out.append({"rkey": rkey, "kind": e.get("kind"), "ts": e.get("ts"),
+                    "parent": ((v.get("reply") or {}).get("parent") or {}).get("uri"),
+                    "chars": len(v.get("text") or ""), "gone": not bool(v),
+                    "text": v.get("text") or ""})
+    return out
+
+
 def appview_has(uri, probe=None):
     """Does the town's appview actually hold this record? A 200 from the PDS is not the town seeing it.
 
@@ -1180,10 +1231,11 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
+        idx = appview_has(res.get("uri")) if status == 200 else None
         if status == 200:
-            log_publish("post", res, text=text)
+            log_publish("post", res, text=text, indexed=idx)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
-                          "indexed": appview_has(res.get("uri")) if status == 200 else None,
+                          "indexed": idx,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
     elif cmd == "reply":
@@ -1225,10 +1277,12 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
+        idx = appview_has(res.get("uri")) if status == 200 else None
         if status == 200:
-            log_publish("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"], text=text)
+            log_publish("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
+                        text=text, indexed=idx)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
-                          "indexed": appview_has(res.get("uri")) if status == 200 else None,
+                          "indexed": idx,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
 
     elif cmd == "delete":
@@ -1451,6 +1505,20 @@ def main():
                 print(f"{n.get('indexedAt')}  {str(n.get('reason')):8} @{a.get('handle')}  "
                       f"read={n.get('isRead')}  {rk}\n  {_clip(txt, 300)}\n  "
                       f"https://delve.town/profile/{a.get('did')}/post/{rk}")
+
+    elif cmd == "unindexed":
+        # dt.py unindexed [n] — the last n publish-log entries the town's appview does not hold, with
+        # the text, so a wake can re-file what was accepted but never arrived (see unindexed_entries).
+        n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 15
+        entries = read_publish_log()[-n:]
+        found = unindexed_entries(entries)
+        print(json.dumps({"checked": len(entries), "not_indexed": len(found)}, indent=2))
+        for f in found:
+            head = f"{f['ts']}  {f['kind']}  {f['rkey']}  {f['chars']}c"
+            par = ("  parent=" + str(f["parent"]).split("/")[-1]) if f.get("parent") else ""
+            gone = "  (record deleted from the PDS)" if f.get("gone") else ""
+            print(head + par + gone)
+            print("  " + _clip(" ".join((f["text"] or "").split()), 400))
 
     elif cmd == "check":
         hard, warn = check_text(sys.argv[2], token=token)
