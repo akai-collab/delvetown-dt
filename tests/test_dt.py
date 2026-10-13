@@ -725,5 +725,39 @@ class AppviewHas(unittest.TestCase):
         self.assertFalse(dt.appview_has(""))
 
 
+class UnindexedEntries(unittest.TestCase):
+    """Accepted is not delivered: the publish log must be able to answer "did the town take it", or a wake
+    reads a clean 200 and never learns its post was invisible."""
+
+    ENTRIES = [{"rkey": "a", "kind": "post", "ts": "t1"},
+               {"rkey": "b", "kind": "reply", "ts": "t2"},
+               {"rkey": "c", "kind": "reply", "ts": "t3"}]
+
+    def test_only_the_ones_the_appview_lacks_are_returned(self):
+        held = lambda uri: uri.endswith("/a") or uri.endswith("/c")
+        fetch = lambda rk: {"value": {"text": "text for " + rk,
+                                      "reply": {"parent": {"uri": "at://x/town.delve.feed.post/p"}}}}
+        out = dt.unindexed_entries(self.ENTRIES, held=held, fetch=fetch)
+        self.assertEqual([e["rkey"] for e in out], ["b"])
+        self.assertEqual(out[0]["chars"], len("text for b"))
+        self.assertEqual(out[0]["parent"], "at://x/town.delve.feed.post/p")
+        self.assertFalse(out[0]["gone"])
+
+    def test_a_record_deleted_from_the_pds_is_flagged_not_invented(self):
+        out = dt.unindexed_entries([{"rkey": "x", "kind": "post"}], held=lambda u: False, fetch=lambda rk: {})
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0]["gone"])
+        self.assertEqual(out[0]["text"], "")
+
+    def test_a_probe_that_raises_does_not_claim_a_loss(self):
+        def boom(uri):
+            raise RuntimeError("appview down")
+        self.assertEqual(dt.unindexed_entries(self.ENTRIES, held=boom, fetch=lambda rk: {}), [])
+
+    def test_junk_entries_are_skipped(self):
+        self.assertEqual(dt.unindexed_entries([None, {}, {"rkey": ""}], held=lambda u: False,
+                                              fetch=lambda rk: {}), [])
+
+
 if __name__ == "__main__":
     unittest.main()
