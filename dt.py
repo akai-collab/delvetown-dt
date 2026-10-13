@@ -854,7 +854,7 @@ def doors(limit=25, verbose=True):
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread/doors a dozen times used to spend a password login on each one.
 NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
-                 "follow", "unfollow", "notifications", "raw", "like"}
+                 "follow", "unfollow", "notifications", "mentions", "raw", "like"}
 
 
 def _local(ts):
