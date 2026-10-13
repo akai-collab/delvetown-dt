@@ -497,10 +497,12 @@ class ScriptIdentity(unittest.TestCase):
         self.assertIn("symlink", detail)
         self.assertEqual(path, self.canonical)
 
-    def test_a_real_copy_identical_to_the_repo_is_ok_but_named_as_a_real_file(self):
+    def test_a_real_copy_in_sync_is_reported_as_a_copy_not_ok(self):
+        """A skill write re-materialises the symlink as a real copy (three times by 2026-10-13).
+        In sync is not the same as safe — a copy drifts, so the pre-flight has to say so."""
         _, verdict, detail = dt.script_identity(repo=self.repo, path=self._live("canonical", as_link=False))
-        self.assertEqual(verdict, "ok")
-        self.assertIn("real file", detail)
+        self.assertEqual(verdict, "copy")
+        self.assertIn("real copy", detail)
 
     def test_a_real_copy_that_differs_is_stale(self):
         _, verdict, detail = dt.script_identity(repo=self.repo, path=self._live("old", as_link=False))

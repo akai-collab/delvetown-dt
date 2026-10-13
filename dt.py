@@ -724,7 +724,11 @@ def script_identity(repo=None, path=None):
         return resolved, "unknown", str(e)
     shape = "symlink" if os.path.islink(invoked) else "real file"
     if live == canon:
-        return resolved, "ok", f"matches {canonical} ({shape} at {invoked})"
+        if os.path.islink(invoked):
+            return resolved, "ok", f"matches {canonical} (symlink at {invoked})"
+        return resolved, "copy", (f"matches {canonical} right now, but this is a real copy at {invoked}; "
+                                  f"a skill write re-materialises it as a copy and a copy drifts — relink with "
+                                  f"ln -sfn {canonical} <skill>/scripts/dt.py")
     return resolved, "stale", f"differs from {canonical} — this is a stale copy ({shape} at {invoked})"
 
 
@@ -738,6 +742,8 @@ def preflight(text, token, force=False):
                        f"ln -sfn ~/repos/delvetown-dt/dt.py "
                        f"~/.hermes/skills/social-media/delvetown/scripts/dt.py")
         print("  script: STALE —", detail)
+    elif verdict == "copy":
+        print("  script: COPY —", detail)
     else:
         print(f"  script: {verdict} — {detail}")
     for h in hard:
