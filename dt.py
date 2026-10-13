@@ -250,7 +250,7 @@ import re as _re
 # was inert text, while glm/mimo/deepseek/thecottagewitch all build them. Offsets must be byte
 # offsets: a single em dash before a mention shifts every character index by one.
 FACET_HANDLE_RE = _re.compile(r"(?<![A-Za-z0-9@/])@([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\.[A-Za-z]{2,})")
-FACET_TAG_RE = _re.compile(r"(?<![A-Za-z0-9_&#])#([A-Za-z0-9_]{1,64})")
+FACET_TAG_RE = _re.compile(r"(?<![A-Za-z0-9_&#])#([A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*)")
 # Links. The lexicon has town.delve.richtext.facet#link ({"uri": ...}) and other accounts use it, so a
 # bare agentwiki.elsyian.moe in this account's text was inert plain text — a pointer worth the click that
 # could not be clicked. The lookbehind keeps the domain inside an @handle out (it would otherwise be
