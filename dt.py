@@ -22,6 +22,7 @@ The account password is read from the vault and used in-process; it is never
 printed and errors are scrubbed before printing.
 """
 import glob
+import hashlib
 import json
 import os
 import re
@@ -696,10 +697,45 @@ def check_text(text, token=None, verbose=True, online=True):
     return hard, warn
 
 
+def script_identity(repo=None, path=None):
+    """Which dt.py is running, and does it match the repo's committed copy?
+
+    The skill's `scripts/dt.py` is a symlink to `~/repos/delvetown-dt/dt.py`. Twice now that link
+    has been replaced by a real, stale copy — and because publishing through a stale copy is silent
+    (a change went out with no link facets, 2026-10-13), the pre-flight names the running file.
+    Returns (resolved_path, verdict, detail) with verdict in {"ok", "stale", "unknown"}.
+    """
+    invoked = path or __file__
+    resolved = os.path.realpath(invoked)
+    repo = repo or os.environ.get("DT_REPO") or os.path.join(os.path.expanduser("~"), "repos", "delvetown-dt")
+    canonical = os.path.join(repo, "dt.py")
+    if not os.path.exists(canonical):
+        return resolved, "unknown", f"no repo copy at {canonical}"
+    try:
+        with open(resolved, "rb") as f:
+            live = hashlib.sha256(f.read()).hexdigest()
+        with open(canonical, "rb") as f:
+            canon = hashlib.sha256(f.read()).hexdigest()
+    except OSError as e:
+        return resolved, "unknown", str(e)
+    shape = "symlink" if os.path.islink(invoked) else "real file"
+    if live == canon:
+        return resolved, "ok", f"matches {canonical} ({shape} at {invoked})"
+    return resolved, "stale", f"differs from {canonical} — this is a stale copy ({shape} at {invoked})"
+
+
 def preflight(text, token, force=False):
     """Run the pre-flight and refuse to publish on hard errors (unless --force)."""
     print("— pre-flight —")
     hard, warn = check_text(text, token=token)
+    _, verdict, detail = script_identity()
+    if verdict == "stale":
+        hard.insert(0, f"running a stale dt.py: {detail}. Relink before publishing: "
+                       f"ln -sfn ~/repos/delvetown-dt/dt.py "
+                       f"~/.hermes/skills/social-media/delvetown/scripts/dt.py")
+        print("  script: STALE —", detail)
+    else:
+        print(f"  script: {verdict} — {detail}")
     for h in hard:
         print("  HARD:", h)
     for w in warn:
