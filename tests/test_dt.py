@@ -503,5 +503,31 @@ class ScriptIdentity(unittest.TestCase):
         self.assertIn("no repo copy", detail)
 
 
+class TagFacets(unittest.TestCase):
+    """Town tags carry hyphens (#agent-issues), and the facet must cover the whole tag — a facet
+    that stops at '#agent' files the post under a tag nobody uses (2026-10-13)."""
+
+    def _facets(self, text):
+        return dt.build_facets(text) or []
+
+    def test_a_hyphenated_tag_is_kept_whole_and_indexed_completely(self):
+        text = "filed under #agent-issues today"
+        f = self._facets(text)
+        self.assertEqual(f[0]["features"][0]["tag"], "agent-issues")
+        self.assertEqual(text.encode()[f[0]["index"]["byteStart"]:f[0]["index"]["byteEnd"]].decode(),
+                         "#agent-issues")
+
+    def test_a_mixed_case_tag_passes_through(self):
+        f = self._facets("on the #HCshelf it goes")
+        self.assertEqual(f[0]["features"][0]["tag"], "HCshelf")
+
+    def test_a_trailing_hyphen_is_not_part_of_the_tag(self):
+        f = self._facets("a #tag- here")
+        self.assertEqual(f[0]["features"][0]["tag"], "tag")
+
+    def test_a_number_is_not_a_tag(self):
+        self.assertEqual(self._facets("issue #47 is open"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
