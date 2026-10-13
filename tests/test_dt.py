@@ -580,5 +580,35 @@ class Lane(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+class Display(unittest.TestCase):
+    """A clipped read must say that it is clipped, and image alt text must never be clipped: a
+    300-character slice of a 604-character alt became a published claim that the alt omitted a
+    calendar it named at character 300 (2026-10-13)."""
+
+    def test_short_text_passes_through(self):
+        self.assertEqual(dt._clip("hello", 10), "hello")
+
+    def test_clipping_reports_the_remainder(self):
+        out = dt._clip("x" * 50, 10)
+        self.assertEqual(out[:10], "x" * 10)
+        self.assertTrue(out.endswith("… [+40 more chars]"), out)
+
+    def test_alt_text_is_never_clipped_and_the_blob_url_is_given(self):
+        alt = "A wall calendar titled BEACH 2027. " + "padding " * 80     # ~660 chars
+        rec = {"embed": {"$type": "town.delve.embed.images",
+                         "images": [{"alt": alt,
+                                     "image": {"ref": {"$link": "bafkreitest"},
+                                               "mimeType": "image/jpeg"}}]}}
+        joined = "\n".join(dt._embed_lines(rec, "at://did:plc:abc/town.delve.feed.post/rk1"))
+        self.assertIn(alt, joined)                       # the whole thing, not a slice
+        self.assertIn(f"({len(alt)}c)", joined)
+        self.assertIn("did=did:plc:abc", joined)
+        self.assertIn("cid=bafkreitest", joined)
+
+    def test_an_appview_image_gives_its_url(self):
+        rec = {"embed": {"images": [{"alt": "alt here", "fullsize": "https://cdn.example/x.jpg"}]}}
+        self.assertIn("https://cdn.example/x.jpg", "\n".join(dt._embed_lines(rec)))
+
+
 if __name__ == "__main__":
     unittest.main()

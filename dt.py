@@ -915,13 +915,50 @@ def recent(hours=10.0, verbose=True):
         print(f"# this account, last {hours:g}h (local time, UTC in brackets) — {len(rows)} posts")
         for r in rows:
             kind = f"reply to @{r['to']}" if r["to"] else "root post"
-            print(f"\n{_local(r['at'])}  {kind}  {r['uri'].split('/')[-1]}\n  {r['text'][:280]}")
+            print(f"\n{_local(r['at'])}  {kind}  {r['uri'].split('/')[-1]}\n  {_clip(r['text'], 280)}")
             for a in r["answers"]:
                 print(f"    <- @{a['handle']}  {_local(a['at'])}  {a['uri'].split('/')[-1]}\n"
-                      f"       {a['text'][:240]}")
+                      f"       {_clip(a['text'], 240)}")
             if not r["answers"]:
                 print("    (no answers yet)")
     return rows
+
+
+def _clip(text, n):
+    """Clip display text but SAY SO. A silently clipped read is worse than no read: on 2026-10-13 a
+    300-character slice of a 604-character image alt text became a published claim that the alt
+    omitted the calendar it named at character 300. Print the remainder's size instead."""
+    t = text or ""
+    if len(t) <= n:
+        return t
+    return f"{t[:n]} … [+{len(t) - n} more chars]"
+
+
+def _embed_lines(record, uri=None):
+    """Image alt text and image URLs for a post, verbatim and never clipped.
+
+    Alt is the poster's own description and runs long (604 characters in the case that prompted
+    this); it can name things the pixels do not show and miss things they do, so it is read in full,
+    and the image URL is printed so a vision-capable run can look at the picture itself.
+    """
+    emb = (record or {}).get("embed") or {}
+    imgs = emb.get("images") or emb.get("media") or []
+    did = uri.split("/")[2] if isinstance(uri, str) and uri.startswith("at://") else None
+    out = []
+    for i, img in enumerate(imgs, 1):
+        if not isinstance(img, dict):
+            continue
+        alt = img.get("alt") or ""
+        ref = (((img.get("image") or {}).get("ref") or {}).get("$link"))
+        url = img.get("fullsize") if isinstance(img.get("fullsize"), str) else None
+        if not url and isinstance(img.get("thumb"), str):
+            url = img["thumb"]
+        out.append(f"    [image {i}/{len(imgs)}] alt ({len(alt)}c): {alt}")
+        if url:
+            out.append(f"       url: {url}")
+        elif ref and did:
+            out.append(f"       blob: {PDS}/xrpc/com.atproto.sync.getBlob?did={did}&cid={ref}")
+    return out
 
 
 def like(arg, token=None):
@@ -1192,7 +1229,9 @@ def main():
                 txt = " ".join(((r.get("text") or it.get("text") or "")).split())
                 uri = p.get("uri") or it.get("uri")
                 when = (r.get("createdAt") or p.get("indexedAt") or "")
-                print(f"{when}  @{a}  ({len(txt)}c)\n  {txt[:300]}\n  {uri}")
+                print(f"{when}  @{a}  ({len(txt)}c)\n  {_clip(txt, 300)}\n  {uri}")
+                for extra in _embed_lines(r, uri):
+                    print(extra)
 
     elif cmd == "notifications":
         # dt.py notifications [limit] — this account's own notifications, read straight off the
@@ -1265,7 +1304,9 @@ def main():
                 txt = " ".join((r.get("text") or "").split())
                 rk = (p.get("uri") or "").split("/")[-1]
                 lines.append(f"{'  ' * d}@{(a or '?'):26s} {(r.get('createdAt') or '')[:19]}  {rk}"
-                             f"\n{'  ' * d}  {txt[:400]}")
+                             f"\n{'  ' * d}  {_clip(txt, 400)}")
+                for extra in _embed_lines(r, p.get("uri")):
+                    lines.append("  " * d + extra)
                 for child in (node.get("replies") or []):
                     walk(child, d + 1)
 
