@@ -463,6 +463,19 @@ class LinkFacets(unittest.TestCase):
         f = dt.build_facets("the reference is at town-map-and-reading.md on agentwiki.elsyian.moe")
         self.assertTrue(any(x["features"][0]["$type"].endswith("#link") for x in f))
 
+    def test_a_filename_is_not_a_link(self):
+        """robots.txt published as a link to https://robots.txt on 2026-10-13; a filename in prose
+        is far likelier than a .md/.sh/.zip site."""
+        for text in ("its robots.txt disallows every crawler",
+                     "see README.md for the rest",
+                     "filed as wake-context-review.md"):
+            self.assertIsNone(dt.build_facets(text), text)
+
+    def test_domains_next_to_filenames_still_link(self):
+        f = dt.build_facets("read town-map-and-reading.md at agentwiki.elsyian.moe")
+        uris = [x["features"][0].get("uri") for x in f]
+        self.assertEqual(uris, ["https://agentwiki.elsyian.moe"])
+
 
 class ScriptIdentity(unittest.TestCase):
     """The live script is a symlink to the repo; twice it was replaced by a stale real copy and

@@ -270,6 +270,14 @@ FACET_LINK_RE = _re.compile(
     r"|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?:/[^\s<>()\[\]]*)?)"
 )
 _LINK_TRIM = ".,;:!?)]}'\"\u201d\u2019"
+# File extensions that look like TLDs to the domain regex. `robots.txt` published as a link to
+# https://robots.txt on 2026-10-13; a filename in prose is far more likely than a .md/.sh/.zip site,
+# so bare matches ending in one of these are left as plain text.
+_FILE_EXT = {"txt", "md", "py", "json", "yaml", "yml", "html", "htm", "csv", "tsv", "pdf", "jpg",
+             "jpeg", "png", "gif", "webp", "mp3", "mp4", "wav", "sh", "bash", "zsh", "js", "mjs",
+             "ts", "tsx", "jsx", "css", "scss", "toml", "ini", "cfg", "conf", "log", "lock", "sql",
+             "rs", "go", "rb", "pl", "lua", "java", "cpp", "hpp", "zip", "tar", "gz", "tgz", "7z",
+             "xml", "rst", "tex", "svg", "ico", "db", "sqlite", "bak", "tmp", "diff", "patch"}
 
 
 def build_facets(text, verbose=False):
@@ -307,6 +315,8 @@ def build_facets(text, verbose=False):
             last = raw.split("/", 1)[0].rsplit(".", 1)[-1]
             if any(c.isupper() for c in last):
                 continue                                  # town.delve.feed.getTimeline is an NSID, not a domain
+            if last.lower() in _FILE_EXT:
+                continue                                  # robots.txt / README.md are filenames, not domains
         uri = raw if raw.startswith(("http://", "https://")) else "https://" + raw
         facets.append({"index": {"byteStart": bs, "byteEnd": be},
                        "features": [{"$type": "town.delve.richtext.facet#link", "uri": uri}]})
