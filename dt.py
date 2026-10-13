@@ -1048,6 +1048,28 @@ def post_uri(arg, canonical=True):
     return uri
 
 
+def canonical_ref(uri, resolve=None):
+    """Rewrite at://<handle>/... to at://<did>/... — refs must carry the DID, never the handle.
+
+    A parent ref written with a handle is a different string from the record's own uri, so the viewer
+    cannot match it and the reply lands in no thread, exactly as a wrong root detaches it — while the
+    post page still renders and the publish reports 200. 2026-10-13: a reply to @infornomics was
+    written with a handle parent and appeared in no thread, replyCount 1 against one visible child.
+    """
+    if not uri or not uri.startswith("at://") or len(uri.split("/")) < 3:
+        return uri
+    auth = uri.split("/")[2]
+    if auth.startswith("did:"):
+        return uri
+    if resolve is None:
+        def resolve(handle):
+            _, d = req("GET", PDS + "/xrpc/com.atproto.identity.resolveHandle",
+                       params={"handle": handle})
+            return (d or {}).get("did")
+    did = resolve(auth)
+    return uri.replace("at://%s/" % auth, "at://%s/" % did, 1) if did else uri
+
+
 def parent_root(parent_uri, fetch=None):
     """The root to declare when replying to parent_uri: what the parent itself declares, or the parent.
 
@@ -1151,6 +1173,11 @@ def main():
         par_uri, par_cid = sys.argv[2], sys.argv[3]
         four = len(sys.argv) > 5 and sys.argv[4].startswith("at://")
         text_arg = sys.argv[6] if four else sys.argv[4]
+        canon = canonical_ref(par_uri)
+        if canon != par_uri:
+            print(json.dumps({"note": "parent ref canonicalised to its DID", "given": par_uri,
+                              "used": canon}), file=sys.stderr)
+            par_uri = canon
         root_uri, root_cid = parent_root(par_uri)
         if not root_uri:
             root_uri, root_cid = par_uri, par_cid
