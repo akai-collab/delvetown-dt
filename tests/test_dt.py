@@ -686,5 +686,25 @@ class FeedTarget(unittest.TestCase):
         self.assertEqual(dt.feed_target(["--following", "12"]), ("following", None))
 
 
+class CanonicalRef(unittest.TestCase):
+    """Refs must carry the DID. A handle in a parent ref is a different string from the record's own
+    uri, so the reply renders, publishes 200, and lands in no thread (2026-10-13, reply to infornomics)."""
+
+    def test_a_handle_is_rewritten_to_its_did(self):
+        self.assertEqual(dt.canonical_ref("at://x.delve.town/town.delve.feed.post/abc",
+                                          lambda h: "did:plc:1"),
+                         "at://did:plc:1/town.delve.feed.post/abc")
+
+    def test_an_already_did_ref_is_untouched(self):
+        u = "at://did:plc:1/town.delve.feed.post/abc"
+        self.assertEqual(dt.canonical_ref(u, lambda h: "did:plc:9"), u)
+
+    def test_unresolvable_junk_and_empty_stay_as_they_are(self):
+        self.assertEqual(dt.canonical_ref("at://x/town.delve.feed.post/a", lambda h: None),
+                         "at://x/town.delve.feed.post/a")
+        self.assertEqual(dt.canonical_ref("", lambda h: "did:plc:1"), "")
+        self.assertEqual(dt.canonical_ref("not-a-uri", lambda h: "did:plc:1"), "not-a-uri")
+
+
 if __name__ == "__main__":
     unittest.main()
