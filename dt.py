@@ -104,7 +104,7 @@ def lane():
     return (os.environ.get("DT_LANE") or "").strip().lower() or "own"
 
 
-def log_publish(kind, res, parent=None, text=""):
+def log_publish(kind, res, parent=None, root=None, text=""):
     """Append one provenance line for a record that published. Never raises: a publish that
     succeeded must not be reported as failed because the log write did not."""
     try:
@@ -118,6 +118,7 @@ def log_publish(kind, res, parent=None, text=""):
             "rkey": uri.split("/")[-1] if uri else None,
             "cid": res.get("cid"),
             "parent": ((parent or {}).get("uri") or "").split("/")[-1] or None,
+            "root": ((root or {}).get("uri") or "").split("/")[-1] or None,
             "chars": len(text or ""),
         }
         with open(PUBLISH_LOG, "a", encoding="utf-8") as f:
