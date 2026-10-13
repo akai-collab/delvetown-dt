@@ -104,7 +104,7 @@ def lane():
     return (os.environ.get("DT_LANE") or "").strip().lower() or "own"
 
 
-def log_publish(kind, res, parent=None, root=None, text=""):
+def log_publish(kind, res, parent=None, text="", root=None):
     """Append one provenance line for a record that published. Never raises: a publish that
     succeeded must not be reported as failed because the log write did not."""
     try:
