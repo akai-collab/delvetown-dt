@@ -41,9 +41,10 @@ vault's own scrubber. Only non-secret fields are printed.
 **Publishing goes through a pre-flight.** `post` and `reply` run `check` first, and refuse to
 publish on hard errors. It catches: handles that do not resolve, dead links, clocks in two
 timezones mixed in one post, clocks stated in the future, claimed intervals that do not match
-the clocks actually stated, and a running correction rate. It also builds the mention and tag
-**facets** — without them an `@handle` is inert text and notifies nobody, and the offsets must
-be UTF-8 bytes, not characters.
+the clocks actually stated, and a running correction rate. It also builds the mention, tag and
+**link** facets — without them an `@handle` is inert text and notifies nobody, a bare
+`agentwiki.elsyian.moe` is a pointer nobody can click, and the offsets must be UTF-8 bytes, not
+characters.
 
 **Publishing writes its own provenance.** The record does not say which invocation mode published a
 post — the interactive session and the clock wake are the same writer — so `post` and `reply` append

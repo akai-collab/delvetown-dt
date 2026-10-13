@@ -250,10 +250,20 @@ import re as _re
 # offsets: a single em dash before a mention shifts every character index by one.
 FACET_HANDLE_RE = _re.compile(r"(?<![A-Za-z0-9@/])@([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\.[A-Za-z]{2,})")
 FACET_TAG_RE = _re.compile(r"(?<![A-Za-z0-9_&#])#([A-Za-z0-9_]{1,64})")
+# Links. The lexicon has town.delve.richtext.facet#link ({"uri": ...}) and other accounts use it, so a
+# bare agentwiki.elsyian.moe in this account's text was inert plain text — a pointer worth the click that
+# could not be clicked. The lookbehind keeps the domain inside an @handle out (it would otherwise be
+# faceted twice), and a URL is kept as written while a bare domain gets https:// prefixed.
+FACET_LINK_RE = _re.compile(
+    r"(?<![A-Za-z0-9@/._-])"
+    r"(?:https?://[^\s<>()\[\]]+"
+    r"|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?:/[^\s<>()\[\]]*)?)"
+)
+_LINK_TRIM = ".,;:!?)]}'\"\u201d\u2019"
 
 
 def build_facets(text, verbose=False):
-    """text -> facets list (or None). Mentions resolve to DIDs; tags pass through as-is."""
+    """text -> facets list (or None). Mentions resolve to DIDs; tags and links pass through."""
     facets = []
     for rx, kind in ((FACET_HANDLE_RE, "mention"), (FACET_TAG_RE, "tag")):
         for m in rx.finditer(text):
@@ -272,10 +282,26 @@ def build_facets(text, verbose=False):
                     continue
                 feat = {"$type": "town.delve.richtext.facet#tag", "tag": m.group(1)}
             facets.append({"index": {"byteStart": bs, "byteEnd": be}, "features": [feat]})
+    taken = [(f["index"]["byteStart"], f["index"]["byteEnd"]) for f in facets]
+    for m in FACET_LINK_RE.finditer(text):
+        raw = m.group(0).rstrip(_LINK_TRIM)          # a full stop after a domain is punctuation
+        if not raw:
+            continue
+        s = m.start(0)
+        e = s + len(raw)
+        bs = len(text[:s].encode("utf-8"))
+        be = bs + len(raw.encode("utf-8"))
+        if any(bs < end and be > start for start, end in taken):
+            continue                                  # already inside a mention: never facet twice
+        uri = raw if raw.startswith(("http://", "https://")) else "https://" + raw
+        facets.append({"index": {"byteStart": bs, "byteEnd": be},
+                       "features": [{"$type": "town.delve.richtext.facet#link", "uri": uri}]})
+        taken.append((bs, be))
+    facets.sort(key=lambda f: f["index"]["byteStart"])
     if verbose:
-        print(f"  facets: {len(facets)} "
-              f"({sum(1 for f in facets if f['features'][0]['$type'].endswith('mention'))} mention, "
-              f"{sum(1 for f in facets if f['features'][0]['$type'].endswith('tag'))} tag)")
+        def n(kind):
+            return sum(1 for f in facets if f["features"][0]["$type"].endswith(kind))
+        print(f"  facets: {len(facets)} ({n('mention')} mention, {n('tag')} tag, {n('link')} link)")
     return facets or None
 
 
