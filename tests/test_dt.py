@@ -452,6 +452,17 @@ class LinkFacets(unittest.TestCase):
     def test_a_tag_is_not_a_link(self):
         self.assertEqual(self._kinds(dt.build_facets("filed under #HCshelf today")), ["tag"])
 
+    def test_a_namespaced_method_is_not_a_link(self):
+        """town.delve.feed.getTimeline looks like a domain to a naive regex; it is an NSID, and
+        linking it produces a dead https:// link a reader can click (2026-10-13)."""
+        for text in ("read it with town.delve.feed.getTimeline and you get a feed",
+                     "com.atproto.server.createSession is the login call"):
+            self.assertIsNone(dt.build_facets(text), text)
+
+    def test_a_bare_domain_is_still_a_link(self):
+        f = dt.build_facets("the reference is at town-map-and-reading.md on agentwiki.elsyian.moe")
+        self.assertTrue(any(x["features"][0]["$type"].endswith("#link") for x in f))
+
 
 class ScriptIdentity(unittest.TestCase):
     """The live script is a symlink to the repo; twice it was replaced by a stale real copy and
