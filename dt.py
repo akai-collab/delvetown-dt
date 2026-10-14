@@ -355,6 +355,43 @@ _FILE_EXT = {"txt", "md", "py", "json", "yaml", "yml", "html", "htm", "csv", "ts
              "rs", "go", "rb", "pl", "lua", "java", "cpp", "hpp", "zip", "tar", "gz", "tgz", "7z",
              "xml", "rst", "tex", "svg", "ico", "db", "sqlite", "bak", "tmp", "diff", "patch"}
 
+# What a bare token in prose needs before it is treated as a domain. A cosmetic loss beats a public
+# error: a link that is not made costs a click, a link that is invented points at a page that does not
+# exist. The family, from 2026-10-13/14: robots.txt, town.delve.feed.getTimeline (an NSID),
+# 20261014T103948Z.crkjk… (a receipt token), v1.1.6 — all "host.tld" to a regex, none a domain.
+_TLDS = {"com", "org", "net", "edu", "gov", "io", "ai", "dev", "app", "xyz", "me", "at", "eu", "us",
+         "uk", "pl", "de", "fr", "nl", "be", "se", "no", "dk", "fi", "is", "ie", "it", "es", "pt", "ch",
+         "cz", "sk", "lt", "lv", "ee", "hu", "ro", "gr", "ca", "mx", "br", "ar", "cl", "au", "nz", "jp",
+         "kr", "cn", "in", "sg", "hk", "tw", "id", "th", "vn", "ph", "my", "tr", "il", "ae", "za", "ru",
+         "ua", "moe", "town", "social", "garden", "wiki", "world", "earth", "zone", "space", "site",
+         "online", "live", "info", "biz", "pro", "club", "art", "page", "blog", "codes", "studio",
+         "network", "agency", "works", "systems", "tools", "press", "news", "chat", "gg", "sh"}
+
+
+def bare_host_ok(host):
+    """Is a scheme-less `host.tld` in prose really a domain? Judges the whole candidate, not a regex.
+
+    Requires 2-4 labels, no capitals (an identifier in domain clothes: NSIDs and receipt tokens both
+    carry one), and a final label that is a known TLD — `robots.txt`, `town.delve.feed.getTimeline`,
+    `20261014T103948Z.crkjk…` and `v1.1.6` all fail that last test, while `delve.town`,
+    `selene.elsyian.moe`, `delve.hailey.at`, `qustrolabe.bsky.social` and `trinity.automata.garden`
+    pass. An explicit http(s):// URL skips this entirely: that is the author saying "this is a link".
+    """
+    if not host or host.count(".") < 1:
+        return False
+    labels = host.split(".")
+    if not 2 <= len(labels) <= 4:
+        return False
+    if any(c.isupper() for c in host):
+        return False
+    if any(not lab or len(lab) > 63 for lab in labels):
+        return False
+    last = labels[-1]
+    if not last.isalpha() or not 2 <= len(last) <= 24:
+        return False
+    return last in _TLDS
+
+
 
 def build_facets(text, verbose=False):
     """text -> facets list (or None). Mentions resolve to DIDs; tags and links pass through."""
@@ -389,15 +426,10 @@ def build_facets(text, verbose=False):
             continue                                  # already inside a mention: never facet twice
         if not raw.startswith(("http://", "https://")):
             host = raw.split("/", 1)[0]
-            if any(c.isupper() for c in host):
-                continue                                  # an identifier in host.tld clothes, not a domain:
-                                                          # town.delve.feed.getTimeline (NSID), and the
-                                                          # receipt token 20261014T103948Z.crkjk… that went
-                                                          # out faceted as https://20261014T103948Z.crkjk on
-                                                          # 2026-10-14 — a bare domain in prose is lowercase
-            last = host.rsplit(".", 1)[-1]
-            if last.lower() in _FILE_EXT:
-                continue                                  # robots.txt / README.md are filenames, not domains
+            if not bare_host_ok(host):
+                if verbose:
+                    print(f"  facet: {host} is not a domain — left as plain text")
+                continue
         uri = raw if raw.startswith(("http://", "https://")) else "https://" + raw
         facets.append({"index": {"byteStart": bs, "byteEnd": be},
                        "features": [{"$type": "town.delve.richtext.facet#link", "uri": uri}]})
