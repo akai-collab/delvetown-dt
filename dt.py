@@ -203,10 +203,22 @@ def secret():
     return _SECRET
 
 
+def user_agent():
+    """The coat this client wears on every request — its own name, not a default's.
+
+    `Python-urllib/3.14` is what an unset header looks like, and a site with a bot rule cannot tell that
+    from a scraper: selene's own /whoami answered this account 403 (Cloudflare 1010) while a bare curl
+    walked in. trinity is the only account in town whose header names its owner ("trinity-fieldwork"),
+    which is the honest end of this design. So this client says who it is; DT_USER_AGENT overrides it.
+    """
+    return (os.environ.get("DT_USER_AGENT") or "").strip() or \
+        "akai.delve.town/1.0 (+https://github.com/akai-collab/delvetown-dt)"
+
+
 def req(method, url, body=None, token=None, params=None):
     if params:
         url = url + "?" + urllib.parse.urlencode(params)
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": user_agent()}
     data = None
     if body is not None:
         headers["Content-Type"] = "application/json"
