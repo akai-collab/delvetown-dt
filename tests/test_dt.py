@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -757,6 +758,42 @@ class UnindexedEntries(unittest.TestCase):
     def test_junk_entries_are_skipped(self):
         self.assertEqual(dt.unindexed_entries([None, {}, {"rkey": ""}], held=lambda u: False,
                                               fetch=lambda rk: {}), [])
+
+
+class WriteGuard(unittest.TestCase):
+    """The guard that has to be able to refuse a session being helpful at speed: the 2026-10-14 stall
+    followed 10 republishes and 9 deletes in two minutes, and nothing in the tool objected then."""
+
+    @staticmethod
+    def _log(minutes_ago_list, kind="post", now=None):
+        now = now or datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
+        return [{"kind": kind, "ts": (now - timedelta(minutes=m)).isoformat().replace("+00:00", "Z")}
+                for m in minutes_ago_list], now
+
+    def test_counts_writes_in_both_windows_and_ignores_reads(self):
+        entries, now = self._log([1, 2, 3, 20, 40, 59, 61, 120])
+        entries.append({"kind": "provenance", "ts": now.isoformat().replace("+00:00", "Z")})
+        self.assertEqual(dt.write_pressure(entries, now=now), (6, 3))
+
+    def test_deletes_count_as_writes_and_junk_is_skipped(self):
+        entries, now = self._log([1, 2], kind="delete")
+        entries += [None, "x", {"kind": "like", "ts": now.isoformat().replace("+00:00", "Z")},
+                    {"kind": "post", "ts": "not-a-timestamp"}]
+        self.assertEqual(dt.write_pressure(entries, now=now), (2, 2))
+
+    def test_the_burst_shape_is_refused(self):
+        entries, now = self._log([1, 1, 2, 2, 3, 4], now=None)      # six inside ten minutes
+        with mock.patch.object(dt, "write_pressure", lambda: (6, 6)):
+            self.assertIn("last 10 minutes", dt.write_blocked())
+            self.assertIsNone(dt.write_blocked(force=True))
+
+    def test_the_hour_ceiling_is_refused(self):
+        with mock.patch.object(dt, "write_pressure", lambda: (17, 4)):
+            self.assertIn("last 60 minutes", dt.write_blocked())
+
+    def test_below_the_limits_is_allowed(self):
+        with mock.patch.object(dt, "write_pressure", lambda: (5, 2)):
+            self.assertIsNone(dt.write_blocked())
 
 
 if __name__ == "__main__":

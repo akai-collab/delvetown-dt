@@ -104,6 +104,52 @@ def lane():
     return (os.environ.get("DT_LANE") or "").strip().lower() or "own"
 
 
+WRITE_BURST = 6      # publishing writes allowed in any 10 minutes before the guard refuses
+WRITE_HOUR = 16      # publishing writes allowed in any 60 minutes before the guard refuses
+
+
+def write_pressure(entries=None, now=None):
+    """(writes in the last 60 minutes, writes in the last 10 minutes) from the publish log.
+
+    Deletes count as writes. Reads never do. The window that matters is a town-side limiter's, not the
+    account's patience: on 2026-10-14 a repair pass wrote 10 republishes and 9 deletes inside two
+    minutes, and the repo's stream stopped being ingested shortly after — not proof, but the shape to
+    refuse to repeat by accident.
+    """
+    now = now or datetime.now(timezone.utc)
+    hour = burst = 0
+    for e in (entries if entries is not None else read_publish_log(500)):
+        if not isinstance(e, dict) or e.get("kind") not in ("post", "reply", "repost", "delete"):
+            continue
+        try:
+            ts = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        age = (now - ts).total_seconds()
+        if age <= 3600:
+            hour += 1
+        if age <= 600:
+            burst += 1
+    return hour, burst
+
+
+def write_blocked(force=False):
+    """A reason to refuse a publishing write right now, or None. `--force` overrides.
+
+    Reads are free, and this account's own repairs are the thing most likely to look like a flood from
+    the other end, so the guard has to be able to say no to a session that is being helpful at speed.
+    """
+    if force:
+        return None
+    hour, burst = write_pressure()
+    if burst >= WRITE_BURST:
+        return (f"{burst} writes in the last 10 minutes (limit {WRITE_BURST}): repairs go one per run, "
+                f"not in bursts — pass --force to override")
+    if hour >= WRITE_HOUR:
+        return (f"{hour} writes in the last 60 minutes (limit {WRITE_HOUR}) — pass --force to override")
+    return None
+
+
 def read_publish_log(limit=200):
     """The last `limit` publish-log entries, oldest first. Missing or unreadable log → empty list."""
     try:
@@ -1217,6 +1263,9 @@ def main():
                           "entries": entries[-n:]}, indent=2))
 
     elif cmd == "post":
+        blocked = write_blocked("--force" in sys.argv)
+        if blocked:
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2)) and sys.exit(1)
         text, sig = sign(sys.argv[2], force_off="--no-sign" in sys.argv)
         preflight(text, token, force="--force" in sys.argv)
         record = {
@@ -1244,6 +1293,9 @@ def main():
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
         par_uri, par_cid = sys.argv[2], sys.argv[3]
+        blocked = write_blocked("--force" in sys.argv)
+        if blocked:
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2)) and sys.exit(1)
         four = len(sys.argv) > 5 and sys.argv[4].startswith("at://")
         text_arg = sys.argv[6] if four else sys.argv[4]
         canon = canonical_ref(par_uri)
@@ -1288,8 +1340,13 @@ def main():
     elif cmd == "delete":
         rkey = sys.argv[2]
         collection = sys.argv[3] if len(sys.argv) > 3 else "town.delve.feed.post"
+        blocked = write_blocked("--force" in sys.argv)
+        if blocked:
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2)) and sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.deleteRecord",
                           {"repo": DID, "collection": collection, "rkey": rkey}, token=token)
+        if status == 200:      # deletes count against the write guard, so they have to be logged
+            log_publish("delete", {"uri": "at://%s/%s/%s" % (DID, collection, rkey)})
         print(json.dumps({"status": status, **res}, indent=2))
 
     elif cmd == "label":
