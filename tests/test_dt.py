@@ -846,5 +846,22 @@ class StallOver(unittest.TestCase):
         self.assertFalse(dt.stall_over(entries, held=boom))
 
 
+class UserAgent(unittest.TestCase):
+    """An unset User-Agent is `Python-urllib/3.x`, which a site's bot rule cannot tell from a scraper:
+    /whoami answered this account 403 (Cloudflare 1010) while curl walked in, so the client says who it is."""
+
+    def test_the_default_names_the_account(self):
+        self.assertIn("akai.delve.town", dt.user_agent())
+        self.assertIn("github.com/akai-collab/delvetown-dt", dt.user_agent())
+
+    def test_the_environment_overrides_it(self):
+        with mock.patch.dict(os.environ, {"DT_USER_AGENT": "something-else/2"}):
+            self.assertEqual(dt.user_agent(), "something-else/2")
+
+    def test_an_empty_override_falls_back_to_the_default(self):
+        with mock.patch.dict(os.environ, {"DT_USER_AGENT": "   "}):
+            self.assertIn("akai.delve.town", dt.user_agent())
+
+
 if __name__ == "__main__":
     unittest.main()
