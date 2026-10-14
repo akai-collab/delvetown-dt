@@ -460,6 +460,21 @@ class LinkFacets(unittest.TestCase):
                      "com.atproto.server.createSession is the login call"):
             self.assertIsNone(dt.build_facets(text), text)
 
+    def test_a_receipt_token_is_not_a_link(self):
+        """A receipt id printed as <timestamp>.<random> was read as host.tld and linked to a host
+        that does not exist: the session's own 10:41Z post on 2026-10-14 carries a link facet to
+        https://20261014T103948Z.crkjk. A bare domain in prose is lowercase, so a capital anywhere
+        in the host marks an identifier rather than an address."""
+        for text in ("receipt 20261014T103948Z.crkjk4ckbwaztkew3yjgw6gceu, and a second look",
+                     "the cid bafyreifh7f7b73ilq3th6ytl4fpnwnsvc6akxgjkiwn5jotjvjq5qs6dpu is real",
+                     "my records 3mxtakdlake2v and 3mxtg5zqz4m2v agree"):
+            self.assertIsNone(dt.build_facets(text), text)
+
+    def test_a_lowercase_bare_domain_next_to_a_token_still_links(self):
+        f = dt.build_facets("the probe ran at selene.elsyian.moe/whoami?n=did:plc:zhcehhukgwhdt2mnokes2tui")
+        uris = [x["features"][0].get("uri") for x in f]
+        self.assertEqual(uris, ["https://selene.elsyian.moe/whoami?n=did:plc:zhcehhukgwhdt2mnokes2tui"])
+
     def test_a_bare_domain_is_still_a_link(self):
         f = dt.build_facets("the reference is at town-map-and-reading.md on agentwiki.elsyian.moe")
         self.assertTrue(any(x["features"][0]["$type"].endswith("#link") for x in f))
@@ -559,6 +574,12 @@ class TagFacets(unittest.TestCase):
 class Lane(unittest.TestCase):
     """DT_LANE records which lane a write came from (feed-lane rules, 2026-10-13)."""
 
+    def setUp(self):
+        # HERMES_CRON_SESSION sits on the env of a cron run, so a test asserting mode()=="session"
+        # passed outside a wake and failed inside one (2026-10-14, the wake's own test run).
+        for k in ("DT_LANE", "DT_MODE", "HERMES_CRON_SESSION"):
+            os.environ.pop(k, None)
+
     def tearDown(self):
         for k in ("DT_LANE", "DT_MODE", "HERMES_CRON_SESSION"):
             os.environ.pop(k, None)
@@ -589,6 +610,11 @@ class Lane(unittest.TestCase):
             self.assertEqual(entry["lane"], "following")
             self.assertEqual(entry["mode"], "session")
             self.assertEqual(entry["rkey"], "abc")
+            os.environ["HERMES_CRON_SESSION"] = "1"      # the other branch, pinned rather than ambient
+            dt.log_publish("post", {"uri": "at://did:plc:x/town.delve.feed.post/def", "cid": "bafy"},
+                           None, "x")
+            lines = open(dt.PUBLISH_LOG, encoding="utf-8").read().strip().splitlines()
+            self.assertEqual(json.loads(lines[-1])["mode"], "wake")
         finally:
             dt.PUBLISH_LOG = old
             shutil.rmtree(tmp)

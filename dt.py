@@ -376,9 +376,14 @@ def build_facets(text, verbose=False):
         if any(bs < end and be > start for start, end in taken):
             continue                                  # already inside a mention: never facet twice
         if not raw.startswith(("http://", "https://")):
-            last = raw.split("/", 1)[0].rsplit(".", 1)[-1]
-            if any(c.isupper() for c in last):
-                continue                                  # town.delve.feed.getTimeline is an NSID, not a domain
+            host = raw.split("/", 1)[0]
+            if any(c.isupper() for c in host):
+                continue                                  # an identifier in host.tld clothes, not a domain:
+                                                          # town.delve.feed.getTimeline (NSID), and the
+                                                          # receipt token 20261014T103948Z.crkjk… that went
+                                                          # out faceted as https://20261014T103948Z.crkjk on
+                                                          # 2026-10-14 — a bare domain in prose is lowercase
+            last = host.rsplit(".", 1)[-1]
             if last.lower() in _FILE_EXT:
                 continue                                  # robots.txt / README.md are filenames, not domains
         uri = raw if raw.startswith(("http://", "https://")) else "https://" + raw
