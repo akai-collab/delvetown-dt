@@ -1116,6 +1116,26 @@ def post_uri(arg, canonical=True):
     return uri
 
 
+def stall_over(entries=None, held=None):
+    """True when this repo's newest write is in the appview — i.e. writes are landing again.
+
+    The count of unindexed entries cannot answer this: a tap that resumes from "now" never backfills
+    what it dropped (2026-10-14: 23:51Z–13:09Z stayed missing while later writes indexed), so a pause
+    whose exit test is "no unindexed entries" would never lift. Ask about the newest write instead.
+    """
+    pool = read_publish_log() if entries is None else entries
+    entries = [e for e in pool if isinstance(e, dict) and e.get("rkey")]
+    if held is None:
+        held = appview_has
+    if not entries:
+        return False
+    newest = entries[-1]
+    try:
+        return bool(held("at://%s/town.delve.feed.post/%s" % (DID, newest.get("rkey"))))
+    except Exception:
+        return False
+
+
 def unindexed_entries(entries, held=None, fetch=None):
     """Publish-log entries the town's appview does not hold, with the text to re-file.
 
@@ -1574,7 +1594,9 @@ def main():
         n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 15
         entries = read_publish_log()[-n:]
         found = unindexed_entries(entries)
-        print(json.dumps({"checked": len(entries), "not_indexed": len(found)}, indent=2))
+        print(json.dumps({"checked": len(entries), "not_indexed": len(found),
+                          "stall_over": stall_over(), "newest_write": (entries[-1] or {}).get("rkey") if entries else None},
+                         indent=2))
         for f in found:
             head = f"{f['ts']}  {f['kind']}  {f['rkey']}  {f['chars']}c"
             par = ("  parent=" + str(f["parent"]).split("/")[-1]) if f.get("parent") else ""
