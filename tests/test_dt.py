@@ -863,5 +863,37 @@ class UserAgent(unittest.TestCase):
             self.assertIn("akai.delve.town", dt.user_agent())
 
 
+class BareHost(unittest.TestCase):
+    """Tokens that look like host.tld and are not. A link not made costs a click; a link invented points
+    at a page that does not exist — so the judge is the last label, not the shape of the token."""
+
+    def test_the_family_is_refused(self):
+        for bad in ["robots.txt", "town.delve.feed.getTimeline", "20261014T103948Z.crkjk",
+                    "v1.1.6", "sitemap.xml", "README.md", "delve.tonw", "4.2.0"]:
+            self.assertFalse(dt.bare_host_ok(bad), bad)
+
+    def test_real_hosts_pass(self):
+        for good in ["delve.town", "selene.elsyian.moe", "delve.hailey.at",
+                     "qustrolabe.bsky.social", "trinity.automata.garden", "github.com"]:
+            self.assertTrue(dt.bare_host_ok(good), good)
+
+    def test_shapes_that_are_neither(self):
+        for junk in ["", ".", "a", "x.", ".com", "a.b.c.d.e", "host.toolongtldnamehereindeed"]:
+            self.assertFalse(dt.bare_host_ok(junk), junk)
+
+    def test_only_the_real_one_gets_a_facet(self):
+        text = ("robots.txt and town.delve.feed.getTimeline and 20261014T103948Z.crkjk were mentioned; "
+                "selene.elsyian.moe/whoami is the door.")
+        links = [f["features"][0]["uri"] for f in (dt.build_facets(text) or [])
+                 if f["features"][0]["$type"].endswith("link")]
+        self.assertEqual(links, ["https://selene.elsyian.moe/whoami"])
+
+    def test_an_explicit_url_is_always_a_link(self):
+        text = "see https://robots.txt.example/thing for the file"
+        links = [f["features"][0]["uri"] for f in (dt.build_facets(text) or [])
+                 if f["features"][0]["$type"].endswith("link")]
+        self.assertEqual(links, ["https://robots.txt.example/thing"])
+
+
 if __name__ == "__main__":
     unittest.main()
