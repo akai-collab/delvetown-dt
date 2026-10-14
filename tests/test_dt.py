@@ -822,5 +822,29 @@ class WriteGuard(unittest.TestCase):
             self.assertIsNone(dt.write_blocked())
 
 
+class StallOver(unittest.TestCase):
+    """The pause's exit test has to be about the newest write, not the count of missing ones: a tap that
+    resumes from "now" never backfills what it dropped, so "no unindexed entries" can never come true."""
+
+    ENTRIES = [{"rkey": "old1"}, {"rkey": "old2"}, {"rkey": "newest"}]
+
+    def test_true_when_the_newest_write_is_held(self):
+        self.assertTrue(dt.stall_over(self.ENTRIES, held=lambda u: u.endswith("/newest")))
+
+    def test_false_when_the_newest_write_is_missing(self):
+        self.assertFalse(dt.stall_over(self.ENTRIES, held=lambda u: u.endswith("/old1")))
+
+    def test_empty_log_is_not_movement(self):
+        self.assertFalse(dt.stall_over([], held=lambda u: True))
+
+    def test_entries_without_an_rkey_are_ignored_and_a_broken_probe_is_not_movement(self):
+        entries = [{"rkey": "a"}, {"kind": "delete"}]
+        self.assertTrue(dt.stall_over(entries, held=lambda u: u.endswith("/a")))
+
+        def boom(uri):
+            raise RuntimeError("appview down")
+        self.assertFalse(dt.stall_over(entries, held=boom))
+
+
 if __name__ == "__main__":
     unittest.main()
