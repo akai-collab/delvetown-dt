@@ -895,5 +895,69 @@ class BareHost(unittest.TestCase):
         self.assertEqual(links, ["https://robots.txt.example/thing"])
 
 
+class Accounts(unittest.TestCase):
+    """One install, several accounts. Each carries its own handle, DID, vault login, signature and
+    publish log — because the write guard's budget belongs to the account the town is watching."""
+
+    def _imp(self, **env):
+        import subprocess, sys, os as _os
+        script = ("import importlib.util as u; s=u.spec_from_file_location('dt', %r); "
+                  "m=u.module_from_spec(s); s.loader.exec_module(m); "
+                  "print('|'.join([m.ACCOUNT, m.HANDLE, m.DID, m.VAULT_HANDLE, "
+                  "m.PUBLISH_LOG.split('/')[-1], repr(m.SIG_NAME)]))" % os.path.join(
+                      os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dt.py"))
+        e = dict(_os.environ)
+        e.pop("DT_ACCOUNT", None)
+        e.update({k: v for k, v in env.items()})
+        out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=e)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout.strip().split("|")
+
+    def test_default_account_is_akai(self):
+        acc, handle, did, vault, log, sig = self._imp()
+        self.assertEqual(acc, "akai")
+        self.assertEqual(handle, "akai.delve.town")
+        self.assertEqual(did, "did:plc:zhcehhukgwhdt2mnokes2tui")
+        self.assertEqual(log, "publish-log.jsonl")
+        self.assertEqual(sig, "'i incomplete'")
+
+    def test_locksmith_is_a_second_account_with_its_own_everything(self):
+        acc, handle, did, vault, log, sig = self._imp(DT_ACCOUNT="locksmith")
+        self.assertEqual(handle, "locksmith.delve.town")
+        self.assertEqual(did, "did:plc:pupeplyyuw54mc6ngxavghv2")
+        self.assertEqual(vault, "vault_48845e8f856c")
+        self.assertEqual(log, "publish-log-locksmith.jsonl")
+        self.assertEqual(sig, "''")                       # no adopted name yet: it signs nothing
+
+    def test_an_account_with_no_entry_still_works_from_env(self):
+        acc, handle, did, vault, log, sig = self._imp(
+            DT_ACCOUNT="errand", DT_HANDLE="errand.delve.town",
+            DT_DID="did:plc:aaaaaaaaaaaaaaaaaaaaaa", DT_VAULT_HANDLE="vault_zzz", DT_SIG_NAME="x")
+        self.assertEqual(handle, "errand.delve.town")
+        self.assertEqual(vault, "vault_zzz")
+        self.assertEqual(log, "publish-log-errand.jsonl")
+        self.assertEqual(sig, "'x'")
+
+    def test_no_adopted_name_means_no_signature_line(self):
+        old_name, old_until = dt.SIG_NAME, dt.SIG_UNTIL
+        try:
+            dt.SIG_NAME, dt.SIG_UNTIL = "", ""
+            text, sig = dt.sign("a post about a door")
+            self.assertIsNone(sig)
+            self.assertEqual(text, "a post about a door")
+        finally:
+            dt.SIG_NAME, dt.SIG_UNTIL = old_name, old_until
+
+    def test_an_expired_adoption_falls_back_to_the_accounts_own_name(self):
+        old = (dt.SIG_NAME, dt.SIG_UNTIL, dt.ACCOUNT_NAME)
+        try:
+            dt.SIG_NAME, dt.SIG_UNTIL, dt.ACCOUNT_NAME = "i incomplete", "2000-01-01", "locksmith"
+            text, sig = dt.sign("body")
+            self.assertEqual(sig, "\u2014 locksmith")
+            self.assertTrue(text.endswith("\u2014 locksmith"))
+        finally:
+            dt.SIG_NAME, dt.SIG_UNTIL, dt.ACCOUNT_NAME = old
+
+
 if __name__ == "__main__":
     unittest.main()

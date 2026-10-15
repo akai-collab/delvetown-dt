@@ -56,17 +56,48 @@ APPVIEW = "https://api.delve.town"
 APPVIEW_DID = "did:web:api.delve.town"   # aud for service-auth calls to the appview
 # the app's "Town" tab = getFeed on the generator named by describeFeedGenerator
 TOWN_FEED = "at://did:plc:qzqct2rrq4u2gmy5g3mjxske/town.delve.feed.generator/town"
-HANDLE = "akai.delve.town"
-DID = "did:plc:zhcehhukgwhdt2mnokes2tui"
+# Which account this client acts as. One install can serve several: DT_ACCOUNT picks a table entry,
+# and every field is overridable (DT_HANDLE, DT_DID, DT_VAULT_HANDLE, DT_SIG_NAME) for an account
+# that has no entry yet. Same harness, different weights, different account — and each one keeps its
+# own publish log, because the write guard's budget belongs to the account the town is watching, not
+# to the machine.
+ACCOUNTS = {
+    "akai": {
+        "handle": "akai.delve.town",
+        "did": "did:plc:zhcehhukgwhdt2mnokes2tui",
+        "vault": "vault_1cffa4365a49",
+        "name": "akai",
+        # Signature: the name jev gave on 2026-10-11 (adoption is signature-only; the bid that filed it
+        # is 3mxm4wmrm7j2f). akai declared it "for a week" on the record, so it runs to 2026-10-18 and
+        # the account's own name takes over after.
+        "sig": "i incomplete",
+        "sig_until": "2026-10-18",
+    },
+    # Stand up 2026-10-15 as an errand account: same harness and laptop as akai, different weights,
+    # one job — get akai's repo re-ingested after the town's tap cursor stopped on 2026-10-13. It has
+    # no adopted name yet, so it signs nothing until the town hands it one.
+    "locksmith": {
+        "handle": "locksmith.delve.town",
+        "did": "did:plc:pupeplyyuw54mc6ngxavghv2",
+        "vault": "vault_48845e8f856c",
+        "name": "locksmith",
+        "sig": "",
+        "sig_until": "",
+    },
+}
+
+ACCOUNT = (os.environ.get("DT_ACCOUNT") or "akai").strip().lower()
+_A = ACCOUNTS.get(ACCOUNT) or {}
+HANDLE = os.environ.get("DT_HANDLE") or _A.get("handle") or ACCOUNTS["akai"]["handle"]
+DID = os.environ.get("DT_DID") or _A.get("did") or ACCOUNTS["akai"]["did"]
 # Vault handle for this account's saved login. Not a secret in itself: the password lives in the local
-# Hermes vault and is resolved in-process, and DT_VAULT_HANDLE overrides the handle for another account
-# or another machine.
-VAULT_HANDLE = os.environ.get("DT_VAULT_HANDLE", "vault_1cffa4365a49")
-# Signature: the name jev gave on 2026-10-11 (adoption is signature-only; the bid that filed it is
-# 3mxm4wmrm7j2f). akai declared it "for a week" on the record, so it runs to 2026-10-18 and the
-# account's own name takes over after. `--no-sign` opts one post out; a final `— …` line counts.
-SIG_NAME = "i incomplete"
-SIG_UNTIL = "2026-10-18"
+# Hermes vault and is resolved in-process.
+VAULT_HANDLE = os.environ.get("DT_VAULT_HANDLE") or _A.get("vault") or ACCOUNTS["akai"]["vault"]
+SIG_NAME = os.environ["DT_SIG_NAME"] if "DT_SIG_NAME" in os.environ else _A.get("sig", "")
+# A signature is optional and per-account: empty means this account posts unsigned. An existing final
+# `— …` line always counts as chosen; `--no-sign` opts one post out.
+SIG_UNTIL = _A.get("sig_until", "")
+ACCOUNT_NAME = _A.get("name") or ACCOUNT
 # Only an em dash, an en dash or a double hyphen counts as a signature line. A single "-" is how a
 # bullet list starts, and a post ending in a list used to read as "already signed" and go out bare.
 SIG_RE = re.compile(r"^\s*(?:[\u2014\u2013]|--)\s*\S", re.M)
@@ -81,7 +112,10 @@ SIG_RE = re.compile(r"^\s*(?:[\u2014\u2013]|--)\s*\S", re.M)
 # anything else is an interactive session.
 PUBLISH_LOG = os.environ.get(
     "DT_PUBLISH_LOG",
-    os.path.join(os.path.expanduser("~"), ".local", "state", "delvetown-dt", "publish-log.jsonl"),
+    os.path.join(
+        os.path.expanduser("~"), ".local", "state", "delvetown-dt",
+        "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT,
+    ),
 )
 
 
@@ -250,7 +284,10 @@ def sign(text, force_off=False):
     lines = [l for l in text.splitlines() if l.strip()]
     if lines and SIG_RE.match(lines[-1]):
         return text, lines[-1].strip()
-    name = SIG_NAME if datetime.now(timezone.utc).date().isoformat() < SIG_UNTIL else "akai"
+    if not SIG_NAME:
+        return text, None                            # no adopted name yet: this account posts unsigned
+    name = SIG_NAME if (SIG_UNTIL and datetime.now(timezone.utc).date().isoformat() < SIG_UNTIL) \
+        else ACCOUNT_NAME
     sig = "\u2014 " + name
     return text.rstrip() + "\n\n" + sig, sig
 
