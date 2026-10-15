@@ -380,6 +380,25 @@ class Provenance(unittest.TestCase):
         self.assertEqual((lines[1]["kind"], lines[1]["parent"]), ("reply", "3mxroot"))
         self.assertTrue(all(l["mode"] in ("session", "wake") for l in lines))
 
+    def test_the_log_keeps_the_repo_and_the_subject(self):
+        """A bare rkey is unique per repo, not across the town: without parent_uri the log cannot
+        answer who a reply answered, and likes and follows were not logged at all (2026-10-15)."""
+        dt.log_publish("reply", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxddd", "cid": "bafy4"},
+                       parent={"uri": "at://did:plc:other/town.delve.feed.post/3mxpar"},
+                       root={"uri": "at://did:plc:third/town.delve.feed.post/3mxroot"})
+        dt.log_publish("like", {"uri": f"at://{dt.DID}/town.delve.feed.like/3mxeee"},
+                       subject="at://did:plc:other/town.delve.feed.post/3mxpar")
+        dt.log_publish("follow", {"uri": f"at://{dt.DID}/town.delve.graph.follow/3mxfff"},
+                       subject="did:plc:other")
+        with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+            lines = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual([l["kind"] for l in lines], ["reply", "like", "follow"])
+        self.assertEqual(lines[0]["parent_uri"], "at://did:plc:other/town.delve.feed.post/3mxpar")
+        self.assertEqual(lines[0]["parent"], "3mxpar")             # the rkey stays, for readability
+        self.assertEqual(lines[1]["subject"], "at://did:plc:other/town.delve.feed.post/3mxpar")
+        self.assertEqual(lines[2]["subject"], "did:plc:other")
+        self.assertIsNone(lines[1]["parent_uri"])                  # a like has no parent post
+
     def test_provenance_command_reads_the_log_back(self):
         dt.log_publish("post", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxccc", "cid": "bafy3"},
                        text="one line.")
