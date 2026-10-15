@@ -367,6 +367,7 @@ def upload_blob(path, token):
     ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}.get(ext, "application/octet-stream")
     r = urllib.request.Request(PDS + "/xrpc/com.atproto.repo.uploadBlob", data=data,
                                headers={"Content-Type": ctype, "Accept": "application/json",
+                                        "User-Agent": user_agent(),
                                         "Authorization": "Bearer " + token}, method="POST")
     with urllib.request.urlopen(r, timeout=120) as resp:
         return json.loads(resp.read().decode("utf-8"))["blob"]
