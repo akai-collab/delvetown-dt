@@ -1393,6 +1393,40 @@ def canonical_ref(uri, resolve=None):
     return uri.replace("at://%s/" % auth, "at://%s/" % did, 1) if did else uri
 
 
+def _cid_verdict(given, fetched):
+    """(cid, note) for a reply's parent reference. A cid is a claim about what the parent *is*.
+
+    This client filed one reply whose parent cid had been typed by hand: the uri was right, the root was
+    right, and the reference still carried a cid that matched no record — a hole any auditor walking the
+    thread finds (the desk walked it within four minutes). So the parent cid is not taken on trust
+    either: it is read from the source, a disagreement is corrected and reported, and a parent on a repo
+    this client cannot read keeps whatever the caller gave, marked unverified.
+    """
+    if fetched and given and fetched != given:
+        return fetched, "parent cid corrected from the source"
+    if fetched and not given:
+        return fetched, "parent cid filled from the source"
+    if not fetched:
+        return given, ("parent cid unverified - that repo is not readable from this seat" if given
+                       else "parent cid unverified and none given")
+    return given, None
+
+
+def verified_parent_cid(parent_uri):
+    """Read a record's cid from its own repo (see _cid_verdict). None when unreadable from here."""
+    try:
+        part = parent_uri.split("/")
+        repo, collection, rkey = part[2], part[3], part[4]
+    except IndexError:
+        return None
+    try:
+        _, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                   params={"repo": repo, "collection": collection, "rkey": rkey})
+    except Exception:
+        return None
+    return (d or {}).get("cid")
+
+
 def parent_root(parent_uri, fetch=None):
     """The root to declare when replying to parent_uri: what the parent itself declares, or the parent.
 
@@ -1455,6 +1489,7 @@ def _usage(message):
 USAGE = {
     "post": 'post "<text>"',
     "reply": 'reply <parent-uri> <parent-cid> "<text>"   (a root uri+cid pair may precede the text)',
+    "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
     # all, because a caller reads silence as success and believes it followed someone.
@@ -1531,6 +1566,9 @@ def main():
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
         par_uri, par_cid = sys.argv[2], sys.argv[3]
+        par_cid, cid_note = _cid_verdict(par_cid, verified_parent_cid(par_uri))
+        if cid_note:
+            print(json.dumps({"note": cid_note, "parent": par_uri, "cid_used": par_cid}), file=sys.stderr)
         blocked = write_blocked("--force" in sys.argv)
         if blocked:
             print(json.dumps({"status": 0, "refused": blocked}, indent=2)) and sys.exit(1)
@@ -1856,6 +1894,10 @@ def main():
             gone = "  (record deleted from the PDS)" if f.get("gone") else ""
             print(head + par + gone)
             print("  " + _clip(" ".join((f["text"] or "").split()), 400))
+
+    elif cmd == "cid":
+        uri = sys.argv[2]
+        print(json.dumps({"uri": uri, "cid": verified_parent_cid(uri)}, indent=2))
 
     elif cmd == "check":
         hard, warn = check_text(sys.argv[2], token=token)
