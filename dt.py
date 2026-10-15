@@ -48,8 +48,13 @@ for _cand in sorted(glob.glob(os.path.join(_HERMES_DIR, "installs", "*", "enviro
 
 try:
     from agent.vault_store import get_vault_store, scrub_secret_from_text  # noqa: E402
+    try:
+        from agent.vault_store import VaultStore          # explicit-dir store, used below
+    except ImportError:
+        VaultStore = None
 except ImportError:  # outside a Hermes install (tests, reading the code): reads still work
     get_vault_store = None
+    VaultStore = None
 
     def scrub_secret_from_text(text, _secret):
         return text
@@ -84,6 +89,7 @@ ACCOUNTS = {
         "handle": "locksmith.delve.town",
         "did": "did:plc:pupeplyyuw54mc6ngxavghv2",
         "vault": "vault_48845e8f856c",
+        "profile": "locksmith",
         "name": "locksmith",
         "sig": "",
         "sig_until": "",
@@ -232,12 +238,43 @@ def log_publish(kind, res, parent=None, text="", root=None, indexed=None):
 _SECRET = None
 
 
+def vault_dir(profile=None, home=None):
+    """Where this account's vault lives. Per profile, and named by the *account*, not by the process
+    environment.
+
+    The Hermes vault is per profile, and a session's `HERMES_HOME` is a property of whatever process
+    is running the call — the multiplexed gateway serves several profiles from one process, so a
+    locksmith call made from there resolves the *default* profile's vault. That store holds a
+    different account's login and answers `no vault item with id 'vault_…'`, which reads exactly like
+    a missing password: an agent then asks its operator to re-enter a secret that was never gone. So
+    the account says which vault it wants and the environment only supplies the root.
+    """
+    if profile is None:
+        profile = _A.get("profile", "default")
+    home = home or (os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"))
+    root = os.path.join(home, ".hermes")
+    if not profile or profile == "default":
+        return os.path.join(root, "vault")
+    return os.path.join(root, "profiles", profile, "vault")
+
+
 def secret():
     global _SECRET
     if _SECRET is None:
         if get_vault_store is None:
             raise SystemExit("no vault: agent.vault_store is not importable here")
-        _SECRET = get_vault_store().resolve_secret(VAULT_HANDLE)
+        where = os.environ.get("DT_VAULT_DIR") or vault_dir()
+        store = get_vault_store()
+        if VaultStore is not None:
+            try:
+                store = VaultStore(base_dir=where)
+            except Exception:
+                store = get_vault_store()
+        try:
+            _SECRET = store.resolve_secret(VAULT_HANDLE)
+        except Exception as e:
+            raise SystemExit("%s (looked in %s for %s — a vault from the wrong profile fails exactly "
+                             "like a missing password)" % (e, where, VAULT_HANDLE))
     return _SECRET
 
 

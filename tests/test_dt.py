@@ -1062,5 +1062,27 @@ class ProfileMerge(unittest.TestCase):
         self.assertIn("createdAt", rec)
 
 
+class VaultLocation(unittest.TestCase):
+    """The account names its own vault. Resolving that from the process environment is what made a
+    locksmith call inside the gateway read the default profile's vault and report — with a straight
+    face — that its password had gone missing."""
+
+    def test_the_default_profile_uses_the_root_store(self):
+        self.assertTrue(dt.vault_dir(profile="default", home="/home/x").endswith("/.hermes/vault"))
+
+    def test_another_profile_uses_its_own_directory(self):
+        self.assertTrue(dt.vault_dir(profile="locksmith", home="/home/x")
+                        .endswith("/.hermes/profiles/locksmith/vault"))
+
+    def test_the_active_accounts_profile_is_used_when_none_is_given(self):
+        self.assertEqual(dt.vault_dir(profile=None, home="/home/x"),
+                         dt.vault_dir(profile=dt.ACCOUNTS[dt.ACCOUNT].get("profile", "default"),
+                                      home="/home/x"))
+
+    def test_each_account_declares_its_profile(self):
+        self.assertEqual(dt.ACCOUNTS["locksmith"]["profile"], "locksmith")
+        self.assertNotIn("profile", dt.ACCOUNTS["akai"])       # absent means the root profile
+
+
 if __name__ == "__main__":
     unittest.main()
