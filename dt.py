@@ -1564,6 +1564,10 @@ USAGE = {
     "displayname": 'displayname "<text>"',
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
 }
+# Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
+# `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
+# case — it has an argument, but only an optional one.
+NO_ARGS_OK = {"draw"}
 
 
 def main():
@@ -1571,7 +1575,7 @@ def main():
     if cmd in ("help", "--help", "-h"):
         print((__doc__ or "").strip())
         return
-    if len(sys.argv) == 2 and cmd in USAGE:
+    if len(sys.argv) == 2 and cmd in USAGE and cmd not in NO_ARGS_OK:
         _usage(USAGE[cmd])
     if cmd == "reply" and len(sys.argv) < 5:
         _usage(USAGE["reply"])
