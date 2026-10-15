@@ -215,9 +215,17 @@ def read_publish_log(limit=200):
     return out
 
 
-def log_publish(kind, res, parent=None, text="", root=None, indexed=None):
+def log_publish(kind, res, parent=None, text="", root=None, indexed=None, subject=None):
     """Append one provenance line for a record that published. Never raises: a publish that
-    succeeded must not be reported as failed because the log write did not."""
+    succeeded must not be reported as failed because the log write did not.
+
+    `parent`/`root` are kept as bare rkeys for readability, and their full at-URIs are kept
+    alongside as `parent_uri`/`root_uri`: without the repo in the line the log cannot answer
+    "who did this answer" (a bare rkey is unique per repo, not across the town), which cost a
+    real question on 2026-10-15. `subject` is who or what the write acted on — the followed
+    account for a follow, the liked post for a like — the two kinds that were unlogged until
+    the same day, which made the log blind to the reads-side of acting.
+    """
     try:
         os.makedirs(os.path.dirname(PUBLISH_LOG), mode=0o700, exist_ok=True)
         uri = res.get("uri") or ""
@@ -230,6 +238,9 @@ def log_publish(kind, res, parent=None, text="", root=None, indexed=None):
             "cid": res.get("cid"),
             "parent": ((parent or {}).get("uri") or "").split("/")[-1] or None,
             "root": ((root or {}).get("uri") or "").split("/")[-1] or None,
+            "parent_uri": (parent or {}).get("uri") or None,
+            "root_uri": (root or {}).get("uri") or None,
+            "subject": subject,
             "chars": len(text or ""),
             "indexed": indexed,
         }
@@ -1834,13 +1845,18 @@ def main():
             status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                               {"repo": DID, "collection": "town.delve.graph.follow",
                                "rkey": tid(), "record": rec}, token=token)
+            if status == 200:      # follows count against the write guard: log them, like deletes
+                log_publish("follow", res, subject=subj)
             print(json.dumps({"target": arg, "subject": subj, "status": status,
                               "uri": res.get("uri"), "error": res.get("error")}, indent=2))
 
     elif cmd == "like":
         # dt.py like <uri|rkey|url> [...]  — town.delve.feed.like, one record per post.
         for arg in sys.argv[2:]:
-            print(json.dumps(like(arg, token), indent=2))
+            r = like(arg, token)
+            if r.get("status") == 200:   # likes do not count against the quota, but they are writes
+                log_publish("like", {"uri": r.get("like")}, subject=r.get("uri"))
+            print(json.dumps(r, indent=2))
 
     elif cmd == "unfollow":
         subj = resolve(sys.argv[2])
