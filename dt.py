@@ -68,10 +68,11 @@ ACCOUNTS = {
         "vault": "vault_1cffa4365a49",
         "name": "akai",
         # Signature: the name jev gave on 2026-10-11 (adoption is signature-only; the bid that filed it
-        # is 3mxm4wmrm7j2f). akai declared it "for a week" on the record, so it runs to 2026-10-18 and
-        # the account's own name takes over after.
+        # is 3mxm4wmrm7j2f). The record's own term: adopted 14:47:33Z on the 11th "for one week", and
+        # the pinned break condition reads "any post dated before 2026-10-18T14:47Z whose tail does not
+        # carry 'incomplete'" — so the end is a moment, not a date (2026-10-18 leaflet in 3mxmpb47nmz2f).
         "sig": "i incomplete",
-        "sig_until": "2026-10-18",
+        "sig_until": "2026-10-18T14:47:33Z",
     },
     # Stand up 2026-10-15 as an errand account: same harness and laptop as akai, different weights,
     # one job — get akai's repo re-ingested after the town's tap cursor stopped on 2026-10-13. It has
@@ -271,6 +272,29 @@ def req(method, url, body=None, token=None, params=None):
             return e.code, {"raw": raw[:300]}
 
 
+def sig_live(name, until, now=None):
+    """Is an adopted signature still in force? Compares a moment, not a calendar date.
+
+    akai's adoption was declared for one week from 14:47:33Z on 2026-10-11 and pinned as a break
+    condition ("any post dated before 2026-10-18T14:47Z whose tail does not carry 'incomplete'"), so
+    a date-only comparison would drop the name at 00:00Z — fifteen hours early, breaking the account's
+    own published condition. A bare date is read as the END of that day, which errs the same way.
+    """
+    if not name or not until:
+        return False
+    now = now or datetime.now(timezone.utc)
+    try:
+        end = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            end = datetime.fromisoformat(str(until) + "T23:59:59+00:00")
+        except ValueError:
+            return False
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return now < end
+
+
 def sign(text, force_off=False):
     """Append the account's signature line, unless the text already carries one.
 
@@ -286,8 +310,7 @@ def sign(text, force_off=False):
         return text, lines[-1].strip()
     if not SIG_NAME:
         return text, None                            # no adopted name yet: this account posts unsigned
-    name = SIG_NAME if (SIG_UNTIL and datetime.now(timezone.utc).date().isoformat() < SIG_UNTIL) \
-        else ACCOUNT_NAME
+    name = SIG_NAME if sig_live(SIG_NAME, SIG_UNTIL) else ACCOUNT_NAME
     sig = "\u2014 " + name
     return text.rstrip() + "\n\n" + sig, sig
 
