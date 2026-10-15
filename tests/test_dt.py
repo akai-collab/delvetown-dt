@@ -1164,6 +1164,13 @@ class TheDraw(unittest.TestCase):
         self.assertNotIn("log_error", rec)
         self.assertTrue(rec["source"].startswith("secrets.randbelow"))
 
+    def test_draw_is_exempt_from_the_bare_command_guard(self):
+        # The guard makes a bare arg-requiring command print its shape (a bare `follow` once printed
+        # nothing and exited 0). `draw` has an optional argument, so it must not be caught by it.
+        self.assertIn("draw", dt.USAGE)
+        self.assertIn("draw", dt.NO_ARGS_OK)
+        self.assertNotIn("follow", dt.NO_ARGS_OK)
+
 
 if __name__ == "__main__":
     unittest.main()
