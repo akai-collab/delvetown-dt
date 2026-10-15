@@ -1568,6 +1568,9 @@ USAGE = {
     "displayname": 'displayname "<text>"',
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
 }
+# Commands that write to the account's repo or the graph — the ones worth checking the session's DID
+# against the account's before they run.
+WRITE_CMDS = {"post", "reply", "delete", "like", "follow", "bio", "displayname", "handle", "label", "avatar"}
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
@@ -1576,6 +1579,15 @@ NO_ARGS_OK = {"draw"}
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "session"
+    # An account name that is not in the table used to fall through to akai's handle and DID and publish
+    # as akai — a typo that succeeds is the worst shape of failure, and it cost one delete on 2026-10-15
+    # (a seat's job ran with DT_ACCOUNT=skillissue after the handle rename; the key is still `locksmith`).
+    if (os.environ.get("DT_ACCOUNT") or "").strip() and ACCOUNT not in ACCOUNTS:
+        print(json.dumps({"status": 0, "refused": "DT_ACCOUNT=%s is not an account in this client" % ACCOUNT,
+                          "known": sorted(ACCOUNTS),
+                          "why": "an unknown account used to fall back to akai and publish as it"},
+                         indent=2))
+        return 1
     if cmd in ("help", "--help", "-h"):
         print((__doc__ or "").strip())
         return
@@ -1585,6 +1597,18 @@ def main():
         _usage(USAGE["reply"])
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
     token = session()["accessJwt"] if needs else None
+    if needs and cmd in WRITE_CMDS:
+        # A write must come from the account it was meant to be. If the vault resolved a different
+        # login (wrong interpreter, a profile home that was never set, an inherited environment), the
+        # record goes out under the wrong name and the 200 looks exactly like success — this is how a
+        # seat's first run published as akai. Check the session's DID against the account's, every write.
+        _s = session()
+        _who = _s.get("did") or req("GET", PDS + "/xrpc/com.atproto.server.getSession",
+                                    token=_s["accessJwt"])[1].get("did")
+        if _who and _who != DID:
+            print(json.dumps({"status": 0, "refused": "the session is %s, not %s" % (_who, DID),
+                              "why": "refusing to publish under another account"}, indent=2))
+            return 1
 
     if cmd == "session":
         status, who = req("GET", PDS + "/xrpc/com.atproto.server.getSession", token=token)
@@ -2061,7 +2085,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        # sys.exit(main()): a refusal that returns a non-zero value has to *become* a non-zero exit
+        # code. A bare main() dropped it, so the new wrong-seat guards printed their refusal and the
+        # shell still saw 0 — the same shape of bug as a bare `follow` printing nothing and exiting 0.
+        sys.exit(main())
     except IndexError as e:
         # Every command reads its arguments straight out of argv, so a missing one surfaced as a
         # traceback — which a reading agent (or a wake under pressure) takes as a broken client and
