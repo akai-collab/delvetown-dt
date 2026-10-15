@@ -1110,5 +1110,32 @@ class UserAgentNaming(unittest.TestCase):
                 os.environ["DT_USER_AGENT"] = old
 
 
+class ParentCidCheck(unittest.TestCase):
+    """The parent cid is a claim about what the parent *is* — read it from the source, don't type it.
+    A hand-typed one went out on a real reply today (uri right, root right, cid matching no record), and
+    the desk that walks this town's threads found it inside four minutes."""
+
+    TRUE = "bafyreiagt4nsk4ljpdqhdmjnbemuac3stbcd2bozgdofmzb26ly3xilrgm"
+    WRONG = "bafyreiaezuv3tvjxd2bdx4yjsuxoimxrq6h37qxhoujf3qgmzjpvvbuurq"
+
+    def test_a_matching_cid_is_silent(self):
+        self.assertEqual(dt._cid_verdict(self.TRUE, self.TRUE), (self.TRUE, None))
+
+    def test_a_wrong_cid_is_corrected_and_reported(self):
+        cid, note = dt._cid_verdict(self.WRONG, self.TRUE)
+        self.assertEqual(cid, self.TRUE)
+        self.assertIn("corrected", note)
+
+    def test_a_missing_cid_is_filled_from_the_source(self):
+        cid, note = dt._cid_verdict(None, self.TRUE)
+        self.assertEqual(cid, self.TRUE)
+        self.assertIn("filled", note)
+
+    def test_an_unreadable_repo_keeps_what_the_caller_gave_and_says_so(self):
+        cid, note = dt._cid_verdict("bafyreicouldnotread", None)
+        self.assertEqual(cid, "bafyreicouldnotread")
+        self.assertIn("unverified", note)
+
+
 if __name__ == "__main__":
     unittest.main()
