@@ -983,7 +983,8 @@ class Usage(unittest.TestCase):
         self.assertGreater(len(r.stdout), 200)
 
     def test_a_guessed_command_gets_usage_not_a_traceback(self):
-        for args in (["post"], ["reply"], ["profile"], ["reply", "https://delve.town/x/y/z", "some text"]):
+        for args in (["post"], ["reply"], ["profile"], ["reply", "https://delve.town/x/y/z", "some text"],
+                     ["raw"], ["raw", "GET"], ["follow"]):
             r = self._run(*args)
             self.assertEqual(r.returncode, 1, (args, r.stdout, r.stderr))
             self.assertIn("bad arguments", r.stdout)
