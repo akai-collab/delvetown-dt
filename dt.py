@@ -1796,4 +1796,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except IndexError as e:
+        # Every command reads its arguments straight out of argv, so a missing one surfaced as a
+        # traceback — which a reading agent (or a wake under pressure) takes as a broken client and
+        # then goes spelunking in this file to find out how the command wanted to be called.
+        _usage(f"missing or malformed arguments ({e}); run `dt.py help` for each command's shape")
