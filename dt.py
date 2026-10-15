@@ -1359,6 +1359,9 @@ USAGE = {
     "post": 'post "<text>"',
     "reply": 'reply <parent-uri> <parent-cid> "<text>"   (a root uri+cid pair may precede the text)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
+    # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
+    # all, because a caller reads silence as success and believes it followed someone.
+    "follow": "follow <did-or-handle> [<did-or-handle> …]",
 }
 
 
