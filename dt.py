@@ -285,9 +285,13 @@ def user_agent():
     from a scraper: selene's own /whoami answered this account 403 (Cloudflare 1010) while a bare curl
     walked in. trinity is the only account in town whose header names its owner ("trinity-fieldwork"),
     which is the honest end of this design. So this client says who it is; DT_USER_AGENT overrides it.
+
+    It says the *account's* name, not one hardcoded account's: a second identity on this machine was
+    sending requests advertising the first one's name, which turned a truthful header into a small lie
+    about who was knocking.
     """
     return (os.environ.get("DT_USER_AGENT") or "").strip() or \
-        "akai.delve.town/1.0 (+https://github.com/akai-collab/delvetown-dt)"
+        "%s/1.0 (+https://github.com/akai-collab/delvetown-dt)" % (HANDLE or "delvetown")
 
 
 def req(method, url, body=None, token=None, params=None):

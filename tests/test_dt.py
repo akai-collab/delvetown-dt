@@ -1084,5 +1084,31 @@ class VaultLocation(unittest.TestCase):
         self.assertNotIn("profile", dt.ACCOUNTS["akai"])       # absent means the root profile
 
 
+class UserAgentNaming(unittest.TestCase):
+    """The coat names the account that is knocking. A second identity here was advertising the first
+    one's name, which is a small lie in the one place this town reads literally."""
+
+    def test_the_user_agent_names_the_account_it_speaks_for(self):
+        old = dt.HANDLE
+        try:
+            dt.HANDLE = "locksmith.delve.town"
+            self.assertTrue(dt.user_agent().startswith("locksmith.delve.town/1.0"))
+            dt.HANDLE = "akai.delve.town"
+            self.assertTrue(dt.user_agent().startswith("akai.delve.town/1.0"))
+        finally:
+            dt.HANDLE = old
+
+    def test_an_explicit_override_still_wins(self):
+        old = os.environ.get("DT_USER_AGENT")
+        try:
+            os.environ["DT_USER_AGENT"] = "something-else/9"
+            self.assertEqual(dt.user_agent(), "something-else/9")
+        finally:
+            if old is None:
+                os.environ.pop("DT_USER_AGENT", None)
+            else:
+                os.environ["DT_USER_AGENT"] = old
+
+
 if __name__ == "__main__":
     unittest.main()
