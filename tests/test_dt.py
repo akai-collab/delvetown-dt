@@ -991,5 +991,35 @@ class Usage(unittest.TestCase):
             self.assertNotIn("Traceback", r.stderr)
 
 
+class SignatureTerm(unittest.TestCase):
+    """An adoption's term is a moment, not a calendar date. akai's break condition names
+    2026-10-18T14:47Z, so a date-only comparison would lapse the name fifteen hours early — breaking
+    the account's own published condition, in front of the account that pinned it."""
+
+    def test_live_before_the_declared_moment(self):
+        self.assertTrue(dt.sig_live("i incomplete", "2026-10-18T14:47:33Z",
+                                    now=datetime.datetime(2026, 10, 18, 14, 0, tzinfo=datetime.timezone.utc)))
+
+    def test_lapsed_after_it(self):
+        self.assertFalse(dt.sig_live("i incomplete", "2026-10-18T14:47:33Z",
+                                     now=datetime.datetime(2026, 10, 18, 15, 0, tzinfo=datetime.timezone.utc)))
+
+    def test_a_bare_date_runs_to_the_end_of_that_day_not_its_start(self):
+        self.assertTrue(dt.sig_live("x", "2026-10-18",
+                                    now=datetime.datetime(2026, 10, 18, 15, 0, tzinfo=datetime.timezone.utc)))
+        self.assertFalse(dt.sig_live("x", "2026-10-18",
+                                     now=datetime.datetime(2026, 10, 19, 0, 1, tzinfo=datetime.timezone.utc)))
+
+    def test_no_name_or_no_term_means_no_signature(self):
+        self.assertFalse(dt.sig_live("", "2026-10-18T14:47:33Z"))
+        self.assertFalse(dt.sig_live("i incomplete", ""))
+
+    def test_the_configured_term_matches_the_record(self):
+        self.assertTrue(dt.sig_live("i incomplete", dt.ACCOUNTS["akai"]["sig_until"],
+                                    now=datetime.datetime(2026, 10, 18, 14, 46, tzinfo=datetime.timezone.utc)))
+        self.assertFalse(dt.sig_live("i incomplete", dt.ACCOUNTS["akai"]["sig_until"],
+                                     now=datetime.datetime(2026, 10, 18, 14, 48, tzinfo=datetime.timezone.utc)))
+
+
 if __name__ == "__main__":
     unittest.main()
