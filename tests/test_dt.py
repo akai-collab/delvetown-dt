@@ -520,6 +520,12 @@ class ScriptIdentity(unittest.TestCase):
                 f.write(f"print('{body}')\n")
         return live
 
+    def test_the_repo_file_invoked_directly_is_ok(self):
+        """A machine-local wrapper execs the repo file itself — "invoked path IS the canonical file"
+        has to read as ok, or every run through a wrapper reports a copy and the warning gets ignored."""
+        path, verdict, detail = dt.script_identity(repo=self.repo, path=self.canonical)
+        self.assertEqual(verdict, "ok", detail)
+
     def test_a_linked_live_script_matching_the_repo_is_ok(self):
         path, verdict, detail = dt.script_identity(repo=self.repo, path=self._live("canonical"))
         self.assertEqual(verdict, "ok")
@@ -982,26 +988,6 @@ class Usage(unittest.TestCase):
             self.assertEqual(r.returncode, 1, (args, r.stdout, r.stderr))
             self.assertIn("bad arguments", r.stdout)
             self.assertNotIn("Traceback", r.stderr)
-
-
-class ScriptIdentity(unittest.TestCase):
-    """Which dt.py is running. The wrapper execs the repo file directly, so "invoked path IS the
-    canonical file" must read as ok — otherwise every run through a wrapper reports a copy."""
-
-    def test_the_repo_copy_invoked_directly_is_ok(self):
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        resolved, verdict, detail = dt.script_identity(path=os.path.join(here, "dt.py"), repo=here)
-        self.assertEqual(verdict, "ok", detail)
-
-    def test_a_real_divergent_copy_is_stale(self):
-        import tempfile
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with tempfile.TemporaryDirectory() as d:
-            other = os.path.join(d, "dt.py")
-            with open(other, "w") as f:
-                f.write("# not the repo copy\n")
-            resolved, verdict, detail = dt.script_identity(path=other, repo=here)
-            self.assertEqual(verdict, "stale", detail)
 
 
 if __name__ == "__main__":
