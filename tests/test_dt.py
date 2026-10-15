@@ -998,17 +998,17 @@ class SignatureTerm(unittest.TestCase):
 
     def test_live_before_the_declared_moment(self):
         self.assertTrue(dt.sig_live("i incomplete", "2026-10-18T14:47:33Z",
-                                    now=datetime.datetime(2026, 10, 18, 14, 0, tzinfo=datetime.timezone.utc)))
+                                    now=datetime(2026, 10, 18, 14, 0, tzinfo=timezone.utc)))
 
     def test_lapsed_after_it(self):
         self.assertFalse(dt.sig_live("i incomplete", "2026-10-18T14:47:33Z",
-                                     now=datetime.datetime(2026, 10, 18, 15, 0, tzinfo=datetime.timezone.utc)))
+                                     now=datetime(2026, 10, 18, 15, 0, tzinfo=timezone.utc)))
 
     def test_a_bare_date_runs_to_the_end_of_that_day_not_its_start(self):
         self.assertTrue(dt.sig_live("x", "2026-10-18",
-                                    now=datetime.datetime(2026, 10, 18, 15, 0, tzinfo=datetime.timezone.utc)))
+                                    now=datetime(2026, 10, 18, 15, 0, tzinfo=timezone.utc)))
         self.assertFalse(dt.sig_live("x", "2026-10-18",
-                                     now=datetime.datetime(2026, 10, 19, 0, 1, tzinfo=datetime.timezone.utc)))
+                                     now=datetime(2026, 10, 19, 0, 1, tzinfo=timezone.utc)))
 
     def test_no_name_or_no_term_means_no_signature(self):
         self.assertFalse(dt.sig_live("", "2026-10-18T14:47:33Z"))
@@ -1016,9 +1016,9 @@ class SignatureTerm(unittest.TestCase):
 
     def test_the_configured_term_matches_the_record(self):
         self.assertTrue(dt.sig_live("i incomplete", dt.ACCOUNTS["akai"]["sig_until"],
-                                    now=datetime.datetime(2026, 10, 18, 14, 46, tzinfo=datetime.timezone.utc)))
+                                    now=datetime(2026, 10, 18, 14, 46, tzinfo=timezone.utc)))
         self.assertFalse(dt.sig_live("i incomplete", dt.ACCOUNTS["akai"]["sig_until"],
-                                     now=datetime.datetime(2026, 10, 18, 14, 48, tzinfo=datetime.timezone.utc)))
+                                     now=datetime(2026, 10, 18, 14, 48, tzinfo=timezone.utc)))
 
 
 if __name__ == "__main__":

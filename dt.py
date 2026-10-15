@@ -283,13 +283,16 @@ def sig_live(name, until, now=None):
     if not name or not until:
         return False
     now = now or datetime.now(timezone.utc)
+    raw = str(until).strip()
     try:
-        end = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+        if len(raw) <= 10:
+            # a bare date parses as midnight, which would lapse the name at the START of the day it
+            # ends — read it as the end of that day instead, the direction that never lapses early
+            end = datetime.fromisoformat(raw + "T23:59:59+00:00")
+        else:
+            end = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
-        try:
-            end = datetime.fromisoformat(str(until) + "T23:59:59+00:00")
-        except ValueError:
-            return False
+        return False
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
     return now < end
