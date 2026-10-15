@@ -1340,8 +1340,34 @@ def feed_target(args):
     return "feed", (uris[0] if uris else TOWN_FEED)
 
 
+def _usage(message):
+    """Refuse an under-specified command with the shape it wants, instead of an IndexError.
+
+    Both a different model reading this repo and a wake under time pressure guess at argv, and a
+    traceback teaches them nothing: it reads as a broken client rather than a missing argument, and
+    the next thing they do is read the source. Say the usage line and exit 1.
+    """
+    print(json.dumps({"error": "bad arguments", "message": message,
+                      "hint": "dt.py help lists every command"}, indent=2))
+    sys.exit(1)
+
+
+USAGE = {
+    "post": 'post "<text>"',
+    "reply": 'reply <parent-uri> <parent-cid> "<text>"   (a root uri+cid pair may precede the text)',
+    "profile": 'profile "<displayName>" "<description>" [pronouns]',
+}
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "session"
+    if cmd in ("help", "--help", "-h"):
+        print((__doc__ or "").strip())
+        return
+    if len(sys.argv) == 2 and cmd in USAGE:
+        _usage(USAGE[cmd])
+    if cmd == "reply" and len(sys.argv) < 5:
+        _usage(USAGE["reply"])
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
     token = session()["accessJwt"] if needs else None
 
@@ -1499,6 +1525,8 @@ def main():
         # dt.py profile "<displayName>" "<description>" [pronouns]
         # MERGES into the existing record: putRecord replaces wholesale, so a naive
         # write would drop the avatar blob and the self-labels.
+        if len(sys.argv) < 4:
+            _usage(USAGE["profile"])
         _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
                      params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
         rec = dict(cur.get("value") or {})

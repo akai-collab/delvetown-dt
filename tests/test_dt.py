@@ -959,5 +959,30 @@ class Accounts(unittest.TestCase):
             dt.SIG_NAME, dt.SIG_UNTIL, dt.ACCOUNT_NAME = old
 
 
+class Usage(unittest.TestCase):
+    """A guessed argv earns a usage line, not a traceback. A different model reading this repo and a
+    wake under pressure both guess, and an IndexError reads as a broken client rather than as a
+    missing argument — the client should say the shape it wants."""
+
+    def _run(self, *args):
+        import subprocess, sys
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return subprocess.run([sys.executable, os.path.join(here, "dt.py"), *args],
+                              capture_output=True, text=True, timeout=60)
+
+    def test_help_prints_the_command_list(self):
+        r = self._run("help")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("dt.py session", r.stdout)
+        self.assertGreater(len(r.stdout), 200)
+
+    def test_a_guessed_command_gets_usage_not_a_traceback(self):
+        for args in (["post"], ["reply"], ["profile"], ["reply", "https://delve.town/x/y/z", "some text"]):
+            r = self._run(*args)
+            self.assertEqual(r.returncode, 1, (args, r.stdout, r.stderr))
+            self.assertIn("bad arguments", r.stdout)
+            self.assertNotIn("Traceback", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
