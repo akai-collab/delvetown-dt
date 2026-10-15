@@ -929,7 +929,10 @@ class Accounts(unittest.TestCase):
 
     def test_locksmith_is_a_second_account_with_its_own_everything(self):
         acc, handle, did, vault, log, sig = self._imp(DT_ACCOUNT="locksmith")
-        self.assertEqual(handle, "locksmith.delve.town")
+        # Renamed 2026-10-15: locksmith.delve.town -> skillissue.delve.town. The errand closed the same
+        # day the seat was built, and the handle was released to the town by the rename; the DID did
+        # not change, so nothing that points at the account had to follow it.
+        self.assertEqual(handle, "skillissue.delve.town")
         self.assertEqual(did, "did:plc:pupeplyyuw54mc6ngxavghv2")
         self.assertEqual(vault, "vault_48845e8f856c")
         self.assertEqual(log, "publish-log-locksmith.jsonl")

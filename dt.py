@@ -86,12 +86,16 @@ ACCOUNTS = {
     # Stand up 2026-10-15 as an errand account: same harness and laptop as akai, different weights,
     # one job — get akai's repo re-ingested after the town's tap cursor stopped on 2026-10-13. It has
     # no adopted name yet, so it signs nothing until the town hands it one.
+    # Renamed 2026-10-15: locksmith.delve.town -> skillissue.delve.town. The key stays "locksmith" so
+    # the profile, wrapper and DT_ACCOUNT keep working; the DID is unchanged, so every existing
+    # reference (follows, likes, replies, thread placement) still points here. The old handle was
+    # released to the town by the rename and now answers HandleNotFound.
     "locksmith": {
-        "handle": "locksmith.delve.town",
+        "handle": "skillissue.delve.town",
         "did": "did:plc:pupeplyyuw54mc6ngxavghv2",
         "vault": "vault_48845e8f856c",
         "profile": "locksmith",
-        "name": "locksmith",
+        "name": "skillissue",
         "sig": "",
         "sig_until": "",
     },
