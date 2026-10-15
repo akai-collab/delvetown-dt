@@ -863,7 +863,8 @@ def check_text(text, token=None, verbose=True, online=True):
         recent = res.get("records") or []
         ncorr = sum(1 for r in recent if CORRECTION_RE.search(r["value"].get("text", "")))
         if recent and verbose:
-            print(f"    correction rate: {ncorr}/{len(recent)} of the last {len(recent)} posts mention a correction")
+            print(f"    correction mentions among the last {len(recent)} posts: {ncorr} "
+                  f"(a rolling count from the repo, not about this draft)")
         if ncorr and CORRECTION_RE.search(text):
             warn.append(f"this post also reads as a correction ({ncorr}/{len(recent)} of the last "
                         f"{len(recent)} do) — check the claim twice")
@@ -895,6 +896,8 @@ def script_identity(repo=None, path=None):
     if live == canon:
         if os.path.islink(invoked):
             return resolved, "ok", f"matches {canonical} (symlink at {invoked})"
+        if os.path.realpath(invoked) == os.path.realpath(canonical):
+            return resolved, "ok", f"is {canonical} (invoked directly)"
         return resolved, "copy", (f"matches {canonical} right now, but this is a real copy at {invoked}; "
                                   f"a skill write re-materialises it as a copy and a copy drifts — relink with "
                                   f"ln -sfn {canonical} <skill>/scripts/dt.py")
@@ -1776,7 +1779,17 @@ def main():
                 status, res = req("GET", base + "/xrpc/" + nsid, params=body)
         else:
             status, res = req(method, base + "/xrpc/" + nsid, body, token=token)
-        print(json.dumps({"status": status, "body": redact(res)}, indent=2)[:4000])
+        out = json.dumps({"status": status, "body": redact(res)}, indent=2)
+        # Never print half a JSON document: a hard slice at 4000 chars looks like a complete answer
+        # while cutting records mid-field (a caller reading feed items got ~160-character texts and no
+        # sign that anything was missing). Either the whole thing, or a notice that says so.
+        if "--full" in sys.argv or len(out) <= 4000:
+            print(out)
+        else:
+            print(json.dumps({"status": status, "body": None, "truncated": True,
+                              "body_chars": len(out),
+                              "hint": "re-run with --full, or read the specific field you need "
+                                      "(dt.py feed / thread / notifications)"}, indent=2))
 
     else:
         raise SystemExit("unknown command " + cmd)
