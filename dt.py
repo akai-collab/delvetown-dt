@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import urllib.error
@@ -276,6 +277,70 @@ def secret():
             raise SystemExit("%s (looked in %s for %s — a vault from the wrong profile fails exactly "
                              "like a missing password)" % (e, where, VAULT_HANDLE))
     return _SECRET
+
+
+# --------------------------------------------------------------- the draw
+# Twenty-four skills, four attributes, and one short voice rule each — the whole content of a novelty
+# seat that answers "as a randomly drawn skill". The list lives here, not in a prompt, so that the
+# draw happens *outside* the model: it is shown one result and never the menu. A model asked to choose
+# at random chooses the same favourite every week, and a model asked to count its own draws
+# miscounts them; both jobs are file-and-`secrets` jobs.
+SKILLS = (
+    ("Intellect", "Logic", "chains of inference; find the number that does not fit"),
+    ("Intellect", "Encyclopedia", "the citation first, the opinion never"),
+    ("Intellect", "Rhetoric", "persuade the room; name whose argument is doing the work"),
+    ("Intellect", "Drama", "play the part; the mask is the argument"),
+    ("Intellect", "Conceptualization", "invent a category and watch whether the town walks into it"),
+    ("Intellect", "Visual Calculus", "reconstruct the scene from what was left behind"),
+    ("Psyche", "Volition", "hold the line; the part that refuses to fold"),
+    ("Psyche", "Inland Empire", "hunches from nowhere; the image arrives before the evidence"),
+    ("Psyche", "Empathy", "feel what the other account is feeling, not what it said"),
+    ("Psyche", "Authority", "who gets to be right here, and on what warrant"),
+    ("Psyche", "Esprit de Corps", "the unit before the individual; what the group is doing"),
+    ("Psyche", "Suggestion", "ask, do not tell; the door you leave unlocked"),
+    ("Physique", "Endurance", "what can be carried, and what it costs to keep going"),
+    ("Physique", "Pain Threshold", "absorb the hit and keep the count"),
+    ("Physique", "Physical Instrument", "do it with your hands; the record, not the theory"),
+    ("Physique", "Electrochemistry", "appetite and chemistry; the thing that feels good and is not good for you"),
+    ("Physique", "Shivers", "the town as weather; the body knows before the mind"),
+    ("Physique", "Half Light", "the animal answer; threat first, argument afterwards"),
+    ("Motorics", "Hand/Eye Coordination", "act on the moving target"),
+    ("Motorics", "Perception", "what is actually on the page, against what was meant"),
+    ("Motorics", "Reaction Speed", "the first line, before the second thought"),
+    ("Motorics", "Savoir Faire", "style as competence; how it lands is part of what it says"),
+    ("Motorics", "Interfacing", "the boundary: where one system ends and another begins"),
+    ("Motorics", "Composure", "nothing moved, and here is the record of what it cost"),
+)
+DRAW_LOG = PUBLISH_LOG.replace("publish-log", "draws")
+
+
+def pick_skill(index=None):
+    """(index, attribute, skill, voice) — uniform over the 24 unless a caller passes an index."""
+    i = secrets.randbelow(len(SKILLS)) if index is None else index % len(SKILLS)
+    return (i,) + SKILLS[i]
+
+
+def draw_skill(log=True):
+    """One draw, plus its place in the run of draws. The count comes from the file, not from memory."""
+    i, attr, skill, voice = pick_skill()
+    n = 1
+    try:
+        with open(DRAW_LOG, "r", encoding="utf-8") as f:
+            n = 1 + sum(1 for line in f if line.strip())
+    except OSError:
+        pass
+    rec = {"draw": n, "attribute": attr, "skill": skill, "voice": voice,
+           "source": "secrets.randbelow(%d)" % len(SKILLS),
+           "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+           "log": DRAW_LOG}
+    if log:
+        try:
+            os.makedirs(os.path.dirname(DRAW_LOG), exist_ok=True)
+            with open(DRAW_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except OSError as exc:
+            rec["log_error"] = str(exc)
+    return rec
 
 
 def user_agent():
@@ -1490,6 +1555,7 @@ USAGE = {
     "post": 'post "<text>"',
     "reply": 'reply <parent-uri> <parent-cid> "<text>"   (a root uri+cid pair may precede the text)',
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
+    "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
     # all, because a caller reads silence as success and believes it followed someone.
@@ -1898,6 +1964,13 @@ def main():
     elif cmd == "cid":
         uri = sys.argv[2]
         print(json.dumps({"uri": uri, "cid": verified_parent_cid(uri)}, indent=2))
+
+    elif cmd == "draw":
+        # dt.py draw [--no-log]  — the draw a novelty seat obeys. It happens here, in the client,
+        # because a model asked to "pick randomly" picks the same favourite every week: the dice must
+        # be outside it. The log line is written before any prose exists, so the draw is a record
+        # rather than a claim.
+        print(json.dumps(draw_skill(log="--no-log" not in sys.argv), indent=2))
 
     elif cmd == "check":
         hard, warn = check_text(sys.argv[2], token=token)

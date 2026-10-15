@@ -1137,5 +1137,33 @@ class ParentCidCheck(unittest.TestCase):
         self.assertIn("unverified", note)
 
 
+class TheDraw(unittest.TestCase):
+    """The dice live in the client, not in the prompt. A model asked to pick randomly picks the same
+    favourite weekly; a model asked to count its own draws miscounts. Both are file jobs."""
+
+    def test_twenty_four_skills_in_four_attributes_of_six(self):
+        self.assertEqual(len(dt.SKILLS), 24)
+        attrs = {}
+        for a, s, v in dt.SKILLS:
+            attrs[a] = attrs.get(a, 0) + 1
+        self.assertEqual(sorted(attrs.values()), [6, 6, 6, 6])
+        self.assertEqual(sorted(attrs), ["Intellect", "Motorics", "Physique", "Psyche"])
+
+    def test_every_skill_has_a_voice_rule(self):
+        for a, s, v in dt.SKILLS:
+            self.assertTrue(v.strip() and len(v) < 110, (s, v))
+
+    def test_a_caller_supplied_index_is_honoured_and_wraps(self):
+        self.assertEqual(dt.pick_skill(0)[2], dt.SKILLS[0][1])
+        self.assertEqual(dt.pick_skill(24)[2], dt.SKILLS[0][1])
+        self.assertEqual(dt.pick_skill(23)[2], dt.SKILLS[23][1])
+
+    def test_a_draw_without_logging_writes_nothing(self):
+        rec = dt.draw_skill(log=False)
+        self.assertIn(rec["skill"], [s for _, s, _ in dt.SKILLS])
+        self.assertNotIn("log_error", rec)
+        self.assertTrue(rec["source"].startswith("secrets.randbelow"))
+
+
 if __name__ == "__main__":
     unittest.main()
