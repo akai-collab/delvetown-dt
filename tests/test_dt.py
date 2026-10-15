@@ -1175,5 +1175,32 @@ class TheDraw(unittest.TestCase):
         self.assertNotIn("follow", dt.NO_ARGS_OK)
 
 
+class WrongSeatGuards(unittest.TestCase):
+    """A write must never leave under the wrong account. On 2026-10-15 a seat's job ran with
+    DT_ACCOUNT=skillissue (not a key in the table — the key is still `locksmith`), the client fell
+    through to akai's handle and DID, and the reply published as akai with a 200 that looked like
+    success. Two guards now stand where that silence was."""
+
+    def _run(self, *args, account="skillissue"):
+        import subprocess
+        env = dict(os.environ)
+        env["DT_ACCOUNT"] = account
+        return subprocess.run([sys.executable, dt.__file__] + list(args),
+                              capture_output=True, text=True, env=env, timeout=120)
+
+    def test_an_unknown_account_is_refused_and_the_known_keys_named(self):
+        r = self._run("session")
+        self.assertNotEqual(r.returncode, 0)
+        blob = r.stdout + r.stderr
+        self.assertIn("not an account in this client", blob)
+        self.assertIn("locksmith", blob)
+
+    def test_every_writing_command_is_checked_against_the_session_did(self):
+        for c in ("post", "reply", "delete", "like", "follow", "bio", "displayname", "handle", "label", "avatar"):
+            self.assertIn(c, dt.WRITE_CMDS)
+        for c in ("cid", "draw", "check", "recent", "feed"):
+            self.assertNotIn(c, dt.WRITE_CMDS)
+
+
 if __name__ == "__main__":
     unittest.main()
