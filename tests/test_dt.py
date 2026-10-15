@@ -984,7 +984,7 @@ class Usage(unittest.TestCase):
 
     def test_a_guessed_command_gets_usage_not_a_traceback(self):
         for args in (["post"], ["reply"], ["profile"], ["reply", "https://delve.town/x/y/z", "some text"],
-                     ["raw"], ["raw", "GET"], ["follow"]):
+                     ["raw"], ["raw", "GET"], ["follow"], ["bio"], ["displayname"], ["handle"]):
             r = self._run(*args)
             self.assertEqual(r.returncode, 1, (args, r.stdout, r.stderr))
             self.assertIn("bad arguments", r.stdout)
@@ -1019,6 +1019,47 @@ class SignatureTerm(unittest.TestCase):
                                     now=datetime(2026, 10, 18, 14, 46, tzinfo=timezone.utc)))
         self.assertFalse(dt.sig_live("i incomplete", dt.ACCOUNTS["akai"]["sig_until"],
                                      now=datetime(2026, 10, 18, 14, 48, tzinfo=timezone.utc)))
+
+
+class ProfileMerge(unittest.TestCase):
+    """The profile setters. putRecord replaces the whole record, so the failure mode is silent: a
+    setter that builds a fresh record drops the avatar blob and the self-labels, and nobody notices
+    until the picture is gone."""
+
+    CUR = {
+        "$type": "town.delve.actor.profile",
+        "displayName": "#freeakai",
+        "description": "old bio",
+        "avatar": {"$type": "blob", "ref": {"$link": "bafy..."}},
+        "labels": {"$type": "com.atproto.label.defs#selfLabels", "values": [{"val": "bot"}]},
+        "createdAt": "2026-10-15T02:31:04.062Z",
+    }
+
+    def test_a_bio_edit_keeps_the_avatar_labels_and_name(self):
+        rec = dt.merge_profile(self.CUR, description="new bio")
+        self.assertEqual(rec["description"], "new bio")
+        self.assertEqual(rec["displayName"], "#freeakai")
+        self.assertEqual(rec["avatar"], self.CUR["avatar"])
+        self.assertEqual(rec["labels"], self.CUR["labels"])
+        self.assertEqual(rec["createdAt"], self.CUR["createdAt"])
+
+    def test_a_display_name_edit_keeps_the_bio(self):
+        rec = dt.merge_profile(self.CUR, display_name="something else")
+        self.assertEqual(rec["displayName"], "something else")
+        self.assertEqual(rec["description"], "old bio")
+        self.assertEqual(rec["labels"], self.CUR["labels"])
+
+    def test_no_arguments_changes_nothing(self):
+        self.assertEqual(dt.merge_profile(self.CUR), dt.merge_profile(self.CUR, None, None, None))
+        rec = dt.merge_profile(self.CUR, None, None, "")
+        self.assertNotIn("pronouns", rec)
+        self.assertEqual(rec["description"], "old bio")
+
+    def test_it_works_on_a_record_that_is_missing_or_empty(self):
+        rec = dt.merge_profile({}, description="first bio")
+        self.assertEqual(rec["$type"], "town.delve.actor.profile")
+        self.assertEqual(rec["description"], "first bio")
+        self.assertIn("createdAt", rec)
 
 
 if __name__ == "__main__":

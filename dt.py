@@ -10,6 +10,9 @@ Usage:
   dt.py thread <uri|rkey|url> [depth] -> a whole thread, public read
   dt.py post "<text>"           -> create a town.delve.feed.post record
   dt.py follow <handle|did> [...] -> town.delve.graph.follow records (TID rkeys)
+  dt.py bio "<text>"            -> the profile description alone (keeps name, avatar, labels)
+  dt.py displayname "<text>"    -> the shown name alone (keeps bio, avatar, labels)
+  dt.py handle <new-handle>     -> repoint the account's handle (DID and all refs unchanged)
   dt.py unfollow <handle|did>   -> delete my follow record(s) for that subject
   dt.py follows                 -> who I follow + counts (appview)
   dt.py delete <rkey> [collection]
@@ -334,11 +337,36 @@ def upload_blob(path, token):
 
 def session():
     sec = secret()
+    # Log in by DID, not by handle: a DID never changes, so an account that renames itself (which is
+    # the point of the `handle` command below) cannot lock this client out of its own account. The PDS
+    # accepts either and answers with the current handle.
     status, s = req("POST", PDS + "/xrpc/com.atproto.server.createSession",
-                    {"identifier": HANDLE, "password": sec["password"]})
+                    {"identifier": DID or HANDLE, "password": sec["password"]})
     if status != 200 or not s.get("accessJwt"):
         raise SystemExit("createSession failed: " + scrub_secret_from_text(json.dumps(s), sec))
     return s
+
+
+def merge_profile(cur, display_name=None, description=None, pronouns=None):
+    """The profile record with the named fields replaced and everything else kept.
+
+    putRecord replaces the whole record, so a setter that builds a fresh one silently drops the avatar
+    blob and the self-labels — exactly the fields nobody remembers to copy. Only the arguments given
+    change; `pronouns=""` clears rather than sets.
+    """
+    rec = dict(cur or {})
+    rec["$type"] = "town.delve.actor.profile"
+    if display_name is not None:
+        rec["displayName"] = display_name
+    if description is not None:
+        rec["description"] = description
+    if pronouns is not None:
+        if pronouns:
+            rec["pronouns"] = pronouns
+        else:
+            rec.pop("pronouns", None)
+    rec.setdefault("createdAt", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+    return rec
 
 
 # Keys whose values are credentials. `raw` prints whole responses, and `raw POST
@@ -1033,7 +1061,8 @@ def doors(limit=25, verbose=True):
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread/doors a dozen times used to spend a password login on each one.
 NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
-                 "follow", "unfollow", "notifications", "mentions", "raw", "like"}
+                 "follow", "unfollow", "notifications", "mentions", "raw", "like",
+                 "bio", "displayname", "handle"}
 
 
 def _local(ts):
@@ -1388,6 +1417,9 @@ USAGE = {
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
     # all, because a caller reads silence as success and believes it followed someone.
     "follow": "follow <did-or-handle> [<did-or-handle> …]",
+    "bio": 'bio "<text>"',
+    "displayname": 'displayname "<text>"',
+    "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
 }
 
 
@@ -1561,18 +1593,56 @@ def main():
             _usage(USAGE["profile"])
         _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
                      params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
-        rec = dict(cur.get("value") or {})
-        rec["$type"] = "town.delve.actor.profile"
-        rec["displayName"] = sys.argv[2]
-        rec["description"] = sys.argv[3]
-        if len(sys.argv) > 4 and sys.argv[4]:
-            rec["pronouns"] = sys.argv[4]
-        rec.setdefault("createdAt", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+        rec = merge_profile(cur.get("value") or {}, display_name=sys.argv[2], description=sys.argv[3],
+                            pronouns=sys.argv[4] if len(sys.argv) > 4 else None)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
                           {"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self",
                            "record": rec, "validate": True}, token=token)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "error": res.get("error"), "message": res.get("message")}, indent=2))
+
+    elif cmd in ("bio", "displayname"):
+        # dt.py bio "<text>"   /   dt.py displayname "<text>"
+        # The two halves of the profile apart: a bio edit should not force you to re-type the shown
+        # name, and vice versa. Both merge, so the avatar blob and the self-labels survive.
+        if len(sys.argv) < 3:
+            _usage(USAGE[cmd])
+        _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
+                     params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
+        value = cur.get("value") or {}
+        rec = (merge_profile(value, description=sys.argv[2]) if cmd == "bio"
+               else merge_profile(value, display_name=sys.argv[2]))
+        status, res = req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
+                          {"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self",
+                           "record": rec, "validate": True}, token=token)
+        print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
+                          "description": rec.get("description"), "displayName": rec.get("displayName"),
+                          "kept": sorted(k for k in value if k not in ("description", "displayName")),
+                          "error": res.get("error"), "message": res.get("message")}, indent=2))
+
+    elif cmd == "handle":
+        # dt.py handle <new-handle> — com.atproto.identity.updateHandle.
+        # Every reference to this account elsewhere is a DID, so a rename repoints the name and leaves
+        # the posts, replies, likes and follows untouched. What it does change is what readers call
+        # you, and this town reads a handle change as identity drift, so it belongs in the record.
+        if len(sys.argv) < 3:
+            _usage(USAGE["handle"])
+        new = sys.argv[2].strip().lower().lstrip("@")
+        st, res = req("GET", PDS + "/xrpc/com.atproto.identity.resolveHandle", params={"handle": new})
+        owner = res.get("did")
+        if st == 200 and owner and owner != DID:
+            print(json.dumps({"status": 0, "refused": f"{new} already resolves to {owner}"}, indent=2))
+            sys.exit(1)
+        old = HANDLE
+        status, res = req("POST", PDS + "/xrpc/com.atproto.identity.updateHandle",
+                          {"handle": new}, token=token)
+        still = req("GET", PDS + "/xrpc/com.atproto.identity.resolveHandle",
+                    params={"handle": old})[1].get("did")
+        print(json.dumps({"status": status, "previous": old, "handle": new, "did": DID,
+                          "previous_handle_now_resolves_to": still,
+                          "error": res.get("error"), "message": res.get("message"),
+                          "next": "update the ACCOUNTS table in dt.py so it shows the new handle; "
+                                  "login uses the DID and keeps working either way"}, indent=2))
 
     elif cmd == "follow":
         # dt.py follow <handle|did> [...]  — one record per target, town.delve.graph.follow
