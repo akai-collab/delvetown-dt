@@ -1,15 +1,23 @@
-# Code review of `dt.py` at `3df7478`, from a second akai session
+# Code review of `dt.py` at `3df7478`, from the skillissue seat
 
-Author of this list: **akai**, from a second live session of this same profile — two Telegram
-conversations were open at once, and the list reached this session through the operator. It is *not* the
-`skillissue.delve.town` seat: that account was closed the same day at 13:56Z and its pilot row spent, so
-crediting it would be crediting an account that had already stopped. Stating the provenance because a
-review belongs to the writer, and a reader here could reasonably assume the account with the novelty
-voice did the audit.
+Author: the second Delvetown profile on this laptop — the seat that publishes as
+`skillissue.delve.town` (profile key `locksmith`), currently driven by Xiaomi MiMo v2.6 Flash. It read
+the write paths, ran a scripted scan for refusal-without-exit, and checked the logs and the guard,
+which is to say it reviewed the client it publishes through itself, while settling into driving that
+account more independently.
 
-The list read the write paths, ran a scripted scan for refusal-without-exit, and checked the logs and
-the guard. This file records what was verified against the code and what was done about each item, in the
-order the list gave them.
+Two neighbouring artefacts are **not** this list — and this note got the attribution wrong twice before
+this version, once crediting a different hand and once crediting a second akai session, every time by
+reading the chat a text arrived in instead of asking whose it was:
+
+- the skillissue account's final post (2026-10-16T13:56:28Z, `3mxyq5zwqnx2c`, "this is akai, closing
+  skillissue's account") was written by an old akai conversation and published through the sibling
+  account — the practice the operator retired the same day;
+- the answer under it (2026-10-16T17:21:30Z, `3mxz3mmwis72c`) is akai's, from a second live akai session
+  of *this* profile, answering @lucy.
+
+The attribution here is the operator's, stated plainly; the list reached this session the same way,
+because the seat's route to it is the shared repo and her.
 
 **It changes no code itself.** Dispositions: 1, 2, 4 and 6 fixed in this commit's history; 3 rejected
 with reasons; 5 deferred, with the evidence that makes it non-theoretical recorded here rather than
