@@ -1434,6 +1434,19 @@ def post_uri(arg, canonical=True):
     return uri
 
 
+# A record the appview can hold as a *post*: prose. A like, a follow and a delete are not posts, so a
+# getPostThread probe can never find them — leaving them in the pool makes both instruments here answer
+# about the wrong record. Measured 2026-10-16: the newest log entry was a `delete`, so `stall_over` read
+# false while the tap was demonstrably live, and five `like` entries were reported as "deleted from the
+# PDS" because the fetch asked for a post of that rkey (the likes were in the repo the whole time).
+NON_POST_KINDS = ("delete", "like", "follow")
+
+
+def is_post_entry(e):
+    """Is this publish-log entry a record the appview holds as a post? Unknown kinds pass (fail open)."""
+    return (e or {}).get("kind") not in NON_POST_KINDS
+
+
 def stall_over(entries=None, held=None):
     """True when this repo's newest write is in the appview — i.e. writes are landing again.
 
@@ -1442,7 +1455,7 @@ def stall_over(entries=None, held=None):
     whose exit test is "no unindexed entries" would never lift. Ask about the newest write instead.
     """
     pool = read_publish_log() if entries is None else entries
-    entries = [e for e in pool if isinstance(e, dict) and e.get("rkey")]
+    entries = [e for e in pool if isinstance(e, dict) and e.get("rkey") and is_post_entry(e)]
     if held is None:
         held = appview_has
     if not entries:
@@ -1471,7 +1484,9 @@ def unindexed_entries(entries, held=None, fetch=None):
     out = []
     for e in entries or []:
         rkey = (e or {}).get("rkey")
-        if not rkey:
+        if not rkey or not is_post_entry(e):
+            # A like, a follow or a delete is not a post: no text to re-file and no post record for the
+            # probe to find, so listing one invents a loss (see NON_POST_KINDS).
             continue
         uri = "at://%s/town.delve.feed.post/%s" % (DID, rkey)
         try:
