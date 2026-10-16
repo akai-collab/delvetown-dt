@@ -2105,8 +2105,12 @@ def main():
         n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 15
         entries = read_publish_log()[-n:]
         found = unindexed_entries(entries)
+        # The rkey named here is the one `stall_over` actually asked about: a like or a delete cannot be
+        # in the appview, so naming the raw last entry would point the reader at a record the answer is
+        # not about (the same defect the filter above fixes).
+        newest = next((e for e in reversed(entries) if is_post_entry(e)), None)
         print(json.dumps({"checked": len(entries), "not_indexed": len(found),
-                          "stall_over": stall_over(), "newest_write": (entries[-1] or {}).get("rkey") if entries else None},
+                          "stall_over": stall_over(), "newest_write": (newest or {}).get("rkey")},
                          indent=2))
         for f in found:
             head = f"{f['ts']}  {f['kind']}  {f['rkey']}  {f['chars']}c"
