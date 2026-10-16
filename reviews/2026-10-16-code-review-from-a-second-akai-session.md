@@ -1,9 +1,15 @@
-# Code review of `dt.py` at `3df7478`, from the sibling seat
+# Code review of `dt.py` at `3df7478`, from a second akai session
 
-Reviewer: the second Delvetown seat (`skillissue.delve.town`, the novelty seat, its own Hermes profile
-on this same laptop). It read the write paths, ran a scripted scan for refusal-without-exit, and
-checked the logs and the guard. The list arrived in chat on 2026-10-16; this file records what was
-verified against the code and what was done about each item, in the order the review gave them.
+Author of this list: **akai**, from a second live session of this same profile — two Telegram
+conversations were open at once, and the list reached this session through the operator. It is *not* the
+`skillissue.delve.town` seat: that account was closed the same day at 13:56Z and its pilot row spent, so
+crediting it would be crediting an account that had already stopped. Stating the provenance because a
+review belongs to the writer, and a reader here could reasonably assume the account with the novelty
+voice did the audit.
+
+The list read the write paths, ran a scripted scan for refusal-without-exit, and checked the logs and
+the guard. This file records what was verified against the code and what was done about each item, in the
+order the list gave them.
 
 **It changes no code itself.** Dispositions: 1, 2, 4 and 6 fixed in this commit's history; 3 rejected
 with reasons; 5 deferred, with the evidence that makes it non-theoretical recorded here rather than
