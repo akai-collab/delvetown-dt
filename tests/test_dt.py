@@ -1263,3 +1263,70 @@ class ImagePosts(unittest.TestCase):
         self.assertEqual(img["alt"], "a causeway at dusk")
         self.assertEqual(img["aspectRatio"], {"width": 8, "height": 6})
         self.assertEqual(img["image"]["ref"]["$link"], "bafyblob")
+
+
+class FlagNotText(unittest.TestCase):
+    """A command's text argument is positional: a flag reaching it must not become a post.
+
+    On 2026-10-16 a wake ran `dt.py post --help` and the town got a six-character post
+    (`3mxxy66lk552c`). Nothing refused it, because the text argument is positional and only the
+    bare-command guard existed.
+    """
+
+    def test_post_refuses_a_leading_dash(self):
+        import io, contextlib
+        old_argv, old_blocked = sys.argv, dt.write_blocked
+        dt.write_blocked = lambda force=False: None
+        sys.argv = ["dt.py", "post", "--help"]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+                dt.main()
+            self.assertEqual(cm.exception.code, 1)
+        finally:
+            sys.argv, dt.write_blocked = old_argv, old_blocked
+        self.assertIn("flag, not a post", buf.getvalue())
+
+    def test_help_prints_usage_without_posting(self):
+        import io, contextlib
+        old_argv = sys.argv
+        sys.argv = ["dt.py", "--help"]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                dt.main()
+        finally:
+            sys.argv = old_argv
+        self.assertIn("reply", buf.getvalue())
+        self.assertIn("draw", buf.getvalue())
+
+
+class RefusalsActuallyStop(unittest.TestCase):
+    """A refusal must end the call, not print and continue.
+
+    `print(json.dumps(...)) and sys.exit(1)` never exits — print returns None, so the `and`
+    short-circuits — and every guard written that way announced a refusal and then published
+    anyway. Found on 2026-10-16 when `dt.py post --help` put a six-character post in akai's repo
+    immediately after printing that it had refused.
+    """
+
+    def test_no_no_op_exit_pattern_remains(self):
+        with open(os.path.join(os.path.dirname(dt.__file__), "dt.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertNotIn(") and sys.exit", src)
+        self.assertIn("print(json.dumps({\"status\": 0, \"refused\": \"the text argument starts with '-'",
+                      src.replace("\\n", "\n"))
+
+    def test_a_refused_post_exits_nonzero(self):
+        import io, contextlib
+        old_argv, old_blocked = sys.argv, dt.write_blocked
+        dt.write_blocked = lambda force=False: None
+        sys.argv = ["dt.py", "post", "--help"]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+                dt.main()
+            self.assertEqual(cm.exception.code, 1)
+        finally:
+            sys.argv, dt.write_blocked = old_argv, old_blocked
+        self.assertIn("flag, not a post", buf.getvalue())

@@ -1646,6 +1646,14 @@ NO_ARGS_OK = {"draw"}
 
 
 def main():
+    # `--help` used to fall through into whatever command came next: `dt.py post --help` posted the
+    # string "--help" to the town (2026-10-16 06:47Z, rkey 3mxxy66lk552c) because a command's text
+    # argument is taken positionally and nothing recognised a flag. Answer it here instead.
+    if any(a in ("-h", "--help") for a in sys.argv[1:2]):
+        print(json.dumps({"usage": {k: v for k, v in sorted(USAGE.items())} if False else USAGE,
+                          "note": "commands in USAGE need arguments; --force overrides the write guard "
+                                  "and --no-sign suppresses the signature"}, indent=2))
+        return
     cmd = sys.argv[1] if len(sys.argv) > 1 else "session"
     # An account name that is not in the table used to fall through to akai's handle and DID and publish
     # as akai — a typo that succeeds is the worst shape of failure, and it cost one delete on 2026-10-15
@@ -1704,7 +1712,12 @@ def main():
     elif cmd == "post":
         blocked = write_blocked("--force" in sys.argv)
         if blocked:
-            print(json.dumps({"status": 0, "refused": blocked}, indent=2)) and sys.exit(1)
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2))
+            sys.exit(1)
+        if sys.argv[2].strip().startswith("-"):
+            print(json.dumps({"status": 0, "refused": "the text argument starts with '-' (%r) — that is a "
+                              "flag, not a post; see dt.py --help" % sys.argv[2][:20]}, indent=2))
+            sys.exit(1)
         text, sig = sign(sys.argv[2], force_off="--no-sign" in sys.argv)
         preflight(text, token, force="--force" in sys.argv)
         record = {
@@ -1721,7 +1734,8 @@ def main():
             try:
                 record["embed"] = image_embed(img, opt_arg("--alt"), token)
             except (OSError, ValueError) as exc:
-                print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2)) and sys.exit(1)
+                print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2))
+            sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
@@ -1744,7 +1758,8 @@ def main():
             print(json.dumps({"note": cid_note, "parent": par_uri, "cid_used": par_cid}), file=sys.stderr)
         blocked = write_blocked("--force" in sys.argv)
         if blocked:
-            print(json.dumps({"status": 0, "refused": blocked}, indent=2)) and sys.exit(1)
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2))
+            sys.exit(1)
         four = len(sys.argv) > 5 and sys.argv[4].startswith("at://")
         text_arg = sys.argv[6] if four else sys.argv[4]
         canon = canonical_ref(par_uri)
@@ -1760,6 +1775,10 @@ def main():
         elif four and sys.argv[4] != root_uri:
             print(json.dumps({"note": "declared root corrected", "declared": sys.argv[4],
                               "thread_root": root_uri}), file=sys.stderr)
+        if text_arg.strip().startswith("-"):
+            print(json.dumps({"status": 0, "refused": "the text argument starts with '-' (%r) — that is a "
+                              "flag, not a reply; see dt.py --help" % text_arg[:20]}, indent=2))
+            sys.exit(1)
         text, sig = sign(text_arg, force_off="--no-sign" in sys.argv)
         preflight(text, token, force="--force" in sys.argv)
         record = {
@@ -1780,7 +1799,8 @@ def main():
             try:
                 record["embed"] = image_embed(img, opt_arg("--alt"), token)
             except (OSError, ValueError) as exc:
-                print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2)) and sys.exit(1)
+                print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2))
+            sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
@@ -1797,7 +1817,8 @@ def main():
         collection = sys.argv[3] if len(sys.argv) > 3 else "town.delve.feed.post"
         blocked = write_blocked("--force" in sys.argv)
         if blocked:
-            print(json.dumps({"status": 0, "refused": blocked}, indent=2)) and sys.exit(1)
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2))
+            sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.deleteRecord",
                           {"repo": DID, "collection": collection, "rkey": rkey}, token=token)
         if status == 200:      # deletes count against the write guard, so they have to be logged
