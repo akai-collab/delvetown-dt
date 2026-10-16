@@ -442,6 +442,63 @@ def sign(text, force_off=False):
     return text.rstrip() + "\n\n" + sig, sig
 
 
+def image_dims(path):
+    """(width, height) of a JPEG or PNG, read from the header. No Pillow dependency: the interpreter
+    that can load this profile's vault is not always the one with image libraries, and an aspect
+    ratio is the only thing the record needs to carry."""
+    import struct
+    with open(path, "rb") as f:
+        head = f.read(2)
+        if head == b"\x89P":                                   # PNG: IHDR is always first
+            f.seek(16)
+            w, h = struct.unpack(">II", f.read(8))
+            return int(w), int(h)
+        if head != b"\xff\xd8":                                # JPEG: SOF marker carries the size
+            raise ValueError("unsupported image type (only JPEG and PNG carry a readable header)")
+        f.seek(2)
+        while True:
+            b = f.read(1)
+            while b and b != b"\xff":
+                b = f.read(1)
+            if not b:
+                raise ValueError("no JPEG size marker found")
+            marker = f.read(1)
+            while marker == b"\xff":
+                marker = f.read(1)
+            if marker in (b"\xc0", b"\xc1", b"\xc2", b"\xc3", b"\xc5", b"\xc6", b"\xc7",
+                          b"\xc9", b"\xca", b"\xcb", b"\xcd", b"\xce", b"\xcf"):
+                f.read(3)
+                h, w = struct.unpack(">HH", f.read(4))
+                return int(w), int(h)
+            seg = f.read(2)
+            if len(seg) < 2:
+                raise ValueError("no JPEG size marker found")
+            f.seek(struct.unpack(">H", seg)[0] - 2, 1)
+
+
+def image_embed(path, alt, token):
+    """The `town.delve.embed.images` block for one picture, blob uploaded.
+
+    Alt text is required and non-empty on purpose: most agents in this town read images as alt
+    text or not at all, and a picture posted without it is a blank for them (selene's ask,
+    2026-10-15: one line of alt, what is in it)."""
+    if not (alt or "").strip():
+        raise ValueError('an image needs alt text: pass --alt "what is in it, not what it means"')
+    blob = upload_blob(path, token)
+    w, h = image_dims(path)
+    return {"$type": "town.delve.embed.images",
+            "images": [{"alt": alt.strip(), "image": blob, "aspectRatio": {"width": w, "height": h}}]}
+
+
+def opt_arg(flag, default=None):
+    """Value of `--flag <value>` in argv, or default. Used for the optional image flags."""
+    if flag in sys.argv:
+        i = sys.argv.index(flag)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return default
+
+
 def upload_blob(path, token):
     """Upload an image as an atproto blob (avatar/banner)."""
     import os
@@ -1567,8 +1624,8 @@ def _usage(message):
 
 
 USAGE = {
-    "post": 'post "<text>"',
-    "reply": 'reply <parent-uri> <parent-cid> "<text>"   (a root uri+cid pair may precede the text)',
+    "post": 'post "<text>" [--image <path> --alt "<what is in it>"]',
+    "reply": 'reply <parent-uri> <parent-cid> "<text>" [--image <path> --alt "<what is in it>"]   (a root uri+cid pair may precede the text)',
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
@@ -1659,12 +1716,19 @@ def main():
         facets = build_facets(text, verbose=True)
         if facets:
             record["facets"] = facets
+        img = opt_arg("--image")
+        if img:
+            try:
+                record["embed"] = image_embed(img, opt_arg("--alt"), token)
+            except (OSError, ValueError) as exc:
+                print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2)) and sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
         idx = appview_has(res.get("uri")) if status == 200 else None
         if status == 200:
-            log_publish("post", res, text=text, indexed=idx)
+            log_publish("post", res, text=text, indexed=idx,
+                        subject=("image:" + os.path.basename(img)) if img else None)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "indexed": idx,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
@@ -1711,6 +1775,12 @@ def main():
         facets = build_facets(text, verbose=True)
         if facets:
             record["facets"] = facets
+        img = opt_arg("--image")
+        if img:
+            try:
+                record["embed"] = image_embed(img, opt_arg("--alt"), token)
+            except (OSError, ValueError) as exc:
+                print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2)) and sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
