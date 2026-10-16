@@ -400,6 +400,7 @@ class Provenance(unittest.TestCase):
         self.assertIsNone(lines[1]["parent_uri"])                  # a like has no parent post
 
     def test_provenance_command_reads_the_log_back(self):
+        _no_network(self)
         dt.log_publish("post", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxccc", "cid": "bafy3"},
                        text="one line.")
         old_argv = sys.argv
@@ -810,6 +811,15 @@ class UnindexedEntries(unittest.TestCase):
         self.assertEqual(dt.unindexed_entries([None, {}, {"rkey": ""}], held=lambda u: False,
                                               fetch=lambda rk: {}), [])
 
+    def test_likes_follows_and_deletes_are_not_losses(self):
+        """A like or a follow has no text and no post record for the probe; a delete's record is gone by
+        definition. All three were listed as "deleted from the PDS" — 2026-10-16, five likes that were in
+        the repo the whole time, because the fetch asked for a post of that rkey."""
+        entries = [{"rkey": "p", "kind": "post"}, {"rkey": "l", "kind": "like"},
+                   {"rkey": "f", "kind": "follow"}, {"rkey": "d", "kind": "delete"}]
+        out = dt.unindexed_entries(entries, held=lambda u: False, fetch=lambda rk: {})
+        self.assertEqual([e["rkey"] for e in out], ["p"])
+
 
 class WriteGuard(unittest.TestCase):
     """The guard that has to be able to refuse a session being helpful at speed: the 2026-10-14 stall
@@ -869,6 +879,17 @@ class StallOver(unittest.TestCase):
         def boom(uri):
             raise RuntimeError("appview down")
         self.assertFalse(dt.stall_over(entries, held=boom))
+
+    def test_a_newest_delete_does_not_answer_for_the_newest_post(self):
+        """A deleted record can never be in the appview, so a `delete` entry that happens to be newest
+        would hold the write pause forever. 2026-10-16: the pause's own exit test read false while the
+        tap was live, because the newest entry was the delete of the post before it."""
+        entries = [{"rkey": "kept", "kind": "reply"}, {"rkey": "gone", "kind": "delete"}]
+        self.assertTrue(dt.stall_over(entries, held=lambda u: u.endswith("/kept")))
+        self.assertFalse(dt.stall_over(entries, held=lambda u: u.endswith("/gone")))
+
+    def test_only_non_post_entries_is_not_movement(self):
+        self.assertFalse(dt.stall_over([{"rkey": "l", "kind": "like"}], held=lambda u: True))
 
 
 class UserAgent(unittest.TestCase):
@@ -1265,6 +1286,28 @@ class ImagePosts(unittest.TestCase):
         self.assertEqual(img["image"]["ref"]["$link"], "bafyblob")
 
 
+def _no_network(testcase):
+    """Make a test hermetic: every publishing command goes through dt.req, so a guard that fails to
+    stop execution publishes for real. Two such failures put `--help` posts in akai's repo on
+    2026-10-16 (3mxyldnupng2c, 3mxylf5vhgg2c), published by the test suite itself."""
+    def fake_req(*a, **k):
+        """Hermetic, but honest about it: the login is allowed (the write path authenticates before
+        it looks at the command), and any other call raises instead of publishing."""
+        url = a[1] if len(a) > 1 else k.get("url", "")
+        if "createSession" in str(url):
+            return (200, {"accessJwt": "test-jwt", "refreshJwt": "test", "did": "did:plc:test",
+                          "handle": "test.example"})
+        raise AssertionError("test made a network call: %s" % str(url)[:90])
+
+    for attr, value in (("req", fake_req),
+                        ("preflight", lambda *a, **k: None),
+                        ("write_blocked", lambda force=False: None),
+                        ("appview_has", lambda uri: False)):
+        old = getattr(dt, attr, None)
+        setattr(dt, attr, value)
+        testcase.addCleanup(lambda attr=attr, old=old: setattr(dt, attr, old))
+
+
 class FlagNotText(unittest.TestCase):
     """A command's text argument is positional: a flag reaching it must not become a post.
 
@@ -1275,8 +1318,8 @@ class FlagNotText(unittest.TestCase):
 
     def test_post_refuses_a_leading_dash(self):
         import io, contextlib
-        old_argv, old_blocked = sys.argv, dt.write_blocked
-        dt.write_blocked = lambda force=False: None
+        _no_network(self)
+        old_argv = sys.argv
         sys.argv = ["dt.py", "post", "--help"]
         buf = io.StringIO()
         try:
@@ -1284,7 +1327,7 @@ class FlagNotText(unittest.TestCase):
                 dt.main()
             self.assertEqual(cm.exception.code, 1)
         finally:
-            sys.argv, dt.write_blocked = old_argv, old_blocked
+            sys.argv = old_argv
         self.assertIn("flag, not a post", buf.getvalue())
 
     def test_help_prints_usage_without_posting(self):
