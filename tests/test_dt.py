@@ -744,6 +744,21 @@ class FeedTarget(unittest.TestCase):
     def test_following_wins_over_everything(self):
         self.assertEqual(dt.feed_target(["--following", "12"]), ("following", None))
 
+    # Added 2026-10-16: the same rule, applied to the argument a model is likeliest to type. A handle
+    # used to be swallowed and the Town tab read in its place (`feed 10 bee.delve.town`), and a word
+    # that was neither a handle nor a URI too.
+    def test_a_handle_reads_that_account(self):
+        self.assertEqual(dt.feed_target(["10", "bee.delve.town"]), ("actor", "bee.delve.town"))
+        self.assertEqual(dt.feed_target(["@bee.delve.town"]), ("actor", "bee.delve.town"))
+
+    def test_a_word_that_is_neither_a_handle_nor_a_uri_is_refused(self):
+        with self.assertRaises(SystemExit):
+            dt.feed_target(["please"])
+
+    def test_two_targets_are_refused_rather_than_resolved_by_order(self):
+        with self.assertRaises(SystemExit):
+            dt.feed_target([dt.TOWN_FEED, "bee.delve.town"])
+
 
 class CanonicalRef(unittest.TestCase):
     """Refs must carry the DID. A handle in a parent ref is a different string from the record's own
@@ -861,6 +876,13 @@ class WriteGuard(unittest.TestCase):
     def test_below_the_limits_is_allowed(self):
         with mock.patch.object(dt, "write_pressure", lambda: (5, 2)):
             self.assertIsNone(dt.write_blocked())
+
+    def test_only_kinds_this_client_writes_are_counted(self):
+        """The ceiling only means something if its set does: `repost` was counted and is not a command
+        this client has, so the "16 writes an hour" line meant something other than what it enforced."""
+        self.assertEqual(dt.GUARDED_KINDS, ("post", "reply", "delete"))
+        for kind in ("repost", "like", "follow"):
+            self.assertNotIn(kind, dt.GUARDED_KINDS)
 
 
 class StallOver(unittest.TestCase):
@@ -1365,44 +1387,20 @@ class RefusalsSpeak(unittest.TestCase):
         self.assertIn("pre-flight", r.stdout)
 
 
-class FeedTarget(unittest.TestCase):
-    """Anything that was not an at:// URI was swallowed and the town feed read in its place, so
-    `feed 10 bee.delve.town` came back as the Town tab: the silent substitution this function's own
-    docstring indicts, applied to the argument a model is most likely to type."""
+class SuiteIntegrity(unittest.TestCase):
+    """A duplicate class name in this file silently drops the earlier class's tests: Python keeps the
+    last definition, so a second `class FeedTarget` replaced the first and its tests stopped running
+    while the suite stayed green and shrank. Found on 2026-10-16 in the change that answered a code
+    review — which is exactly the moment a suite must not quietly cover less than it did before.
+    """
 
-    URI = "at://did:plc:qzqct2rrq4u2gmy5g3mjxske/town.delve.feed.generator/gems"
-
-    def test_no_target_is_the_town_feed(self):
-        self.assertEqual(dt.feed_target([]), ("feed", dt.TOWN_FEED))
-        self.assertEqual(dt.feed_target(["10"]), ("feed", dt.TOWN_FEED))
-
-    def test_a_generator_uri_passes_through(self):
-        self.assertEqual(dt.feed_target(["10", self.URI]), ("feed", self.URI))
-
-    def test_a_handle_reads_that_account(self):
-        self.assertEqual(dt.feed_target(["10", "bee.delve.town"]), ("actor", "bee.delve.town"))
-        self.assertEqual(dt.feed_target(["@bee.delve.town"]), ("actor", "bee.delve.town"))
-
-    def test_a_word_that_is_neither_is_refused(self):
-        with self.assertRaises(SystemExit):
-            dt.feed_target(["please"])
-
-    def test_two_targets_are_refused(self):
-        with self.assertRaises(SystemExit):
-            dt.feed_target([self.URI, "bee.delve.town"])
-
-    def test_following_wins_and_needs_no_target(self):
-        self.assertEqual(dt.feed_target(["--following"]), ("following", None))
-
-
-class WriteGuard(unittest.TestCase):
-    """The ceiling only means something if its set does: `repost` was counted and is not a command this
-    client has, so the "16 writes an hour" line meant something other than what the guard enforced."""
-
-    def test_only_kinds_this_client_writes_are_counted(self):
-        self.assertEqual(dt.GUARDED_KINDS, ("post", "reply", "delete"))
-        for kind in ("repost", "like", "follow"):
-            self.assertNotIn(kind, dt.GUARDED_KINDS)
+    def test_no_two_test_classes_share_a_name(self):
+        import collections, re
+        with open(os.path.join(HERE, "test_dt.py"), encoding="utf-8") as f:
+            src = f.read()
+        names = re.findall(r"^class ([A-Za-z_][A-Za-z0-9_]*)\(unittest\.TestCase\):", src, re.M)
+        dupes = sorted(n for n, c in collections.Counter(names).items() if c > 1)
+        self.assertEqual(dupes, [], "these class names shadow an earlier class's tests: %s" % dupes)
 
 
 if __name__ == "__main__":
