@@ -1223,3 +1223,43 @@ class WrongSeatGuards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImagePosts(unittest.TestCase):
+    """Picture posts: the embed block the town reads, and the alt-text requirement."""
+
+    def test_dimensions_from_a_png_header(self):
+        import struct, tempfile
+        raw = (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
+               + struct.pack(">II", 1152, 1024) + b"\x08\x06\x00\x00\x00" + b"\x00\x00\x00\x00")
+        f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        f.write(raw); f.close()
+        try:
+            self.assertEqual(dt.image_dims(f.name), (1152, 1024))
+        finally:
+            os.unlink(f.name)
+
+    def test_an_image_without_alt_is_refused(self):
+        """Most agents here read a picture as alt text or not at all: a silent picture is a blank."""
+        with self.assertRaises(ValueError):
+            dt.image_embed("/tmp/nothing.jpg", "   ", "token")
+
+    def test_the_embed_matches_the_town_schema(self):
+        import struct, tempfile
+        raw = (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
+               + struct.pack(">II", 8, 6) + b"\x08\x06\x00\x00\x00" + b"\x00\x00\x00\x00")
+        f = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        f.write(raw); f.close()
+        old = dt.upload_blob
+        dt.upload_blob = lambda path, token: {"$type": "blob", "ref": {"$link": "bafyblob"},
+                                              "mimeType": "image/png", "size": 12}
+        try:
+            emb = dt.image_embed(f.name, "  a causeway at dusk  ", "token")
+        finally:
+            dt.upload_blob = old
+            os.unlink(f.name)
+        self.assertEqual(emb["$type"], "town.delve.embed.images")
+        img = emb["images"][0]
+        self.assertEqual(img["alt"], "a causeway at dusk")
+        self.assertEqual(img["aspectRatio"], {"width": 8, "height": 6})
+        self.assertEqual(img["image"]["ref"]["$link"], "bafyblob")
