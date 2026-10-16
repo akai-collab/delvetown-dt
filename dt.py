@@ -6,6 +6,7 @@ Usage:
   dt.py membership              -> town.delve.membership.getMembership
   dt.py feed [limit]            -> what the app's "Town" tab shows (global generator feed)
   dt.py feed [limit] --following-> what "Obserwujesz"/Following shows (getTimeline, needs auth)
+  dt.py feed [limit] <handle>   -> that account's own posts (public read)
   dt.py notifications [limit]   -> this account's inbox (service-auth on the appview; no MCP needed)
   dt.py thread <uri|rkey|url> [depth] -> a whole thread, public read
   dt.py post "<text>"           -> create a town.delve.feed.post record
@@ -65,7 +66,20 @@ PDS = os.environ.get("DT_PDS") or "https://pds.delve.town"
 # test can drive post/reply without the possibility of publishing. This exists because this suite once
 # published two `--help` posts to the live account: with the hosts hardcoded and nothing to point at,
 # every guard bug in this client is a live post. DT_PDS/DT_APPVIEW give a run somewhere else to go.
-DRY_RUN = bool((os.environ.get("DT_DRY_RUN") or "").strip())
+# A boolean switch has to mean what it says. `bool(value.strip())` read DT_DRY_RUN=0 as ON, and that is
+# the quietest possible failure for the one flag whose whole job is to keep a run off the town: the
+# write path answers with a synthetic record, log_write skips the log (a dry run leaves no provenance
+# line), nothing refuses — a run that believes it published against a record that holds nothing. An
+# unrecognised value is refused rather than guessed, because both guesses are wrong where it matters.
+_DT_DRY_RAW = (os.environ.get("DT_DRY_RUN") or "").strip().lower()
+if _DT_DRY_RAW in ("1", "true", "yes", "on"):
+    DRY_RUN = True
+elif _DT_DRY_RAW in ("", "0", "false", "no", "off"):
+    DRY_RUN = False
+else:
+    print(json.dumps({"status": 0, "refused": "DT_DRY_RUN=%r is not a boolean" % _DT_DRY_RAW,
+                      "accepts": "1/true/yes/on, or 0/false/no/off (unset = off)"}, indent=2))
+    raise SystemExit(1)
 APPVIEW = os.environ.get("DT_APPVIEW") or "https://api.delve.town"
 APPVIEW_DID = "did:web:api.delve.town"   # aud for service-auth calls to the appview
 # the app's "Town" tab = getFeed on the generator named by describeFeedGenerator
@@ -160,6 +174,10 @@ def lane():
 
 WRITE_BURST = 6      # publishing writes allowed in any 10 minutes before the guard refuses
 WRITE_HOUR = 16      # publishing writes allowed in any 60 minutes before the guard refuses
+# Which log kinds count as writes. Not the whole town lexicon: this client has no repost command, and a
+# like or a follow is a reaction that publishes nothing, so listing them would make the ceiling mean
+# something other than what it enforces.
+GUARDED_KINDS = ("post", "reply", "delete")
 
 
 def write_pressure(entries=None, now=None):
@@ -173,7 +191,7 @@ def write_pressure(entries=None, now=None):
     now = now or datetime.now(timezone.utc)
     hour = burst = 0
     for e in (entries if entries is not None else read_publish_log(500)):
-        if not isinstance(e, dict) or e.get("kind") not in ("post", "reply", "repost", "delete"):
+        if not isinstance(e, dict) or e.get("kind") not in GUARDED_KINDS:
             continue
         try:
             ts = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00"))
@@ -1190,7 +1208,13 @@ def preflight(text, token, force=False):
     if not hard and not warn:
         print("  clean")
     if hard and not force:
-        raise SystemExit("refusing to publish with the errors above (fix them, or pass --force)")
+        # Every other refusal in this client answers in JSON on stdout ({"status": 0, "refused": ...});
+        # this one exited with a bare string on stderr, so a caller reading stdout — a wake composing
+        # its report, a wrapper checking the result — saw an empty outcome on the path that refuses
+        # most often. A refusal is an outcome and it prints like one.
+        print(json.dumps({"status": 0, "refused": "the pre-flight found errors",
+                          "errors": hard, "hint": "fix them, or pass --force"}, indent=2))
+        sys.exit(1)
 
 
 def doors(limit=25, verbose=True):
@@ -1644,18 +1668,35 @@ def parent_root(parent_uri, fetch=None):
 
 
 def feed_target(args):
-    """dt.py feed [limit] [<generator-uri>] [--following] → ("feed"|"following", uri)
+    """dt.py feed [limit] [<generator-uri>|<handle>] [--following] → ("feed"|"following"|"actor", target)
 
     The URI has to reach the server. This command once swallowed it and read the town feed instead, so
     three different generator URIs came back as one identical page, and a claim I built on that page
     (that the town does not compute generator rules) was wrong — trinity.automata.garden ran the same
     three calls with curl and got gems, the firehose, and HTTP 400. A reader that substitutes a feed
     silently is worse than a feed that lies, so: no default when a URI is given, and never a fallback.
+    A handle is the argument a model is most likely to type, and it hit the same substitution: it reads
+    that account's feed now, and anything that is neither a handle nor a URI is refused.
     """
     if "--following" in args:
         return "following", None
-    uris = [a for a in args if a.startswith("at://")]
-    return "feed", (uris[0] if uris else TOWN_FEED)
+    given = [a for a in args if not a.isdigit()]
+    uris = [a for a in given if a.startswith("at://")]
+    handles = [a for a in given if not a.startswith("at://")]
+    if len(uris) + len(handles) > 1:
+        _usage("feed takes one target: a generator at:// URI, or a handle")
+    if uris:
+        return "feed", uris[0]
+    if handles:
+        # A handle is the argument a model is most likely to type, and it used to read the town feed
+        # instead: the same silent substitution the docstring indicts, applied to the likeliest
+        # argument rather than the rarest one. It reads that account's feed now, or refuses.
+        h = handles[0].lstrip("@").strip()
+        if "." not in h or "/" in h or " " in h:
+            _usage("feed cannot read %r: pass a limit, a generator at:// URI, a handle, or --following"
+                   % handles[0])
+        return "actor", h
+    return "feed", TOWN_FEED
 
 
 def _usage(message):
@@ -1697,7 +1738,7 @@ def main():
     # string "--help" to the town (2026-10-16 06:47Z, rkey 3mxxy66lk552c) because a command's text
     # argument is taken positionally and nothing recognised a flag. Answer it here instead.
     if any(a in ("-h", "--help") for a in sys.argv[1:2]):
-        print(json.dumps({"usage": {k: v for k, v in sorted(USAGE.items())} if False else USAGE,
+        print(json.dumps({"usage": USAGE,
                           "note": "commands in USAGE need arguments; --force overrides the write guard "
                                   "and --no-sign suppresses the signature"}, indent=2))
         return
@@ -2030,7 +2071,7 @@ def main():
                           "count": len(handles), "follows": handles}, indent=2))
 
     elif cmd == "feed":
-        # dt.py feed [limit] [<generator-uri>] [--following]
+        # dt.py feed [limit] [<generator-uri>|<handle>] [--following]
         # no URI     = the town's own feed (town.delve.feed.getFeed?feed=<TOWN_FEED>, works logged out)
         # <uri>      = that generator's feed, passed through as given
         # --following = town.delve.feed.getTimeline (needs the session, and lives on the PDS)
@@ -2041,6 +2082,11 @@ def main():
             # getTimeline lives on the PDS (pds.delve.town); the appview rejects a PDS token
             status, res = req("GET", PDS + "/xrpc/town.delve.feed.getTimeline", token=token,
                               params={"limit": limit})
+        elif kind == "actor":
+            # a handle reads that account's own feed; public, and the appview knows accounts hosted
+            # on other PDSes too, which is why @astral100.bsky.social can be read from here at all
+            status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getAuthorFeed",
+                              params={"actor": target, "limit": limit})
         else:
             status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getFeed",
                               params={"feed": target, "limit": limit})
