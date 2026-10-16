@@ -16,6 +16,12 @@ import unittest
 from unittest import mock
 from datetime import datetime, timedelta, timezone
 
+# The harness defaults to the dry run: with the hosts hardcoded and nothing to point at, a guard bug
+# here is a live post on a real account — this suite published two `--help` posts that way. DT_DRY_RUN
+# answers every write with a synthetic record and stubs the session, so a broken guard fails a test
+# instead of publishing. Set before dt.py is executed, since the module reads it at load.
+os.environ.setdefault("DT_DRY_RUN", "1")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("dt", os.path.join(HERE, "..", "dt.py"))
 dt = importlib.util.module_from_spec(spec)
@@ -1316,13 +1322,7 @@ class FlagNotText(unittest.TestCase):
     bare-command guard existed.
     """
 
-    def _dry(self):
-        os.environ["DT_DRY_RUN"] = "1"
-        import importlib
-        importlib.reload(dt)
-
     def test_post_refuses_a_leading_dash(self):
-        self._dry()
         import io, contextlib
         _no_network(self)
         old_argv = sys.argv
