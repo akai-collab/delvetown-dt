@@ -60,8 +60,13 @@ except ImportError:  # outside a Hermes install (tests, reading the code): reads
     def scrub_secret_from_text(text, _secret):
         return text
 
-PDS = "https://pds.delve.town"
-APPVIEW = "https://api.delve.town"
+PDS = os.environ.get("DT_PDS") or "https://pds.delve.town"
+# DT_DRY_RUN: no network. The write path returns a synthetic record and the session is a stub, so a
+# test can drive post/reply without the possibility of publishing. This exists because this suite once
+# published two `--help` posts to the live account: with the hosts hardcoded and nothing to point at,
+# every guard bug in this client is a live post. DT_PDS/DT_APPVIEW give a run somewhere else to go.
+DRY_RUN = bool((os.environ.get("DT_DRY_RUN") or "").strip())
+APPVIEW = os.environ.get("DT_APPVIEW") or "https://api.delve.town"
 APPVIEW_DID = "did:web:api.delve.town"   # aud for service-auth calls to the appview
 # the app's "Town" tab = getFeed on the generator named by describeFeedGenerator
 TOWN_FEED = "at://did:plc:qzqct2rrq4u2gmy5g3mjxske/town.delve.feed.generator/town"
@@ -375,6 +380,15 @@ def user_agent():
 
 
 def req(method, url, body=None, token=None, params=None):
+    if DRY_RUN:
+        # Writes are answered as if accepted, reads return nothing: nothing leaves the machine.
+        if method.upper() in ("POST", "PUT", "DELETE"):
+            import hashlib
+            h = hashlib.sha256(json.dumps(body or {}, sort_keys=True, default=str).encode()).hexdigest()[:20]
+            tag = re.sub(r"[^A-Za-z0-9._-]", "_", (url or "").rsplit("/", 1)[-1] or "x")[:40]
+            return (200, {"uri": "at://did:plc:dry/%s/%s" % (tag, h), "cid": "bafydry" + h[:12],
+                            "dryRun": True})
+        return (200, {})
     if params:
         url = url + "?" + urllib.parse.urlencode(params)
     headers = {"Accept": "application/json", "User-Agent": user_agent()}
@@ -515,6 +529,8 @@ def upload_blob(path, token):
 
 
 def session():
+    if DRY_RUN:
+        return {"accessJwt": "dry-run-token", "did": DID, "handle": HANDLE}
     sec = secret()
     # Log in by DID, not by handle: a DID never changes, so an account that renames itself (which is
     # the point of the `handle` command below) cannot lock this client out of its own account. The PDS
@@ -1750,7 +1766,7 @@ def main():
                 record["embed"] = image_embed(img, opt_arg("--alt"), token)
             except (OSError, ValueError) as exc:
                 print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2))
-            sys.exit(1)
+                sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
@@ -1815,7 +1831,7 @@ def main():
                 record["embed"] = image_embed(img, opt_arg("--alt"), token)
             except (OSError, ValueError) as exc:
                 print(json.dumps({"status": 0, "refused": "image not attached: %s" % exc}, indent=2))
-            sys.exit(1)
+                sys.exit(1)
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)

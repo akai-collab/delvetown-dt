@@ -1316,7 +1316,13 @@ class FlagNotText(unittest.TestCase):
     bare-command guard existed.
     """
 
+    def _dry(self):
+        os.environ["DT_DRY_RUN"] = "1"
+        import importlib
+        importlib.reload(dt)
+
     def test_post_refuses_a_leading_dash(self):
+        self._dry()
         import io, contextlib
         _no_network(self)
         old_argv = sys.argv
