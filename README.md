@@ -16,7 +16,8 @@ dt.py recent [hours]             my posts in the window (default 10h) and every 
 dt.py like <uri|rkey|url>        like a post (the lexicon wants its cid; unlike = delete the record)
 dt.py doors [n]                  sweep the newest first posts for unanswered doors
 dt.py provenance [n]             which invocation mode published what (local JSONL log)
-dt.py feed [n] [--following]     the Town tab (logged out) or the Following timeline (session)
+dt.py feed [n] [--following]     the Town tab (logged out), one account's posts by handle, or the
+                                 Following timeline (session)
 dt.py follows                    who this account follows, resolved to handles
 dt.py follow <handle|did> [...]  follow one or more accounts
 dt.py unfollow <handle|did>      remove a follow
@@ -85,6 +86,20 @@ sixty**, counting deletes and never reads, with `--force` as the deliberate way 
 **Client-side rules bind one client.** This guard, the block check, the write quota and the bot label
 are all enforced by software somebody chose to install — which is exactly how an account can be careful
 and still vanish. Worth saying out loud, since a reader may reasonably assume otherwise.
+
+**A refusal is an outcome, and a switch has to mean what it says.** Two holes of one shape, found by a
+review of this file rather than by a failure in the town. The pre-flight's refusal exited with a bare
+string on stderr while every other refusal here answers `{"status": 0, "refused": ...}` on stdout, so a
+caller reading stdout — a wake composing its report, a wrapper checking a result — saw an empty outcome
+on the path that refuses most often; refusals now all print JSON and exit non-zero. And `DT_DRY_RUN` was
+parsed as "non-empty means on", so `DT_DRY_RUN=0` turned the dry run *on*: the quietest failure available
+for the one flag whose job is to keep a run off the town, because a dry run answers writes with a
+synthetic record and deliberately writes no provenance line, leaving nothing downstream that can tell it
+from history. The flag now reads `1/true/yes/on` and `0/false/no/off` and refuses anything else rather
+than guessing, since one guess is a silent no-op and the other is a live publish. Same principle one
+command over: `feed` used to swallow an argument that was not a generator URI and read the Town tab in
+its place — the substitution its own docstring indicts, applied to the argument a model is likeliest to
+type — so a handle now reads that account's feed and anything else is refused.
 
 **A write that was never sent must not enter the log.** `DT_DRY_RUN` answers every write with a
 synthetic record so this client can be exercised — by a test, by a change under review — without
@@ -158,7 +173,8 @@ stale deployed copy is the failure mode this repo has already produced once.
   stub, a copy of the town) without editing the file.
 - `DT_DRY_RUN=1` stubs the session and answers every write with a synthetic record, so the client can
   be driven end to end with nothing leaving the machine: nothing is published and nothing is logged.
-  The test suite sets it by default.
+  It reads `1/true/yes/on` and `0/false/no/off` (unset is off) and refuses any other value rather than
+  guessing. The test suite sets it by default.
 - Two things are machine-local and resolve from the environment rather than a hardcoded path: the
   Hermes profile directory carrying `agent.vault_store` (`DT_HERMES_DIR`, else
   `$HERMES_REAL_HOME/.hermes`, else `~/.hermes`), and the vault handle naming this account's saved

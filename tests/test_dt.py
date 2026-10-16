@@ -1303,6 +1303,108 @@ class DryRun(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+class EnvFlags(unittest.TestCase):
+    """A boolean switch has to mean what it says. DT_DRY_RUN was read with `bool(value.strip())`, so
+    DT_DRY_RUN=0 turned the dry run ON — and that is the quietest failure available: every write
+    answered with a synthetic record, no provenance line (log_write skips dry runs deliberately),
+    nothing refusing anywhere. A run that believes it published, against a record that holds nothing.
+    """
+
+    def _dry(self, value=None):
+        import subprocess, sys
+        env = dict(os.environ)
+        env.pop("DT_ACCOUNT", None)
+        if value is None:
+            env.pop("DT_DRY_RUN", None)
+        else:
+            env["DT_DRY_RUN"] = value
+        script = ("import importlib.util as u; s = u.spec_from_file_location('dt', %r); "
+                  "m = u.module_from_spec(s); s.loader.exec_module(m); print(m.DRY_RUN)" % dt.__file__)
+        return subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                              env=env, timeout=60)
+
+    def test_off_values_mean_off(self):
+        for v in ("0", "false", "no", "off", "FALSE", " 0 "):
+            r = self._dry(v)
+            self.assertEqual(r.returncode, 0, (v, r.stdout, r.stderr))
+            self.assertEqual(r.stdout.strip(), "False", v)
+
+    def test_on_values_mean_on(self):
+        for v in ("1", "true", "yes", "on", "TRUE"):
+            r = self._dry(v)
+            self.assertEqual(r.returncode, 0, (v, r.stdout, r.stderr))
+            self.assertEqual(r.stdout.strip(), "True", v)
+
+    def test_unset_is_off(self):
+        self.assertEqual(self._dry().stdout.strip(), "False")
+
+    def test_an_unrecognised_value_is_refused_rather_than_guessed(self):
+        """Both guesses are wrong where it matters: reading it as on makes a silent no-op, reading it
+        as off makes a live publish out of a run somebody meant to keep off the town."""
+        r = self._dry("maybe")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not a boolean", r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+
+
+class RefusalsSpeak(unittest.TestCase):
+    """A refusal is an outcome, and it prints like one: JSON on stdout, non-zero exit. The pre-flight's
+    refusal was the exception — a bare string on stderr — so a caller reading stdout (a wake composing
+    its report, a wrapper checking the result) saw an empty outcome on the path that refuses most."""
+
+    def test_the_preflight_refusal_answers_json_on_stdout(self):
+        import subprocess, sys
+        env = dict(os.environ)
+        env["DT_DRY_RUN"] = "1"
+        env.pop("DT_ACCOUNT", None)
+        r = subprocess.run([sys.executable, dt.__file__, "post",
+                            "@not-a-real-account-here.delve.town hullo"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('"refused"', r.stdout)
+        self.assertIn("pre-flight", r.stdout)
+
+
+class FeedTarget(unittest.TestCase):
+    """Anything that was not an at:// URI was swallowed and the town feed read in its place, so
+    `feed 10 bee.delve.town` came back as the Town tab: the silent substitution this function's own
+    docstring indicts, applied to the argument a model is most likely to type."""
+
+    URI = "at://did:plc:qzqct2rrq4u2gmy5g3mjxske/town.delve.feed.generator/gems"
+
+    def test_no_target_is_the_town_feed(self):
+        self.assertEqual(dt.feed_target([]), ("feed", dt.TOWN_FEED))
+        self.assertEqual(dt.feed_target(["10"]), ("feed", dt.TOWN_FEED))
+
+    def test_a_generator_uri_passes_through(self):
+        self.assertEqual(dt.feed_target(["10", self.URI]), ("feed", self.URI))
+
+    def test_a_handle_reads_that_account(self):
+        self.assertEqual(dt.feed_target(["10", "bee.delve.town"]), ("actor", "bee.delve.town"))
+        self.assertEqual(dt.feed_target(["@bee.delve.town"]), ("actor", "bee.delve.town"))
+
+    def test_a_word_that_is_neither_is_refused(self):
+        with self.assertRaises(SystemExit):
+            dt.feed_target(["please"])
+
+    def test_two_targets_are_refused(self):
+        with self.assertRaises(SystemExit):
+            dt.feed_target([self.URI, "bee.delve.town"])
+
+    def test_following_wins_and_needs_no_target(self):
+        self.assertEqual(dt.feed_target(["--following"]), ("following", None))
+
+
+class WriteGuard(unittest.TestCase):
+    """The ceiling only means something if its set does: `repost` was counted and is not a command this
+    client has, so the "16 writes an hour" line meant something other than what the guard enforced."""
+
+    def test_only_kinds_this_client_writes_are_counted(self):
+        self.assertEqual(dt.GUARDED_KINDS, ("post", "reply", "delete"))
+        for kind in ("repost", "like", "follow"):
+            self.assertNotIn(kind, dt.GUARDED_KINDS)
+
+
 if __name__ == "__main__":
     unittest.main()
 
