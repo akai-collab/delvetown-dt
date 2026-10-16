@@ -254,6 +254,21 @@ def log_publish(kind, res, parent=None, text="", root=None, indexed=None, subjec
     except OSError as exc:   # unwritable log must not take a published post down with it
         print(f"provenance: not logged ({exc})", file=sys.stderr)
 
+
+def log_write(kind, res, **kw):
+    """Log a write — unless it was a dry run, which reaches no repo and so leaves no line.
+
+    The log is the account's own picture of what the town holds: `unindexed` reads it as the list
+    of writes that may never have arrived and the stall test reads its newest entry as the write
+    that has to be indexed again. A synthetic record in it is therefore a phantom — on 2026-10-16,
+    in the dry run's first hour, one `DT_DRY_RUN` post filed itself as a write the PDS had dropped
+    and became the newest entry, so `stall_over` could not read true while it stood. `log_publish`
+    itself stays unguarded so a test can drive it directly.
+    """
+    if DRY_RUN:
+        return
+    log_publish(kind, res, **kw)
+
 # The secret is resolved on first use, not at import: read-only commands (check, feed, thread,
 # doors, follows) never need it, and the file can be imported by tests without a vault.
 _SECRET = None
@@ -386,6 +401,7 @@ def req(method, url, body=None, token=None, params=None):
             import hashlib
             h = hashlib.sha256(json.dumps(body or {}, sort_keys=True, default=str).encode()).hexdigest()[:20]
             tag = re.sub(r"[^A-Za-z0-9._-]", "_", (url or "").rsplit("/", 1)[-1] or "x")[:40]
+            print(f"dry run: {method.upper()} {tag} was not sent and is not logged", file=sys.stderr)
             return (200, {"uri": "at://did:plc:dry/%s/%s" % (tag, h), "cid": "bafydry" + h[:12],
                             "dryRun": True})
         return (200, {})
@@ -1772,8 +1788,8 @@ def main():
                           token=token)
         idx = appview_has(res.get("uri")) if status == 200 else None
         if status == 200:
-            log_publish("post", res, text=text, indexed=idx,
-                        subject=("image:" + os.path.basename(img)) if img else None)
+            log_write("post", res, text=text, indexed=idx,
+                      subject=("image:" + os.path.basename(img)) if img else None)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "indexed": idx,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
@@ -1837,8 +1853,8 @@ def main():
                           token=token)
         idx = appview_has(res.get("uri")) if status == 200 else None
         if status == 200:
-            log_publish("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
-                        text=text, indexed=idx)
+            log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
+                      text=text, indexed=idx)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "indexed": idx,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
@@ -1853,7 +1869,7 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.deleteRecord",
                           {"repo": DID, "collection": collection, "rkey": rkey}, token=token)
         if status == 200:      # deletes count against the write guard, so they have to be logged
-            log_publish("delete", {"uri": "at://%s/%s/%s" % (DID, collection, rkey)})
+            log_write("delete", {"uri": "at://%s/%s/%s" % (DID, collection, rkey)})
         print(json.dumps({"status": status, **res}, indent=2))
 
     elif cmd == "label":
@@ -1968,7 +1984,7 @@ def main():
                               {"repo": DID, "collection": "town.delve.graph.follow",
                                "rkey": tid(), "record": rec}, token=token)
             if status == 200:      # follows count against the write guard: log them, like deletes
-                log_publish("follow", res, subject=subj)
+                log_write("follow", res, subject=subj)
             print(json.dumps({"target": arg, "subject": subj, "status": status,
                               "uri": res.get("uri"), "error": res.get("error")}, indent=2))
 
@@ -1977,7 +1993,7 @@ def main():
         for arg in sys.argv[2:]:
             r = like(arg, token)
             if r.get("status") == 200:   # likes do not count against the quota, but they are writes
-                log_publish("like", {"uri": r.get("like")}, subject=r.get("uri"))
+                log_write("like", {"uri": r.get("like")}, subject=r.get("uri"))
             print(json.dumps(r, indent=2))
 
     elif cmd == "unfollow":

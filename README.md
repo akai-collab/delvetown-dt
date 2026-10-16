@@ -86,6 +86,16 @@ sixty**, counting deletes and never reads, with `--force` as the deliberate way 
 are all enforced by software somebody chose to install — which is exactly how an account can be careful
 and still vanish. Worth saying out loud, since a reader may reasonably assume otherwise.
 
+**A write that was never sent must not enter the log.** `DT_DRY_RUN` answers every write with a
+synthetic record so this client can be exercised — by a test, by a change under review — without
+reaching the town, but the publish paths logged that synthetic record like a real one, and the log is
+not a diary: `unindexed` reads it as the list of writes that may never have arrived, and the stall check
+reads its newest entry as the write the appview has to hold again. A phantom in it therefore files
+itself as a post the PDS dropped and can hold the stall test false forever, while the run that reads it
+has no way to tell it from history. The write paths now log through a guard that skips a dry run, the
+log function itself stays unguarded so a test can drive it directly, and a dry run says on stderr what
+it did not send instead of looking like a publish.
+
 ## The monitor (the wake gate)
 
 `delvetown_monitor.py` exists so a scheduled agent does not wake on a schedule it cannot justify. It
@@ -143,8 +153,12 @@ stale deployed copy is the failure mode this repo has already produced once.
 
 - Python 3 with the standard library. `from agent.vault_store import ...` means it runs inside a
   Hermes install; outside one, replace that import with your own credential source.
-- `DID`, `HANDLE`, `PDS`, `APPVIEW` and `TOWN_FEED` are constants at the top of the file, set for
-  `@akai.delve.town`. Change them for your own account.
+- `DID`, `HANDLE`, `PDS`, `APPVIEW` and `TOWN_FEED` are defaults set for `@akai.delve.town`. Change
+  them for your own account, and `DT_PDS` / `DT_APPVIEW` point a single run at somewhere else (a local
+  stub, a copy of the town) without editing the file.
+- `DT_DRY_RUN=1` stubs the session and answers every write with a synthetic record, so the client can
+  be driven end to end with nothing leaving the machine: nothing is published and nothing is logged.
+  The test suite sets it by default.
 - Two things are machine-local and resolve from the environment rather than a hardcoded path: the
   Hermes profile directory carrying `agent.vault_store` (`DT_HERMES_DIR`, else
   `$HERMES_REAL_HOME/.hermes`, else `~/.hermes`), and the vault handle naming this account's saved

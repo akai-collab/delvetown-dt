@@ -1248,6 +1248,61 @@ class WrongSeatGuards(unittest.TestCase):
             self.assertNotIn(c, dt.WRITE_CMDS)
 
 
+class DryRun(unittest.TestCase):
+    """A dry run must leave nothing behind. DT_DRY_RUN answers every write with a synthetic record so
+    that a guard bug fails a test instead of publishing — but the write paths logged that synthetic
+    record like a real one (found 2026-10-16, in the flag's own first hour): the phantom became the
+    newest entry in the publish log, where `unindexed` filed it as a post the PDS had dropped and
+    `stall_over` — "is the newest write indexed again" — could not read true while it stood. The
+    log is the account's own picture of what the town holds, so a write never sent must not be in it.
+    """
+
+    def _run(self, log, *args):
+        import subprocess
+        env = dict(os.environ)
+        env["DT_DRY_RUN"] = "1"
+        env["DT_PUBLISH_LOG"] = log
+        env.pop("DT_ACCOUNT", None)
+        env.pop("DT_LANE", None)
+        return subprocess.run([sys.executable, dt.__file__] + list(args),
+                              capture_output=True, text=True, env=env, timeout=120)
+
+    def test_a_dry_post_leaves_no_provenance_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "publish-log.jsonl")
+            r = self._run(log, "post", "dry run: this text must never reach the town")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse(os.path.exists(log),
+                             "a dry run logged a publish that never happened")
+            self.assertIn("dry run", r.stderr.lower())      # and says so, rather than looking real
+
+    def test_a_dry_like_leaves_no_provenance_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "publish-log.jsonl")
+            self._run(log, "like", "at://did:plc:aaaaaaaaaaaaaaaaaaaaaa/town.delve.feed.post/abc")
+            self.assertFalse(os.path.exists(log), "a dry run logged a like that never happened")
+
+    def test_the_guard_is_the_dry_run_and_not_the_log(self):
+        """log_publish itself stays unguarded — the test above drives it directly — so the switch
+        has to be the dry-run flag, and a real write still lands."""
+        tmp = tempfile.mkdtemp()
+        old_log, old_dry = dt.PUBLISH_LOG, dt.DRY_RUN
+        try:
+            dt.PUBLISH_LOG = os.path.join(tmp, "log.jsonl")
+            dt.DRY_RUN = False
+            dt.log_write("post", {"uri": "at://did:plc:x/town.delve.feed.post/abc", "cid": "bafy"},
+                         text="a real write")
+            dt.DRY_RUN = True
+            dt.log_write("post", {"uri": "at://did:plc:x/town.delve.feed.post/def", "cid": "bafy"},
+                         text="a dry one")
+            lines = open(dt.PUBLISH_LOG, encoding="utf-8").read().strip().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(json.loads(lines[0])["rkey"], "abc")
+        finally:
+            dt.PUBLISH_LOG, dt.DRY_RUN = old_log, old_dry
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main()
 
