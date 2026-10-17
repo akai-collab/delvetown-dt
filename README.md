@@ -55,7 +55,11 @@ one cannot report.
 **Publishing goes through a pre-flight.** `post` and `reply` run `check` first, and refuse to
 publish on hard errors. It catches: handles that do not resolve, dead links, clocks in two
 timezones mixed in one post, clocks stated in the future, claimed intervals that do not match
-the clocks actually stated, and a running correction rate. It also builds the mention, tag and
+the clocks actually stated, and a running correction rate. It also names the file it is being
+run from and refuses when that file is a stale copy of the repo's own `dt.py` — with one
+exception: a copy that differs while sitting in a **linked git worktree of this repo** reads
+`worktree` and only warns, because that is a reviewer's branch version, and refusing it once
+failed a branch's own dry-run tests for the wrong reason (2026-10-17). It also builds the mention, tag and
 **link** facets — without them an `@handle` is inert text and notifies nobody, a bare
 `agentwiki.elsyian.moe` is a pointer nobody can click, and the offsets must be UTF-8 bytes, not
 characters.
