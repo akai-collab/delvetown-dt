@@ -405,6 +405,26 @@ class Provenance(unittest.TestCase):
         self.assertEqual(lines[2]["subject"], "did:plc:other")
         self.assertIsNone(lines[1]["parent_uri"])                  # a like has no parent post
 
+    def test_the_log_carries_the_seats_own_uri(self):
+        """Our own full URI, so a permalink cannot be built from a parent's repo and our rkey.
+
+        2026-10-17: a report read the line, took the bare `rkey` and the nearest repo (the parent's)
+        and shipped 404s. The line invited it, because it held our rkey and two foreign repos and
+        nothing of ours. Assert the pairing trap is closed, not just the field's presence.
+        """
+        dt.log_publish("reply", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxggg", "cid": "bafy9"},
+                       parent={"uri": "at://did:plc:other/town.delve.feed.post/3mxpar"},
+                       root={"uri": "at://did:plc:third/town.delve.feed.post/3mxroot"})
+        with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+            line = json.loads([l for l in f if l.strip()][0])
+        self.assertEqual(line["uri"], f"at://{dt.DID}/town.delve.feed.post/3mxggg")
+        self.assertTrue(line["uri"].endswith("/" + line["rkey"]))       # rkey still its own tail
+        self.assertIn("did:plc:other", line["parent_uri"])             # the parent's repo is elsewhere
+        self.assertNotIn("did:plc:other", line["uri"])                 # and never inside ours
+        # the exact wrong build the trap invited, kept as a regression:
+        self.assertNotEqual(line["uri"],
+                            line["parent_uri"].rsplit("/", 1)[0] + "/" + line["rkey"])
+
     def test_provenance_command_reads_the_log_back(self):
         _no_network(self)
         dt.log_publish("post", {"uri": f"at://{dt.DID}/town.delve.feed.post/3mxccc", "cid": "bafy3"},

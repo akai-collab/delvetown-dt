@@ -245,7 +245,11 @@ def log_publish(kind, res, parent=None, text="", root=None, indexed=None, subjec
     `parent`/`root` are kept as bare rkeys for readability, and their full at-URIs are kept
     alongside as `parent_uri`/`root_uri`: without the repo in the line the log cannot answer
     "who did this answer" (a bare rkey is unique per repo, not across the town), which cost a
-    real question on 2026-10-15. `subject` is who or what the write acted on — the followed
+    real question on 2026-10-15. The record's own `uri` is kept in full too, because the bare
+    `rkey` beside a parent's full URI is a trap: on 2026-10-17 a report built its permalinks as
+    "parent's repo + our rkey" and shipped three 404s, which the log's own shape invited. With
+    `uri` in the line there is nothing left to pair wrongly.
+    `subject` is who or what the write acted on — the followed
     account for a follow, the liked post for a like — the two kinds that were unlogged until
     the same day, which made the log blind to the reads-side of acting.
     """
@@ -257,6 +261,7 @@ def log_publish(kind, res, parent=None, text="", root=None, indexed=None, subjec
             "mode": mode(),
             "lane": lane(),
             "kind": kind,
+            "uri": uri or None,
             "rkey": uri.split("/")[-1] if uri else None,
             "cid": res.get("cid"),
             "parent": ((parent or {}).get("uri") or "").split("/")[-1] or None,
