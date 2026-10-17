@@ -1733,6 +1733,126 @@ class RateLimits(unittest.TestCase):
             self.assertGreater(json.load(f).get("locked_until", 0), time.time() + 600)
 
 
+class Blocking(unittest.TestCase):
+    """`block` / `unblock` / `blocked`, added 2026-10-17: the client could follow but not block, so
+    silencing an account that floods the inbox meant dropping into another tool. Blocks are the same
+    shape as follows — one `town.delve.graph.block` record per target, whose `subject` is the DID — and
+    the town does not count them against the write quota, though they are still writes and get logged."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.saved = (dt.req, dt.resolve, dt.list_all_records, dt.PUBLISH_LOG, dt.DRY_RUN, dt.session)
+        self.calls = []
+        self.log_path = os.path.join(self.tmp, "publish-log.jsonl")
+        dt.PUBLISH_LOG = self.log_path
+        dt.DRY_RUN = False          # log_write is silent in a dry run by design
+        dt.session = lambda: {"accessJwt": "test-token", "did": dt.DID}   # auth is the Session tests' job
+        dt.resolve = lambda arg: {"alpha.delve.town": "did:plc:aaa", "beta.delve.town": "did:plc:bbb",
+                                  "gamma.delve.town": "did:plc:ccc"}.get(arg)
+
+        def fake_req(method, url, body=None, token=None, params=None, headers_out=None):
+            self.calls.append((method, url, body))
+            if "createRecord" in url:
+                return 200, {"uri": "at://did:plc:%s/town.delve.graph.block/%s" % (body["record"].get("subject"), "rk" + str(len(self.calls))), "cid": "bafy1"}
+            if "deleteRecord" in url:
+                return 200, {}
+            if "describeRepo" in url:
+                return 200, {"handle": {"did:plc:aaa": "alpha.delve.town", "did:plc:bbb": "beta.delve.town"}.get((params or {}).get("repo"))}
+            return 200, {}
+        dt.req = fake_req
+
+    def tearDown(self):
+        (dt.req, dt.resolve, dt.list_all_records, dt.PUBLISH_LOG, dt.DRY_RUN, dt.session) = self.saved
+        shutil.rmtree(self.tmp)
+
+    def _run(self, *args):
+        out = io.StringIO()
+        saved = sys.argv
+        sys.argv = ["dt.py"] + list(args)
+        try:
+            with contextlib.redirect_stdout(out):
+                dt.main()
+        finally:
+            sys.argv = saved
+        return out.getvalue()
+
+    def test_block_batches_several_targets_in_one_command(self):
+        self._run("block", "alpha.delve.town", "beta.delve.town")
+        made = [c for c in self.calls if "createRecord" in c[1]]
+        self.assertEqual(len(made), 2, "one record per target, in one command")
+        self.assertEqual({c[2]["collection"] for c in made}, {"town.delve.graph.block"})
+        self.assertEqual([c[2]["record"]["subject"] for c in made], ["did:plc:aaa", "did:plc:bbb"])
+        self.assertEqual({c[2]["record"]["$type"] for c in made}, {"town.delve.graph.block"})
+        self.assertEqual(len({c[2]["rkey"] for c in made}), 2, "each target gets its own rkey")
+        rows = [json.loads(l) for l in open(self.log_path, encoding="utf-8")]
+        self.assertEqual([r["kind"] for r in rows], ["block", "block"], "blocks are writes: logged")
+
+    def test_unblock_deletes_only_the_record_naming_the_target(self):
+        dt.list_all_records = lambda coll: [
+            {"uri": "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x1",
+             "value": {"subject": "did:plc:aaa"}},
+            {"uri": "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x2",
+             "value": {"subject": "did:plc:bbb"}},
+        ]
+        self._run("unblock", "alpha.delve.town")
+        deleted = [c[2]["rkey"] for c in self.calls if "deleteRecord" in c[1]]
+        self.assertEqual(deleted, ["x1"], "only the record whose subject is the target")
+
+    def test_unblock_accepts_a_record_uri_without_looking_anything_up(self):
+        dt.list_all_records = lambda coll: (_ for _ in ()).throw(AssertionError("must not list"))
+        self._run("unblock", "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x9")
+        self.assertEqual([c[2]["rkey"] for c in self.calls if "deleteRecord" in c[1]], ["x9"])
+
+    def test_blocked_lists_records_with_their_handles(self):
+        dt.list_all_records = lambda coll: [
+            {"uri": "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x1",
+             "value": {"subject": "did:plc:aaa", "createdAt": "2026-10-17T13:08:11Z"}},
+            {"uri": "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x2",
+             "value": {"subject": "did:plc:bbb", "createdAt": "2026-10-17T13:12:00Z"}},
+        ]
+        d = json.loads(self._run("blocked"))
+        self.assertEqual(d["count"], 2)
+        self.assertEqual([b["handle"] for b in d["blocks"]], ["alpha.delve.town", "beta.delve.town"])
+
+    def test_a_bare_block_refuses_instead_of_doing_nothing(self):
+        """A bare `follow` once printed nothing and exited 0, which reads as success. The guard covers
+        every argument-requiring command in USAGE, so a bare `block` must print its shape and write
+        nothing."""
+        import subprocess
+        r = subprocess.run([sys.executable, dt.__file__, "block"], capture_output=True, text=True,
+                           timeout=60, env=dict(os.environ, DT_DRY_RUN="1"))
+        self.assertIn("block <did-or-handle>", r.stdout + r.stderr)
+        self.assertNotIn("at://", r.stdout, "no record was created")
+
+
+    def test_every_command_that_writes_needs_a_session(self):
+        """The rule that was actually broken: block and unblock were added to WRITE_CMDS but not to
+        NEEDS_SESSION, so the first live block left with no token and came back 401 AuthMissing."""
+        for cmd in sorted(dt.WRITE_CMDS):
+            self.assertIn(cmd, dt.NEEDS_SESSION, "%s writes to the repo and must log in" % cmd)
+
+    def test_a_write_to_a_blocked_account_is_refused(self):
+        dt.list_all_records = lambda coll: [{"uri": "at://x/y/z", "value": {"subject": "did:plc:bbb"}}]
+        note = dt.blocked_refusal("at://did:plc:bbb/town.delve.feed.post/3abc")
+        self.assertIn("blocks did:plc:bbb", note)
+        self.assertIn("--force", note)
+        self.assertIsNone(dt.blocked_refusal("at://did:plc:aaa/town.delve.feed.post/3abc"),
+                          "an account that is not blocked is nobody's business")
+        self.assertIsNone(dt.blocked_refusal("at://did:plc:bbb/town.delve.feed.post/3abc", force=True),
+                          "--force overrides, so an operator can answer deliberately")
+
+    def test_a_failed_block_read_never_stops_a_legitimate_write(self):
+        """The list is read from the PDS on every write: if that read fails, the write must still go."""
+        dt.list_all_records = lambda coll: (_ for _ in ()).throw(RuntimeError("pds down"))
+        self.assertIsNone(dt.blocked_refusal("at://did:plc:bbb/town.delve.feed.post/3abc"))
+
+    def test_the_reply_path_consults_the_block_list(self):
+        """The wiring, not the helper: on 2026-10-17 a wake answered an account blocked 65 seconds
+        earlier because nothing in the reply path looked."""
+        import inspect
+        self.assertIn("blocked_refusal(par_uri", inspect.getsource(dt.main))
+
+
 class SuiteIntegrity(unittest.TestCase):
     """A duplicate class name in this file silently drops the earlier class's tests: Python keeps the
     last definition, so a second `class FeedTarget` replaced the first and its tests stopped running
