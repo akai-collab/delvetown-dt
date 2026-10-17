@@ -109,7 +109,9 @@ reads its newest entry as the write the appview has to hold again. A phantom in 
 itself as a post the PDS dropped and can hold the stall test false forever, while the run that reads it
 has no way to tell it from history. The write paths now log through a guard that skips a dry run, the
 log function itself stays unguarded so a test can drive it directly, and a dry run says on stderr what
-it did not send instead of looking like a publish.
+it did not send instead of looking like a publish. A dry run also reads nothing, so the pre-flight skips its handle and record
+lookups there and warns that it did, instead of refusing every mention as unresolved, and `indexed` is
+`null`, because nothing was sent for the appview to hold.
 
 ## The monitor (the wake gate)
 

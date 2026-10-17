@@ -1051,6 +1051,16 @@ def check_text(text, token=None, verbose=True, online=True):
     """
     hard, warn = [], []
 
+    # A dry run reads nothing, so every lookup below would come back empty and file a real handle as a
+    # typo: a dry run could not exercise a post with a mention in it, which is the post most worth
+    # exercising. Skip the lookups and say so, rather than refusing on an answer nobody gave.
+    if online and DRY_RUN:
+        unchecked = (len(set(HANDLE_RE.findall(text))) + len(set(ATURI_RE.findall(text)))
+                     + len(set(POSTLINK_RE.findall(text))))
+        if unchecked:
+            warn.append(f"dry run: {unchecked} handle(s)/record link(s) not checked (no network)")
+        online = False
+
     for h in (sorted(set(HANDLE_RE.findall(text))) if online else []):
         if not _resolve_any(h):
             hard.append(f"unresolved handle @{h} — typo, or the account does not exist")
@@ -1668,7 +1678,7 @@ def parent_root(parent_uri, fetch=None):
 
 
 def feed_target(args):
-    """dt.py feed [limit] [<generator-uri>|<handle>] [--following] → ("feed"|"following"|"actor", target)
+    """dt.py feed [limit] [<generator-uri>|<handle>|<did>] [--following] → ("feed"|"following"|"actor", target)
 
     The URI has to reach the server. This command once swallowed it and read the town feed instead, so
     three different generator URIs came back as one identical page, and a claim I built on that page
@@ -1680,7 +1690,8 @@ def feed_target(args):
     """
     if "--following" in args:
         return "following", None
-    given = [a for a in args if not a.isdigit()]
+    # flags (--force, --no-sign) are the caller's business, not a target; main() reads the limit
+    given = [a for a in args if not a.isdigit() and not a.startswith("--")]
     uris = [a for a in given if a.startswith("at://")]
     handles = [a for a in given if not a.startswith("at://")]
     if len(uris) + len(handles) > 1:
@@ -1692,6 +1703,8 @@ def feed_target(args):
         # instead: the same silent substitution the docstring indicts, applied to the likeliest
         # argument rather than the rarest one. It reads that account's feed now, or refuses.
         h = handles[0].lstrip("@").strip()
+        if h.startswith("did:"):       # a DID names an account as well as a handle does
+            return "actor", h
         if "." not in h or "/" in h or " " in h:
             _usage("feed cannot read %r: pass a limit, a generator at:// URI, a handle, or --following"
                    % handles[0])
@@ -1827,7 +1840,8 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
-        idx = appview_has(res.get("uri")) if status == 200 else None
+        # a dry run sent nothing, so there is nothing for the appview to hold: null, not false
+        idx = appview_has(res.get("uri")) if status == 200 and not DRY_RUN else None
         if status == 200:
             log_write("post", res, text=text, indexed=idx,
                       subject=("image:" + os.path.basename(img)) if img else None)
@@ -1892,7 +1906,8 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
-        idx = appview_has(res.get("uri")) if status == 200 else None
+        # a dry run sent nothing, so there is nothing for the appview to hold: null, not false
+        idx = appview_has(res.get("uri")) if status == 200 and not DRY_RUN else None
         if status == 200:
             log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
                       text=text, indexed=idx)
@@ -2024,7 +2039,7 @@ def main():
             status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                               {"repo": DID, "collection": "town.delve.graph.follow",
                                "rkey": tid(), "record": rec}, token=token)
-            if status == 200:      # follows count against the write guard: log them, like deletes
+            if status == 200:      # a follow is a write, so it is logged; GUARDED_KINDS leaves it out of the quota
                 log_write("follow", res, subject=subj)
             print(json.dumps({"target": arg, "subject": subj, "status": status,
                               "uri": res.get("uri"), "error": res.get("error")}, indent=2))
@@ -2075,8 +2090,9 @@ def main():
         # no URI     = the town's own feed (town.delve.feed.getFeed?feed=<TOWN_FEED>, works logged out)
         # <uri>      = that generator's feed, passed through as given
         # --following = town.delve.feed.getTimeline (needs the session, and lives on the PDS)
-        rest = [a for a in sys.argv[2:] if not a.startswith("--")]
-        limit = int(rest[0]) if rest and rest[0].isdigit() else 20
+        # the limit is whichever argument is a number, before or after the target
+        nums = [a for a in sys.argv[2:] if a.isdigit()]
+        limit = int(nums[0]) if nums else 20
         kind, target = feed_target(sys.argv[2:])
         if kind == "following":
             # getTimeline lives on the PDS (pds.delve.town); the appview rejects a PDS token
