@@ -448,9 +448,15 @@ def req(method, url, body=None, token=None, params=None, headers_out=None):
             headers_out.update({k.lower(): v for k, v in (e.headers or {}).items()})
         raw = e.read().decode("utf-8", "replace")
         try:
-            return e.code, json.loads(raw)
+            payload = json.loads(raw)
         except ValueError:
-            return e.code, {"raw": raw[:300]}
+            payload = {"raw": raw[:300]}
+        if (e.code == 429 and method.upper() != "GET" and url.startswith(PDS)
+                and "createSession" not in url):
+            # A write's 429 is the login's budget one endpoint over: refuse, and never let a retry loop
+            # hold the bucket at zero. createSession keeps its own message, below session().
+            _rate_limited(url.rsplit(".", 1)[-1], e.headers, payload)
+        return e.code, payload
 
 
 def sig_live(name, until, now=None):
@@ -651,6 +657,39 @@ class _session_lock:
             self.f.close()
 
 
+def _rate_limited(scope, headers=None, body=None, until=None):
+    """A 429 from the PDS on anything but a login: say when it lifts, in JSON, and stop.
+
+    Only the login handled this at first (2026-10-17), so a write-rate 429 took the generic error path,
+    and a run that retries spends the very budget it is waiting for — which is how one seat held its own
+    bucket at zero for sixteen hours. The lockout is written to the session cache, so later runs refuse
+    locally instead of asking the PDS again.
+    """
+    hdrs = {str(k).lower(): v for k, v in (headers or {}).items()}
+    retry = 0
+    for k in ("retry-after", "retry_after"):
+        try:
+            retry = int(float(hdrs.get(k) or 0))
+        except (TypeError, ValueError):
+            retry = 0
+        if retry:
+            break
+    retry = max(retry, 60)
+    until = until or (time.time() + retry)
+    c = _read_session_cache()
+    if c.get("did") == DID:
+        _write_session_cache(dict(c, locked_until=until))
+    stamp = datetime.fromtimestamp(until, timezone.utc).isoformat().replace("+00:00", "Z")
+    print(json.dumps({"status": 0, "refused": "the PDS is rate-limiting this account",
+                      "scope": scope or "unknown",
+                      "retry_after_s": max(0, int(until - time.time())),
+                      "until": stamp, "until_local": _local(stamp),
+                      "error": (body or {}).get("error"),
+                      "why": "do not retry: asking again spends the budget the reset is waiting on, and "
+                             "this lockout is remembered locally so the next run will not ask"}, indent=2))
+    raise SystemExit(1)
+
+
 def _login_refused(until, retry_after, body=None):
     """A login the PDS has refused for a while: say until when, in JSON, and exit — and do not ask again
     before then. A run that retries a 429 spends nothing it can get back and keeps the bucket at zero."""
@@ -693,6 +732,9 @@ def session():
         locked = c.get("login_locked_until") or 0
         if now < locked:
             _login_refused(locked, locked - now)
+        held = c.get("locked_until") or 0          # a write's 429 locks the same bucket
+        if now < held:
+            _rate_limited("any", None, None, until=held)
         # 4. log in. By DID, not by handle: a DID never changes, so an account that renames itself (the
         # point of the `handle` command) cannot lock this client out of its own account.
         sec = secret()
@@ -1313,7 +1355,8 @@ def script_identity(repo=None, path=None):
     The skill's `scripts/dt.py` is a symlink to `~/repos/delvetown-dt/dt.py`. Twice now that link
     has been replaced by a real, stale copy — and because publishing through a stale copy is silent
     (a change went out with no link facets, 2026-10-13), the pre-flight names the running file.
-    Returns (resolved_path, verdict, detail) with verdict in {"ok", "stale", "unknown"}.
+    Returns (resolved_path, verdict, detail) with verdict in {"ok", "copy", "worktree", "stale",
+    "unknown"}.
     """
     invoked = path or __file__
     resolved = os.path.realpath(invoked)
@@ -1337,7 +1380,41 @@ def script_identity(repo=None, path=None):
         return resolved, "copy", (f"matches {canonical} right now, but this is a real copy at {invoked}; "
                                   f"a skill write re-materialises it as a copy and a copy drifts — relink with "
                                   f"ln -sfn {canonical} <skill>/scripts/dt.py")
+    if _in_worktree_of(invoked, repo):
+        # A reviewer branches into a git worktree: its dt.py is a *different version on purpose*, not a
+        # stale copy, and a stale-copy refusal there fails the branch's own tests for the wrong reason.
+        return resolved, "worktree", (f"differs from {canonical} but sits in a linked worktree of it "
+                                      f"({shape} at {invoked}) — a reviewer's copy, not a stale one")
     return resolved, "stale", f"differs from {canonical} — this is a stale copy ({shape} at {invoked})"
+
+
+def _in_worktree_of(path, repo):
+    """Is `path` inside a linked git worktree of `repo`? A worktree's `.git` is a file naming the parent.
+
+    Walked upward a few levels, because a reviewer may put the file in a subdirectory; a real `.git`
+    directory means a checkout in its own right, so it is not ours to bless.
+    """
+    want = os.path.realpath(os.path.join(repo, ".git")) + os.sep
+    d = os.path.dirname(os.path.realpath(path))
+    for _ in range(6):
+        g = os.path.join(d, ".git")
+        if os.path.isdir(g):
+            return False
+        if os.path.isfile(g):
+            try:
+                with open(g, encoding="utf-8") as f:
+                    first = f.readline().strip()
+            except OSError:
+                return False
+            if not first.startswith("gitdir:"):
+                return False
+            target = os.path.realpath(os.path.join(d, first.split(":", 1)[1].strip()))
+            return target.startswith(want)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+    return False
 
 
 def preflight(text, token, force=False):
