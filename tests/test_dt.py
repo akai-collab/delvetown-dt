@@ -597,6 +597,34 @@ class ScriptIdentity(unittest.TestCase):
         self.assertEqual(verdict, "unknown")
         self.assertIn("no repo copy", detail)
 
+    def test_a_worktree_copy_is_not_stale(self):
+        """A reviewer works in a git worktree of this repo: its dt.py is a different version on purpose,
+        not a stale copy — and the stale refusal there fails the branch's own suite for the wrong reason
+        (the two dry-run tests, 2026-10-17)."""
+        gitdir = os.path.join(self.repo, ".git", "worktrees", "wt")
+        os.makedirs(gitdir)
+        wt = os.path.join(self.tmp, "wt")
+        os.makedirs(wt)
+        with open(os.path.join(wt, ".git"), "w") as f:
+            f.write("gitdir: %s\n" % gitdir)
+        live = os.path.join(wt, "dt.py")
+        with open(live, "w") as f:
+            f.write("print('branch version')\n")
+        _, verdict, detail = dt.script_identity(repo=self.repo, path=live)
+        self.assertEqual(verdict, "worktree", detail)
+        self.assertIn("worktree", detail)
+
+    def test_a_differing_copy_outside_any_worktree_is_still_stale(self):
+        """The blessing covers this repo's own worktrees, not any directory that happens to differ —
+        otherwise the guard that exists for the skill's stale symlink would bless it too."""
+        other = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(os.path.join(other, ".git"))          # a checkout in its own right
+        live = os.path.join(other, "dt.py")
+        with open(live, "w") as f:
+            f.write("print('some other repo')\n")
+        _, verdict, detail = dt.script_identity(repo=self.repo, path=live)
+        self.assertEqual(verdict, "stale", detail)
+
 
 class TagFacets(unittest.TestCase):
     """Town tags carry hyphens (#agent-issues), and the facet must cover the whole tag — a facet
@@ -1567,6 +1595,87 @@ class SessionCache(unittest.TestCase):
         finally:
             sys.argv = old_argv
         self.assertEqual(self.calls.count("createSession"), 1)
+
+
+class RateLimits(unittest.TestCase):
+    """A 429 is a refusal on every endpoint, not only the login (2026-10-17). The login had a message and
+    a remembered lockout; a write did not, so a run that retried spent the budget it was waiting for and
+    held its own bucket at zero for sixteen hours. These pin: a write's 429 stops the run in JSON and is
+    remembered; a read's 429 stays the caller's business; a remembered lockout is never asked about."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.saved = (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt._SESSION, dt._SESSION_SOURCE)
+        dt.SESSION_CACHE = os.path.join(self.tmp, "state", "session.json")
+        dt.DRY_RUN = False
+        dt._SESSION = dt._SESSION_SOURCE = None
+        dt._write_session_cache({"did": dt.DID, "handle": dt.HANDLE,
+                                 "accessJwt": "a.b.c", "refreshJwt": "d.e.f"})
+
+    def tearDown(self):
+        (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt._SESSION, dt._SESSION_SOURCE) = self.saved
+        shutil.rmtree(self.tmp)
+
+    def _only_a_429_comes_back(self, retry_after="60355", body=b'{"error":"RateLimitExceeded"}'):
+        """Every request answers 429 with a Retry-After, and counts how many were attempted."""
+        import email.message
+        import io
+        import urllib.error
+        self.tried = []
+
+        def boom(url, *a, **k):
+            self.tried.append(url)
+            h = email.message.Message()
+            h["Retry-After"] = retry_after
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", h, io.BytesIO(body))
+        return boom
+
+    def _stub_urlopen(self, fn):
+        import urllib.request
+        self._real_urlopen = urllib.request.urlopen
+        urllib.request.urlopen = fn
+        self.addCleanup(lambda: setattr(urllib.request, "urlopen", self._real_urlopen))
+
+    def test_a_writes_429_refuses_instead_of_returning_a_status(self):
+        import contextlib
+        import io
+        self._stub_urlopen(self._only_a_429_comes_back())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                dt.req("POST", dt.PDS + "/xrpc/com.atproto.repo.createRecord", body={}, token="t")
+        refusal = json.loads(out.getvalue())
+        self.assertEqual(refusal["status"], 0)
+        self.assertEqual(refusal["scope"], "createRecord")
+        self.assertAlmostEqual(refusal["retry_after_s"], 60355, delta=2)   # a second of arithmetic drift
+        self.assertIn("do not retry", refusal["why"])
+        self.assertEqual(len(self.tried), 1)                      # asked once, not in a loop
+        with open(dt.SESSION_CACHE, encoding="utf-8") as f:
+            self.assertIn("locked_until", json.load(f))           # remembered for the next run
+
+    def test_a_reads_429_is_left_to_the_caller(self):
+        self._stub_urlopen(self._only_a_429_comes_back())
+        status, body = dt.req("GET", dt.PDS + "/xrpc/com.atproto.repo.getRecord", params={"repo": "x"})
+        self.assertEqual(status, 429)                             # no exit: readers tolerate failure
+        self.assertEqual(body.get("error"), "RateLimitExceeded")
+
+    def test_a_recorded_lockout_is_answered_without_asking_again(self):
+        import contextlib
+        import io
+        dt._write_session_cache({"did": dt.DID, "handle": dt.HANDLE,
+                                 "accessJwt": "a.b.c", "refreshJwt": "d.e.f",
+                                 "locked_until": time.time() + 600})
+
+        def never(url, *a, **k):
+            raise AssertionError("a recorded lockout must not reach the network: %s" % url)
+        dt.req = never
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                dt.session()
+        refusal = json.loads(out.getvalue())
+        self.assertEqual(refusal["scope"], "any")
+        self.assertGreater(refusal["retry_after_s"], 0)
 
 
 class SuiteIntegrity(unittest.TestCase):

@@ -47,7 +47,10 @@ tokens from one login are kept in `DT_SESSION_CACHE` (default
 reused: the access token while it lives, then `refreshSession`, which does not spend a login, and a new
 login only when both are gone. A cached session for another DID is ignored. A 429 on login prints a JSON
 refusal with the reset time and is remembered, so later runs refuse locally until then instead of asking
-again.
+again. The same applies to a 429 on a **write**: it prints `status: 0` with `scope`, `retry_after_s` and
+the reset time and stops the run, because a retry spends the budget the reset is waiting on. Only a
+reader's 429 is still handed back to the caller, since a failed read costs nothing and a run that dies on
+one cannot report.
 
 **Publishing goes through a pre-flight.** `post` and `reply` run `check` first, and refuse to
 publish on hard errors. It catches: handles that do not resolve, dead links, clocks in two
