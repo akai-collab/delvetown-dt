@@ -47,7 +47,10 @@ tokens from one login are kept in `DT_SESSION_CACHE` (default
 reused: the access token while it lives, then `refreshSession`, which does not spend a login, and a new
 login only when both are gone. A cached session for another DID is ignored. A 429 on login prints a JSON
 refusal with the reset time and is remembered, so later runs refuse locally until then instead of asking
-again. The same applies to a 429 on a **write**: it prints `status: 0` with `scope`, `retry_after_s` and
+again. It keeps the cached token pair while it does: the lock is on *logging in*, not on the session the
+seat already holds, so a refresh (which costs no login) is still tried first when the lock lifts. The wait
+is read from `Retry-After` in either form the spec allows — delta seconds or an HTTP-date — and from the
+reset header if that is all there is; only text it cannot read falls back to a minute. The same applies to a 429 on a **write**: it prints `status: 0` with `scope`, `retry_after_s` and
 the reset time and stops the run, because a retry spends the budget the reset is waiting on. Only a
 reader's 429 is still handed back to the caller, since a failed read costs nothing and a run that dies on
 one cannot report.

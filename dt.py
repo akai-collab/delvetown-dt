@@ -25,6 +25,7 @@ Usage:
 The account password is read from the vault and used in-process; it is never
 printed and errors are scrubbed before printing.
 """
+import email.utils
 import glob
 import hashlib
 import json
@@ -665,16 +666,7 @@ def _rate_limited(scope, headers=None, body=None, until=None):
     bucket at zero for sixteen hours. The lockout is written to the session cache, so later runs refuse
     locally instead of asking the PDS again.
     """
-    hdrs = {str(k).lower(): v for k, v in (headers or {}).items()}
-    retry = 0
-    for k in ("retry-after", "retry_after"):
-        try:
-            retry = int(float(hdrs.get(k) or 0))
-        except (TypeError, ValueError):
-            retry = 0
-        if retry:
-            break
-    retry = max(retry, 60)
+    retry = _retry_after_seconds(headers)
     until = until or (time.time() + retry)
     c = _read_session_cache()
     if c.get("did") == DID:
@@ -688,6 +680,42 @@ def _rate_limited(scope, headers=None, body=None, until=None):
                       "why": "do not retry: asking again spends the budget the reset is waiting on, and "
                              "this lockout is remembered locally so the next run will not ask"}, indent=2))
     raise SystemExit(1)
+
+
+def _retry_after_seconds(headers, default=60.0):
+    """How long the PDS says to wait, from whichever header carries it, in either form the spec allows.
+
+    A 429 may say `Retry-After: 60355` (delta seconds) or `Retry-After: Sun, 18 Oct 2026 01:45:25 GMT`
+    (an HTTP-date). Reading only the number turns the date form into 0, which the old floor then
+    raised to a minute — and the run walked straight back into the same 429, which is the shape of the
+    loop that emptied one seat's login budget (2026-10-17). The reset header is a third source; the
+    PDS sends it as epoch seconds, but both forms are accepted because `RateLimit-Reset` is defined as
+    delta seconds.
+    """
+    h = {str(k).lower(): v for k, v in (headers or {}).items()}
+    for key in ("retry-after", "retry_after"):
+        raw = h.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            pass
+        try:                       # an HTTP-date, which float() cannot read
+            when = email.utils.parsedate_to_datetime(str(raw))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return max(0.0, when.timestamp() - time.time())
+        except (TypeError, ValueError):
+            continue
+    for key in ("ratelimit-reset", "x-ratelimit-reset"):
+        try:
+            value = float(h[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        # epoch seconds if it is plainly a date, else delta seconds
+        return max(0.0, value - time.time() if value > 1_000_000_000 else value)
+    return float(default)
 
 
 def _login_refused(until, retry_after, body=None):
@@ -742,17 +770,11 @@ def session():
         status, s = req("POST", PDS + "/xrpc/com.atproto.server.createSession",
                         {"identifier": DID or HANDLE, "password": sec["password"]}, headers_out=hdrs)
         if status == 429:
-            try:
-                retry = int(float(hdrs.get("retry-after") or 0))
-            except ValueError:
-                retry = 0
-            if not retry:
-                try:
-                    retry = int(float(hdrs.get("ratelimit-reset") or 0) - now)
-                except ValueError:
-                    retry = 0
-            retry = max(retry, 60)
-            _write_session_cache({"did": DID, "login_locked_until": now + retry})
+            retry = _retry_after_seconds(hdrs)
+            # Keep the cached pair: the lock is on *logging in*, not on the session we already hold, and
+            # a refresh costs no login. Replacing the whole cache here meant a seat had to log in fresh
+            # once the lock lifted — a login spent for nothing (2026-10-17).
+            _write_session_cache(dict(c, did=DID, login_locked_until=now + retry))
             _login_refused(now + retry, retry, s)
         if status != 200 or not s.get("accessJwt"):
             raise SystemExit("createSession failed: " + scrub_secret_from_text(json.dumps(s), sec))
