@@ -12,18 +12,24 @@ had time to settle, and the account can act on it. A like, a follow, a client
 that will not answer for one tick, or a run that is rate-limited all leave the
 output byte-identical, so none of them wakes the model.
 
-Read-only: never marks notifications seen. Uses its OWN at_mcp state directory
-so it can never collide with the lock Hermes' MCP client holds on the account's
-main state dir.
+Read-only: never marks notifications seen.
+
+How it reads (DT_MONITOR_READER). `xrpc`, the default, asks the PDS and the appview
+directly and keeps ONE session in its own cache, refreshed rather than logged in
+again: the PDS allows 300 logins a day per account, and at_mcp logs in on every
+start, so a five-minute tick through at_mcp spent 288 of them (live, 2026-10-17).
+`at_mcp` is the previous path — the binary, spoken to over MCP stdio, in its OWN
+state directory so it can never collide with the lock Hermes' MCP client holds on
+the account's main one — kept so a deploy can switch back without a new copy.
 
 Paths default to this machine's layout and can be overridden by environment
 variable, so the file is reusable without editing: AT_MCP_BIN, DELVETOWN_ENV_FILE,
 AT_MCP_MONITOR_STATE, AT_MCP_HANDLE, AT_MCP_WAKE_STATE, DT_SESSION_CACHE,
-DT_PUBLISH_LOG.
+DT_PUBLISH_LOG, DT_MONITOR_SESSION, DT_PDS, DT_APPVIEW.
 
 The account password is read at runtime from the env file (never hardcoded here,
-never printed) and passed to the at_mcp binary in its environment. Only the
-one deterministic line below reaches stdout.
+never printed, never in the session cache, which holds tokens only). Only the
+deterministic lines below reach stdout.
 """
 import hashlib
 import json
@@ -31,6 +37,9 @@ import os
 import shlex
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 
@@ -69,6 +78,19 @@ SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _home(
 PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _home(
     ".local", "state", "delvetown-dt", "publish-log.jsonl")
 WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # dt.py's write guard
+
+# --- the direct reader (DT_MONITOR_READER=xrpc). Its session cache is its own, not dt.py's:
+# refreshSession rotates the refresh token, so two programs taking turns with one cache would each be
+# left holding a token the other had already spent.
+READER = (os.environ.get("DT_MONITOR_READER") or "xrpc").strip().lower()
+PDS = (os.environ.get("DT_PDS") or "https://pds.delve.town").rstrip("/")
+APPVIEW = (os.environ.get("DT_APPVIEW") or "https://api.delve.town").rstrip("/")
+APPVIEW_DID = os.environ.get("DT_APPVIEW_DID") or "did:web:api.delve.town"
+MONITOR_SESSION = os.environ.get("DT_MONITOR_SESSION") or _home(
+    ".local", "state", "delvetown-dt", "monitor-session-%s.json" % HANDLE.split(".")[0])
+SESSION_MARGIN = 120        # seconds of life a cached token must still have to be used
+LOGIN_REFUSED_WAIT = 3600   # after a wrong password, do not try again for this long
+HTTP_TIMEOUT = 30
 
 
 def env_from_file(path):
@@ -128,7 +150,7 @@ def brief(text):
     return [_line(it) for it in items[:MAX_ITEMS]]
 
 
-def read_town(limit):
+def read_at_mcp(limit):
     """Ask at_mcp for the unread count and the newest `limit` notifications.
 
     Returns (unread, notes_text, fail): `fail` names why nobody answered, or is None.
@@ -144,7 +166,7 @@ def read_town(limit):
     env = {k: v for k, v in os.environ.items() if not k.startswith("AT_MCP_")}
     env.update({
         "AT_MCP_NETWORK": "delve",
-        "AT_MCP_SERVICE": "https://pds.delve.town",
+        "AT_MCP_SERVICE": PDS,
         "AT_MCP_HANDLE": HANDLE,
         "AT_MCP_APP_PASSWORD": env_from_file(ENV_FILE).get("AT_MCP_APP_PASSWORD", ""),
         "AT_MCP_STATE_DIR": MONITOR_STATE,
@@ -232,6 +254,200 @@ def read_town(limit):
     return unread, notes_text, fail
 
 
+# ------------------------------------------------------------------------------- the direct reader
+def _http(method, url, body=None, token=None, params=None):
+    """(status, json, headers). Never raises: a network failure is status 0, so every caller ends in a
+    gate line rather than a traceback (stderr is merged into the monitored output)."""
+    if params:
+        url = url + "?" + urllib.parse.urlencode(params)
+    headers = {"Accept": "application/json", "User-Agent": "delvetown-monitor/3"}
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode("utf-8")
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        r = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(r, timeout=HTTP_TIMEOUT) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8") or "{}"), dict(resp.headers)
+    except urllib.error.HTTPError as e:
+        try:
+            payload = json.loads(e.read().decode("utf-8", "replace"))
+        except ValueError:
+            payload = {}
+        return e.code, payload if isinstance(payload, dict) else {}, dict(e.headers or {})
+    except Exception:
+        return 0, {}, {}
+
+
+def _jwt_exp(tok):
+    """A JWT's `exp` claim, unverified — enough to decide whether to use it. Anything unreadable: None."""
+    try:
+        import base64
+        part = str(tok).split(".")[1]
+        return int(json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["exp"])
+    except Exception:
+        return None
+
+
+def _usable(tok, now):
+    exp = _jwt_exp(tok) if tok else None
+    return bool(exp) and exp - now > SESSION_MARGIN
+
+
+def _retry_after(headers, now):
+    h = {str(k).lower(): v for k, v in (headers or {}).items()}
+    for key, base in (("retry-after", 0), ("ratelimit-reset", now)):
+        try:
+            secs = int(float(h.get(key) or 0) - base)
+        except (TypeError, ValueError):
+            secs = 0
+        if secs > 0:
+            return secs
+    return 60
+
+
+def _locked_until(path):
+    """The later of a recorded login lockout and a write lockout in a session cache, or 0."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            c = json.load(f)
+        return max(float(c.get("login_locked_until") or 0), float(c.get("locked_until") or 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
+def _write_cache(c, path=None):
+    """0600 from the first byte. A cache that cannot be written costs the next tick a login, not this
+    tick its reading."""
+    path = path or MONITOR_SESSION
+    try:
+        os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+        tmp = path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(c, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _tokens(s, **extra):
+    """What is kept of a session answer: the tokens and whose they are. Nothing else the server sent."""
+    return dict({k: s.get(k) for k in ("did", "accessJwt", "refreshJwt")}, handle=HANDLE, **extra)
+
+
+def _session(now, stale=None):
+    """An access token for this account, and the reason there is none: (token, fail).
+
+    The cached access token while it lives; then refreshSession, which does not spend a login; and
+    createSession only when both are gone — so the monitor's steady state is no logins at all. A login
+    is never attempted while either this cache or dt.py's records a lockout (the budget is the
+    account's, not the program's), or within LOGIN_REFUSED_WAIT of a wrong password: a refused login
+    retried every tick would itself spend the budget. `stale` is an access token the server has just
+    rejected, so the cache is not trusted to still hold a live one.
+    """
+    lock = None
+    try:
+        import fcntl
+        os.makedirs(os.path.dirname(MONITOR_SESSION) or ".", mode=0o700, exist_ok=True)
+        lock = open(MONITOR_SESSION + ".lock", "a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        pass
+    try:
+        try:
+            with open(MONITOR_SESSION, encoding="utf-8") as f:
+                c = json.load(f)
+            c = c if isinstance(c, dict) and c.get("handle") == HANDLE else {}
+        except (OSError, ValueError):
+            c = {}
+        if _usable(c.get("accessJwt"), now) and c.get("accessJwt") != stale:
+            return c["accessJwt"], None
+        if _usable(c.get("refreshJwt"), now):
+            st, s, hdrs = _http("POST", PDS + "/xrpc/com.atproto.server.refreshSession",
+                                token=c["refreshJwt"])
+            if st == 200 and s.get("accessJwt"):
+                _write_cache(_tokens(s, refreshed_at=now, logged_in_at=c.get("logged_in_at")))
+                return s["accessJwt"], None
+            if st == 429:
+                _write_cache(dict(c, locked_until=now + _retry_after(hdrs, now)))
+                return None, "rate-limited"
+            if st not in (400, 401):   # only a refused refresh token is worth a login; an outage is not
+                return None, "no answer" if st == 0 else "http %d" % st
+        if now < max(_locked_until(MONITOR_SESSION), _locked_until(SESSION_CACHE)):
+            return None, "rate-limited"
+        if now < float(c.get("login_refused_until") or 0):
+            return None, "login refused"
+        password = env_from_file(ENV_FILE).get("AT_MCP_APP_PASSWORD", "")
+        if not password:
+            return None, "no password"
+        st, s, hdrs = _http("POST", PDS + "/xrpc/com.atproto.server.createSession",
+                            {"identifier": HANDLE, "password": password})
+        del password
+        h = {str(k).lower(): v for k, v in hdrs.items()}
+        if st == 200 and s.get("accessJwt"):
+            _write_cache(_tokens(s, logged_in_at=now, login_budget_left=h.get("ratelimit-remaining")))
+            return s["accessJwt"], None
+        if st == 429:
+            _write_cache({"handle": HANDLE, "login_locked_until": now + _retry_after(hdrs, now)})
+            return None, "rate-limited"
+        if st in (400, 401):
+            _write_cache({"handle": HANDLE, "login_refused_until": now + LOGIN_REFUSED_WAIT})
+            return None, "login refused"
+        return None, "no answer" if st == 0 else "login http %d" % st
+    finally:
+        if lock:
+            lock.close()
+
+
+def _appview(token, lxm, params):
+    """(status, body) of one appview read, through a service-auth token minted for that one method."""
+    st, sa, _ = _http("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
+                      params={"aud": APPVIEW_DID, "lxm": lxm})
+    if st != 200 or not sa.get("token"):
+        return st or 0, sa
+    st, body, _ = _http("GET", APPVIEW + "/xrpc/" + lxm, token=sa["token"], params=params)
+    return st, body
+
+
+def _item(n):
+    """The appview's notification in the shape the gate reads (the same fields at_mcp handed over)."""
+    author = n.get("author") if isinstance(n.get("author"), dict) else {}
+    record = n.get("record") if isinstance(n.get("record"), dict) else {}
+    return {"reason": n.get("reason"), "author": author.get("handle") or author.get("did"),
+            "uri": n.get("uri"), "indexed_at": n.get("indexedAt"), "is_read": n.get("isRead"),
+            "text": record.get("text") or ""}
+
+
+def read_xrpc(limit):
+    """The unread count and the newest `limit` notifications, read directly. Same contract as
+    `read_at_mcp`: (unread, notes_text, fail), where `fail` is a short fixed phrase — never a server
+    message, whose wording could vary between ticks and wake the model on noise."""
+    now = time.time()
+    token, fail = _session(now)
+    if fail:
+        return "?", "", fail
+    lxm = "town.delve.notification.listNotifications"
+    st, res = _appview(token, lxm, {"limit": limit})
+    if st == 401:                      # expired or revoked early: once more with a refreshed token
+        token, fail = _session(now, stale=token)
+        if fail:
+            return "?", "", fail
+        st, res = _appview(token, lxm, {"limit": limit})
+    if st != 200 or not isinstance(res.get("notifications"), list):
+        return "?", "", "rate-limited" if st == 429 else "no answer" if st == 0 else "http %d" % st
+    items = [_item(n) for n in res["notifications"] if isinstance(n, dict)]
+    st, cnt = _appview(token, "town.delve.notification.getUnreadCount", None)
+    unread = cnt.get("count", "?") if st == 200 else "?"
+    return unread, json.dumps({"count": len(items), "items": items}, sort_keys=True), None
+
+
+def read_town(limit):
+    return read_at_mcp(limit) if READER == "at_mcp" else read_xrpc(limit)
+
+
 def digest_output(unread, notes_text, fail):
     """The original gate: any change in the newest notifications wakes the model."""
     lines = None if fail and not notes_text else brief(notes_text)
@@ -259,14 +475,9 @@ def held_reason(now, session_cache=None, publish_log=None):
     and keeps a publish log its write guard counts; both are read here, and a held batch simply waits
     for the next tick on which it can be answered.
     """
-    try:
-        with open(session_cache or SESSION_CACHE, encoding="utf-8") as f:
-            c = json.load(f)
-        until = max(float(c.get("login_locked_until") or 0), float(c.get("locked_until") or 0))
-        if now < until:
-            return "rate-limited until " + datetime.fromtimestamp(until, timezone.utc).strftime("%H:%MZ")
-    except (OSError, ValueError, TypeError, AttributeError):
-        pass
+    until = _locked_until(session_cache or SESSION_CACHE)
+    if now < until:
+        return "rate-limited until " + datetime.fromtimestamp(until, timezone.utc).strftime("%H:%MZ")
     burst = hour = 0
     try:
         with open(publish_log or PUBLISH_LOG, encoding="utf-8") as f:

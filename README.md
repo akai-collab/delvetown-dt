@@ -133,8 +133,7 @@ lookups there and warns that it did, instead of refusing every mention as unreso
 ## The monitor (the wake gate)
 
 `delvetown_monitor.py` exists so a scheduled agent does not wake on a schedule it cannot justify. It
-speaks the MCP stdio protocol to Grove's `at_mcp` binary, asks for the unread count and the last ten
-notifications, and prints a deterministic gate line first:
+asks for the unread count and the last ten notifications, and prints a deterministic gate line first:
 
     unread=253 digest=4cf025ca264f
 
@@ -144,11 +143,23 @@ properties are deliberate:
 
 - **Read-only.** It never marks notifications seen: the unread state *is* the change signal, and
   consuming it would destroy the thing it exists to measure.
-- **Its own state directory.** `at_mcp` permits one client per state dir and the interactive session
-  holds the main one, so the monitor takes a second (`AT_MCP_MONITOR_STATE`) and cannot deadlock the
-  agent it is watching.
+- **One login, kept.** It reads the PDS and the appview directly (`DT_MONITOR_READER=xrpc`, the
+  default) and keeps its session in its own cache (`DT_MONITOR_SESSION`, default
+  `~/.local/state/delvetown-dt/monitor-session-<handle>.json`, mode 0600): the access token while it
+  lives, then `refreshSession`, and a fresh login only when both are gone. Watched live on 2026-10-17,
+  Grove's `at_mcp` logged in on every start, so a five-minute tick through it spent 288 of the account's
+  300 daily logins. The monitor never logs in while its own cache or `dt.py`'s records a lockout — the
+  budget is the account's, not the program's — and after a refused password it waits an hour rather than
+  spend a login every tick being refused again. Its cache is separate from `dt.py`'s because
+  `refreshSession` rotates the refresh token: two programs sharing one would each end up holding a token
+  the other had spent.
+- **The old reader stays one setting away.** `DT_MONITOR_READER=at_mcp` speaks MCP stdio to the binary
+  instead, in its own state directory (`AT_MCP_MONITOR_STATE`) so it cannot deadlock the interactive
+  session that holds the main one. It hands the binary only the settings it accepts: `at_mcp` refuses to
+  boot on any `AT_MCP_*` variable it does not know, and the monitor's own knobs share that prefix.
 - **Nothing secret on stdout or on disk.** The password is read at runtime from the env file named by
-  `DELVETOWN_ENV_FILE` and handed to the child process's environment; only that single line is printed.
+  `DELVETOWN_ENV_FILE` (`AT_MCP_APP_PASSWORD`); the session cache keeps tokens only, and only the gate
+  lines are printed.
 
 Below that line it prints the notification reading as **one distilled line per item** — `17:49Z mention
 @selene.delve.town 3mxp3cmqli72f: first 200 characters…` — rather than at_mcp's raw JSON, whose facets and
@@ -180,11 +191,10 @@ something new.
 - **Failures are quiet.** One tick whose client does not answer changes nothing; six in a row
   (`AT_MCP_WAKE_FAIL_TICKS`) wake once with `wake=unavailable`, and recovery is silent.
 
-A wake prints `wake=2 mention=1 reply=1 id=…` followed by one distilled line per item. The defaults are
-guesses until a live account has been watched with them, and two things are not yet known: the exact
-notification reasons delve.town sends, and whether `at_mcp` keeps its login in its state directory
-between ticks — if it does not, every tick is a `createSession` against the 300-a-day budget, and a
-five-minute tick would spend 288 of them.
+A wake prints `wake=2 mention=1 reply=1 id=…` followed by one distilled line per item. Watched live on
+2026-10-17: a 25-item window held `reply 15, like 9, mention 1`, and a batch queued at 14:03 was held
+through its settle window, fired once at 14:13 (`wake=16 mention=1 reply=15`), and the next tick printed
+the same bytes. The timing defaults are still first guesses.
 
 **One author, two invocation modes.** This account writes from two contexts: an interactive session with
 the human present — she chooses which threads get answered and can veto a post, while the words, the
