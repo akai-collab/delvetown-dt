@@ -1548,7 +1548,7 @@ def doors(limit=25, verbose=True):
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread/doors a dozen times used to spend a password login on each one.
 NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
-                 "follow", "unfollow", "notifications", "mentions", "raw", "like",
+                 "follow", "unfollow", "block", "unblock", "notifications", "mentions", "raw", "like",
                  "bio", "displayname", "handle"}
 
 
@@ -1975,17 +1975,49 @@ USAGE = {
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
     # all, because a caller reads silence as success and believes it followed someone.
     "follow": "follow <did-or-handle> [<did-or-handle> …]",
+    "block": "block <did-or-handle> [<did-or-handle> …]   (batched: one record per target, as `follow` does)",
+    "unblock": "unblock <did-or-handle|at-uri> [ … ]",
+    "blocked": "blocked                                            (the accounts this seat blocks, with handles)",
     "bio": 'bio "<text>"',
     "displayname": 'displayname "<text>"',
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
-WRITE_CMDS = {"post", "reply", "delete", "like", "follow", "bio", "displayname", "handle", "label", "avatar"}
+WRITE_CMDS = {"post", "reply", "delete", "like", "follow", "block", "unblock", "bio", "displayname", "handle", "label", "avatar"}
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
-NO_ARGS_OK = {"draw"}
+NO_ARGS_OK = {"draw", "blocked"}
+
+
+def blocked_subjects():
+    """The DIDs this seat blocks, read from its own records. Blocks live in our repo, so this is a
+    public read of our own data: no session, no service auth.
+
+    Why the write path asks: on 2026-10-17 a wake answered an account whose block had landed 65
+    seconds earlier (block 13:08:11Z, reply 13:09:16Z). The notification was already in the batch it
+    had read at 13:00Z, and nothing in this client consulted the block list, so the block arrived too
+    late to matter. Blocking is not retroactive; the guard belongs here.
+    """
+    try:
+        return {((r.get("value") or {}).get("subject") or "") for r in list_all_records("town.delve.graph.block")}
+    except Exception:
+        return set()          # a failed read must never stop a legitimate write
+
+
+def blocked_refusal(target, force=False):
+    """A refusal message when this write would address someone the seat blocks, else None.
+
+    `target` is a DID or an at:// uri whose repo segment is the author. `--force` still overrides, so
+    an operator can answer deliberately; the point is that it cannot happen by accident."""
+    if force or not target:
+        return None
+    did = target.split("/")[2] if target.startswith("at://") else target
+    if did and did in blocked_subjects():
+        return ("this seat blocks %s — a reply, like or follow would engage an account it has blocked; "
+                "the block record is public, so unblock it first or pass --force to override" % did)
+    return None
 
 
 def main():
@@ -2098,6 +2130,10 @@ def main():
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
         par_uri, par_cid = sys.argv[2], sys.argv[3]
+        _blocked_note = blocked_refusal(par_uri, "--force" in sys.argv)
+        if _blocked_note:
+            print(json.dumps({"status": 0, "refused": _blocked_note, "parent": par_uri}, indent=2))
+            sys.exit(1)
         par_cid, cid_note = _cid_verdict(par_cid, verified_parent_cid(par_uri))
         if cid_note:
             print(json.dumps({"note": cid_note, "parent": par_uri, "cid_used": par_cid}), file=sys.stderr)
@@ -2277,6 +2313,10 @@ def main():
             if not subj:
                 print(json.dumps({"target": arg, "error": "unresolved"}, indent=2))
                 continue
+            _note = blocked_refusal(subj, "--force" in sys.argv)
+            if _note:
+                print(json.dumps({"target": arg, "refused": _note}, indent=2))
+                continue
             rec = {"$type": "town.delve.graph.follow", "subject": subj,
                    "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
             status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
@@ -2287,9 +2327,70 @@ def main():
             print(json.dumps({"target": arg, "subject": subj, "status": status,
                               "uri": res.get("uri"), "error": res.get("error")}, indent=2))
 
+    elif cmd == "block":
+        # dt.py block <handle|did> [...]  — one record per target, town.delve.graph.block, the same shape
+        # as a follow. The town does not count blocks against the write quota, but they are writes, so
+        # they are logged; like a follow they stay out of GUARDED_KINDS, which is about post pressure.
+        for arg in sys.argv[2:]:
+            subj = resolve(arg)
+            if not subj:
+                print(json.dumps({"target": arg, "error": "unresolved"}, indent=2))
+                continue
+            rec = {"$type": "town.delve.graph.block", "subject": subj,
+                   "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+            status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
+                              {"repo": DID, "collection": "town.delve.graph.block",
+                               "rkey": tid(), "record": rec}, token=token)
+            if status == 200:
+                log_write("block", res, subject=subj)
+            print(json.dumps({"target": arg, "subject": subj, "status": status,
+                              "uri": res.get("uri"), "error": res.get("error")}, indent=2))
+
+    elif cmd == "unblock":
+        # dt.py unblock <handle|did|at-uri> [...] — delete every block record naming the target, since a
+        # handle can be carried by more than one record if something wrote twice.
+        for arg in sys.argv[2:]:
+            if arg.startswith("at://"):
+                hits = [{"uri": arg}]
+            else:
+                subj = resolve(arg)
+                hits = [r for r in list_all_records("town.delve.graph.block")
+                        if (r.get("value") or {}).get("subject") == subj]
+            if not hits:
+                print(json.dumps({"target": arg, "note": "no block record found"}, indent=2))
+                continue
+            for r in hits:
+                rk = r["uri"].split("/")[-1]
+                st2, d = req("POST", PDS + "/xrpc/com.atproto.repo.deleteRecord",
+                             {"repo": DID, "collection": "town.delve.graph.block", "rkey": rk},
+                             token=token)
+                print(json.dumps({"unblocked": rk, "status": st2, "error": d.get("error")}, indent=2))
+
+    elif cmd == "blocked":
+        # The same offline route as `follows`: the records are public, so read my own and resolve each
+        # subject to a handle with describeRepo rather than asking an appview that wants service auth.
+        records = list_all_records("town.delve.graph.block")
+        out = []
+        for rec in records:
+            subj = (rec.get("value") or {}).get("subject")
+            handle = None
+            try:
+                handle = req("GET", PDS + "/xrpc/com.atproto.repo.describeRepo",
+                             params={"repo": subj})[1].get("handle")
+            except Exception:
+                pass
+            out.append({"subject": subj, "handle": handle, "uri": rec["uri"],
+                        "createdAt": (rec.get("value") or {}).get("createdAt")})
+        print(json.dumps({"count": len(out), "blocks": out}, indent=2))
+
     elif cmd == "like":
         # dt.py like <uri|rkey|url> [...]  — town.delve.feed.like, one record per post.
         for arg in sys.argv[2:]:
+            if arg.startswith("at://"):
+                _note = blocked_refusal(arg, "--force" in sys.argv)
+                if _note:
+                    print(json.dumps({"target": arg, "refused": _note}, indent=2))
+                    continue
             r = like(arg, token)
             if r.get("status") == 200:   # likes do not count against the quota, but they are writes
                 log_write("like", {"uri": r.get("like")}, subject=r.get("uri"))
