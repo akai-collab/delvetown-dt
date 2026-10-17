@@ -638,14 +638,16 @@ class Lane(unittest.TestCase):
         try:
             dt.log_publish("reply", {"uri": "at://did:plc:x/town.delve.feed.post/abc", "cid": "bafy"},
                            {"uri": "at://did:plc:y/town.delve.feed.post/p"}, "some text")
-            entry = json.loads(open(dt.PUBLISH_LOG, encoding="utf-8").read().strip())
+            with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+                entry = json.loads(f.read().strip())
             self.assertEqual(entry["lane"], "following")
             self.assertEqual(entry["mode"], "session")
             self.assertEqual(entry["rkey"], "abc")
             os.environ["HERMES_CRON_SESSION"] = "1"      # the other branch, pinned rather than ambient
             dt.log_publish("post", {"uri": "at://did:plc:x/town.delve.feed.post/def", "cid": "bafy"},
                            None, "x")
-            lines = open(dt.PUBLISH_LOG, encoding="utf-8").read().strip().splitlines()
+            with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+                lines = f.read().strip().splitlines()
             self.assertEqual(json.loads(lines[-1])["mode"], "wake")
         finally:
             dt.PUBLISH_LOG = old
@@ -758,6 +760,29 @@ class FeedTarget(unittest.TestCase):
     def test_two_targets_are_refused_rather_than_resolved_by_order(self):
         with self.assertRaises(SystemExit):
             dt.feed_target([dt.TOWN_FEED, "bee.delve.town"])
+
+    def test_a_flag_is_not_a_target(self):
+        # `feed 10 --force` was refused as "feed cannot read '--force'"
+        self.assertEqual(dt.feed_target(["10", "--force"]), ("feed", dt.TOWN_FEED))
+        self.assertEqual(dt.feed_target(["bee.delve.town", "--no-sign"]), ("actor", "bee.delve.town"))
+
+    def test_a_did_reads_that_account(self):
+        d = "did:plc:qzqct2rrq4u2gmy5g3mjxske"
+        self.assertEqual(dt.feed_target([d]), ("actor", d))
+
+    def test_the_limit_is_read_after_the_target_too(self):
+        # `feed bee.delve.town 10` used to read 20 items: only the first argument was tried as a limit
+        import subprocess
+        env = dict(os.environ, DT_DRY_RUN="1")
+        env.pop("DT_ACCOUNT", None)
+        src = ("import sys, importlib.util as u; s = u.spec_from_file_location('dt', %r); "
+               "m = u.module_from_spec(s); s.loader.exec_module(m); seen = []; "
+               "m.req = lambda *a, **k: (seen.append(k.get('params')), (200, {}))[1]; "
+               "sys.argv = ['dt.py', 'feed', 'bee.delve.town', '10']; m.main(); "
+               "print('PARAMS', seen[-1])" % dt.__file__)
+        r = subprocess.run([sys.executable, "-c", src], capture_output=True, text=True, env=env,
+                           timeout=60)
+        self.assertIn("'limit': 10", r.stdout, r.stdout + r.stderr)
 
 
 class CanonicalRef(unittest.TestCase):
@@ -1298,6 +1323,17 @@ class DryRun(unittest.TestCase):
                              "a dry run logged a publish that never happened")
             self.assertIn("dry run", r.stderr.lower())      # and says so, rather than looking real
 
+    def test_a_dry_post_can_mention_someone(self):
+        """A dry run reads nothing, so the pre-flight filed every @handle as unresolved and refused:
+        the post most worth exercising was the one a dry run could not send."""
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "publish-log.jsonl")
+            r = self._run(log, "post", "dry run: hullo @bee.delve.town")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("not checked", r.stdout)
+            self.assertIn('"indexed": null', r.stdout)     # nothing was sent, so nothing to be held
+            self.assertFalse(os.path.exists(log))
+
     def test_a_dry_like_leaves_no_provenance_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = os.path.join(tmp, "publish-log.jsonl")
@@ -1379,8 +1415,10 @@ class RefusalsSpeak(unittest.TestCase):
         env = dict(os.environ)
         env["DT_DRY_RUN"] = "1"
         env.pop("DT_ACCOUNT", None)
+        # an interval that disagrees with its own clocks: a hard error with no network in it, because a
+        # dry run no longer checks handles (it would refuse every mention, real or not)
         r = subprocess.run([sys.executable, dt.__file__, "post",
-                            "@not-a-real-account-here.delve.town hullo"],
+                            "at 10:00Z it started and two hours after, at 11:00Z, it ended"],
                            capture_output=True, text=True, env=env, timeout=120)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn('"refused"', r.stdout)
