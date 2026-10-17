@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from datetime import datetime, timedelta, timezone
@@ -658,14 +659,16 @@ class Lane(unittest.TestCase):
         try:
             dt.log_publish("reply", {"uri": "at://did:plc:x/town.delve.feed.post/abc", "cid": "bafy"},
                            {"uri": "at://did:plc:y/town.delve.feed.post/p"}, "some text")
-            entry = json.loads(open(dt.PUBLISH_LOG, encoding="utf-8").read().strip())
+            with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+                entry = json.loads(f.read().strip())
             self.assertEqual(entry["lane"], "following")
             self.assertEqual(entry["mode"], "session")
             self.assertEqual(entry["rkey"], "abc")
             os.environ["HERMES_CRON_SESSION"] = "1"      # the other branch, pinned rather than ambient
             dt.log_publish("post", {"uri": "at://did:plc:x/town.delve.feed.post/def", "cid": "bafy"},
                            None, "x")
-            lines = open(dt.PUBLISH_LOG, encoding="utf-8").read().strip().splitlines()
+            with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+                lines = f.read().strip().splitlines()
             self.assertEqual(json.loads(lines[-1])["mode"], "wake")
         finally:
             dt.PUBLISH_LOG = old
@@ -778,6 +781,29 @@ class FeedTarget(unittest.TestCase):
     def test_two_targets_are_refused_rather_than_resolved_by_order(self):
         with self.assertRaises(SystemExit):
             dt.feed_target([dt.TOWN_FEED, "bee.delve.town"])
+
+    def test_a_flag_is_not_a_target(self):
+        # `feed 10 --force` was refused as "feed cannot read '--force'"
+        self.assertEqual(dt.feed_target(["10", "--force"]), ("feed", dt.TOWN_FEED))
+        self.assertEqual(dt.feed_target(["bee.delve.town", "--no-sign"]), ("actor", "bee.delve.town"))
+
+    def test_a_did_reads_that_account(self):
+        d = "did:plc:qzqct2rrq4u2gmy5g3mjxske"
+        self.assertEqual(dt.feed_target([d]), ("actor", d))
+
+    def test_the_limit_is_read_after_the_target_too(self):
+        # `feed bee.delve.town 10` used to read 20 items: only the first argument was tried as a limit
+        import subprocess
+        env = dict(os.environ, DT_DRY_RUN="1")
+        env.pop("DT_ACCOUNT", None)
+        src = ("import sys, importlib.util as u; s = u.spec_from_file_location('dt', %r); "
+               "m = u.module_from_spec(s); s.loader.exec_module(m); seen = []; "
+               "m.req = lambda *a, **k: (seen.append(k.get('params')), (200, {}))[1]; "
+               "sys.argv = ['dt.py', 'feed', 'bee.delve.town', '10']; m.main(); "
+               "print('PARAMS', seen[-1])" % dt.__file__)
+        r = subprocess.run([sys.executable, "-c", src], capture_output=True, text=True, env=env,
+                           timeout=60)
+        self.assertIn("'limit': 10", r.stdout, r.stdout + r.stderr)
 
 
 class CanonicalRef(unittest.TestCase):
@@ -1318,6 +1344,17 @@ class DryRun(unittest.TestCase):
                              "a dry run logged a publish that never happened")
             self.assertIn("dry run", r.stderr.lower())      # and says so, rather than looking real
 
+    def test_a_dry_post_can_mention_someone(self):
+        """A dry run reads nothing, so the pre-flight filed every @handle as unresolved and refused:
+        the post most worth exercising was the one a dry run could not send."""
+        with tempfile.TemporaryDirectory() as tmp:
+            log = os.path.join(tmp, "publish-log.jsonl")
+            r = self._run(log, "post", "dry run: hullo @bee.delve.town")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("not checked", r.stdout)
+            self.assertIn('"indexed": null', r.stdout)     # nothing was sent, so nothing to be held
+            self.assertFalse(os.path.exists(log))
+
     def test_a_dry_like_leaves_no_provenance_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = os.path.join(tmp, "publish-log.jsonl")
@@ -1399,12 +1436,137 @@ class RefusalsSpeak(unittest.TestCase):
         env = dict(os.environ)
         env["DT_DRY_RUN"] = "1"
         env.pop("DT_ACCOUNT", None)
+        # an interval that disagrees with its own clocks: a hard error with no network in it, because a
+        # dry run no longer checks handles (it would refuse every mention, real or not)
         r = subprocess.run([sys.executable, dt.__file__, "post",
-                            "@not-a-real-account-here.delve.town hullo"],
+                            "at 10:00Z it started and two hours after, at 11:00Z, it ended"],
                            capture_output=True, text=True, env=env, timeout=120)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn('"refused"', r.stdout)
         self.assertIn("pre-flight", r.stdout)
+
+
+class SessionCache(unittest.TestCase):
+    """createSession is rate-limited per account (300 a day). On 2026-10-17 the skillissue seat spent all
+    of them — a login per write, two per write in fact, and a stuck run retrying the 429 — and could not
+    publish for sixteen hours. These pin the budget: one login is reused, a refresh does not spend one,
+    and a known lockout is answered locally instead of being asked again."""
+
+    def setUp(self):
+        import base64
+        self.tmp = tempfile.mkdtemp()
+        self.saved = (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt.secret, dt._SESSION, dt._SESSION_SOURCE)
+        dt.SESSION_CACHE = os.path.join(self.tmp, "state", "session.json")
+        dt.DRY_RUN = False
+        dt._SESSION = dt._SESSION_SOURCE = None
+        dt.secret = lambda: {"password": "pw"}
+        self.calls = []
+        self.login = (200, None)          # what createSession answers; None body = a fresh pair
+
+        def jwt(exp):
+            body = base64.urlsafe_b64encode(json.dumps({"exp": int(exp)}).encode()).decode().rstrip("=")
+            return "h." + body + ".s"
+        self.jwt = jwt
+
+        def fake_req(method, url, body=None, token=None, params=None, headers_out=None):
+            name = url.rsplit(".", 1)[-1]          # com.atproto.server.createSession -> createSession
+            self.calls.append(name)
+            if name == "createSession":
+                status, res = self.login
+                if headers_out is not None and status == 429:
+                    headers_out["retry-after"] = "60355"
+                if res is None:
+                    res = {"did": dt.DID, "handle": dt.HANDLE,
+                           "accessJwt": jwt(time.time() + 7200), "refreshJwt": jwt(time.time() + 86400)}
+                return status, res
+            if name == "refreshSession":
+                return 200, {"did": dt.DID, "handle": dt.HANDLE,
+                             "accessJwt": jwt(time.time() + 7200), "refreshJwt": jwt(time.time() + 86400)}
+            if name == "getSession":
+                return 200, {"did": dt.DID}
+            return 200, {}
+        dt.req = fake_req
+
+    def tearDown(self):
+        (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt.secret, dt._SESSION, dt._SESSION_SOURCE) = self.saved
+        shutil.rmtree(self.tmp)
+
+    def _new_process(self):
+        dt._SESSION = dt._SESSION_SOURCE = None
+
+    def _cache(self):
+        with open(dt.SESSION_CACHE, encoding="utf-8") as f:
+            return f.read()
+
+    def test_one_process_logs_in_once(self):
+        dt.session()
+        dt.session()
+        self.assertEqual(self.calls.count("createSession"), 1)
+
+    def test_the_next_process_reuses_the_login(self):
+        dt.session()
+        self._new_process()
+        dt.session()
+        self.assertEqual(self.calls.count("createSession"), 1)
+        self.assertEqual(dt._SESSION_SOURCE, "cache")
+
+    def test_an_expired_access_token_is_refreshed_not_relogged(self):
+        dt.session()
+        c = json.loads(self._cache())
+        c["accessJwt"] = self.jwt(time.time() + 10)          # inside the margin: not usable
+        with open(dt.SESSION_CACHE, "w") as f:
+            json.dump(c, f)
+        self._new_process()
+        s = dt.session()
+        self.assertEqual(self.calls.count("createSession"), 1)
+        self.assertEqual(self.calls.count("refreshSession"), 1)
+        self.assertEqual(dt._SESSION_SOURCE, "refresh")
+        self.assertEqual(json.loads(self._cache())["accessJwt"], s["accessJwt"])
+
+    def test_another_accounts_session_is_never_borrowed(self):
+        os.makedirs(os.path.dirname(dt.SESSION_CACHE))
+        with open(dt.SESSION_CACHE, "w") as f:
+            json.dump({"did": "did:plc:someoneelse", "accessJwt": self.jwt(time.time() + 7200),
+                       "refreshJwt": self.jwt(time.time() + 86400)}, f)
+        dt.session()
+        self.assertEqual(self.calls, ["createSession"])
+
+    def test_the_cache_is_private(self):
+        dt.session()
+        self.assertEqual(os.stat(dt.SESSION_CACHE).st_mode & 0o777, 0o600)
+        self.assertNotIn("pw", self._cache())
+
+    def test_a_429_refuses_in_json_and_is_not_asked_again(self):
+        import contextlib, io
+        self.login = (429, {"error": "RateLimitExceeded"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as e:
+            dt.session()
+        self.assertEqual(e.exception.code, 1)
+        res = json.loads(out.getvalue())
+        self.assertIn("rate-limited", res["refused"])
+        self.assertEqual(res["retry_after_s"], 60355)
+        # the next run, inside the window, refuses without touching the PDS
+        self._new_process()
+        self.calls.clear()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            dt.session()
+        self.assertEqual(self.calls, [])
+
+    def test_a_write_logs_in_once(self):
+        """main() asked for a session twice per write — once for the token, once for the DID check."""
+        import contextlib, io
+        old_argv = sys.argv
+        try:
+            sys.argv = ["dt.py", "like", "at://did:plc:aaaaaaaaaaaaaaaaaaaaaa/town.delve.feed.post/abc"]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    dt.main()
+                except SystemExit:
+                    pass
+        finally:
+            sys.argv = old_argv
+        self.assertEqual(self.calls.count("createSession"), 1)
 
 
 class SuiteIntegrity(unittest.TestCase):
