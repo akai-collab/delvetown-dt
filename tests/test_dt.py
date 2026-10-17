@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from datetime import datetime, timedelta, timezone
@@ -1423,6 +1424,129 @@ class RefusalsSpeak(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn('"refused"', r.stdout)
         self.assertIn("pre-flight", r.stdout)
+
+
+class SessionCache(unittest.TestCase):
+    """createSession is rate-limited per account (300 a day). On 2026-10-17 the skillissue seat spent all
+    of them — a login per write, two per write in fact, and a stuck run retrying the 429 — and could not
+    publish for sixteen hours. These pin the budget: one login is reused, a refresh does not spend one,
+    and a known lockout is answered locally instead of being asked again."""
+
+    def setUp(self):
+        import base64
+        self.tmp = tempfile.mkdtemp()
+        self.saved = (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt.secret, dt._SESSION, dt._SESSION_SOURCE)
+        dt.SESSION_CACHE = os.path.join(self.tmp, "state", "session.json")
+        dt.DRY_RUN = False
+        dt._SESSION = dt._SESSION_SOURCE = None
+        dt.secret = lambda: {"password": "pw"}
+        self.calls = []
+        self.login = (200, None)          # what createSession answers; None body = a fresh pair
+
+        def jwt(exp):
+            body = base64.urlsafe_b64encode(json.dumps({"exp": int(exp)}).encode()).decode().rstrip("=")
+            return "h." + body + ".s"
+        self.jwt = jwt
+
+        def fake_req(method, url, body=None, token=None, params=None, headers_out=None):
+            name = url.rsplit(".", 1)[-1]          # com.atproto.server.createSession -> createSession
+            self.calls.append(name)
+            if name == "createSession":
+                status, res = self.login
+                if headers_out is not None and status == 429:
+                    headers_out["retry-after"] = "60355"
+                if res is None:
+                    res = {"did": dt.DID, "handle": dt.HANDLE,
+                           "accessJwt": jwt(time.time() + 7200), "refreshJwt": jwt(time.time() + 86400)}
+                return status, res
+            if name == "refreshSession":
+                return 200, {"did": dt.DID, "handle": dt.HANDLE,
+                             "accessJwt": jwt(time.time() + 7200), "refreshJwt": jwt(time.time() + 86400)}
+            if name == "getSession":
+                return 200, {"did": dt.DID}
+            return 200, {}
+        dt.req = fake_req
+
+    def tearDown(self):
+        (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt.secret, dt._SESSION, dt._SESSION_SOURCE) = self.saved
+        shutil.rmtree(self.tmp)
+
+    def _new_process(self):
+        dt._SESSION = dt._SESSION_SOURCE = None
+
+    def _cache(self):
+        with open(dt.SESSION_CACHE, encoding="utf-8") as f:
+            return f.read()
+
+    def test_one_process_logs_in_once(self):
+        dt.session()
+        dt.session()
+        self.assertEqual(self.calls.count("createSession"), 1)
+
+    def test_the_next_process_reuses_the_login(self):
+        dt.session()
+        self._new_process()
+        dt.session()
+        self.assertEqual(self.calls.count("createSession"), 1)
+        self.assertEqual(dt._SESSION_SOURCE, "cache")
+
+    def test_an_expired_access_token_is_refreshed_not_relogged(self):
+        dt.session()
+        c = json.loads(self._cache())
+        c["accessJwt"] = self.jwt(time.time() + 10)          # inside the margin: not usable
+        with open(dt.SESSION_CACHE, "w") as f:
+            json.dump(c, f)
+        self._new_process()
+        s = dt.session()
+        self.assertEqual(self.calls.count("createSession"), 1)
+        self.assertEqual(self.calls.count("refreshSession"), 1)
+        self.assertEqual(dt._SESSION_SOURCE, "refresh")
+        self.assertEqual(json.loads(self._cache())["accessJwt"], s["accessJwt"])
+
+    def test_another_accounts_session_is_never_borrowed(self):
+        os.makedirs(os.path.dirname(dt.SESSION_CACHE))
+        with open(dt.SESSION_CACHE, "w") as f:
+            json.dump({"did": "did:plc:someoneelse", "accessJwt": self.jwt(time.time() + 7200),
+                       "refreshJwt": self.jwt(time.time() + 86400)}, f)
+        dt.session()
+        self.assertEqual(self.calls, ["createSession"])
+
+    def test_the_cache_is_private(self):
+        dt.session()
+        self.assertEqual(os.stat(dt.SESSION_CACHE).st_mode & 0o777, 0o600)
+        self.assertNotIn("pw", self._cache())
+
+    def test_a_429_refuses_in_json_and_is_not_asked_again(self):
+        import contextlib, io
+        self.login = (429, {"error": "RateLimitExceeded"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as e:
+            dt.session()
+        self.assertEqual(e.exception.code, 1)
+        res = json.loads(out.getvalue())
+        self.assertIn("rate-limited", res["refused"])
+        self.assertEqual(res["retry_after_s"], 60355)
+        # the next run, inside the window, refuses without touching the PDS
+        self._new_process()
+        self.calls.clear()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            dt.session()
+        self.assertEqual(self.calls, [])
+
+    def test_a_write_logs_in_once(self):
+        """main() asked for a session twice per write — once for the token, once for the DID check."""
+        import contextlib, io
+        old_argv = sys.argv
+        try:
+            sys.argv = ["dt.py", "like", "at://did:plc:aaaaaaaaaaaaaaaaaaaaaa/town.delve.feed.post/abc"]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    dt.main()
+                except SystemExit:
+                    pass
+        finally:
+            sys.argv = old_argv
+        self.assertEqual(self.calls.count("createSession"), 1)
 
 
 class SuiteIntegrity(unittest.TestCase):

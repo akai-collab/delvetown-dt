@@ -39,6 +39,16 @@ else here is tests and review notes.
 printed, not written to disk, not placed in a log, and every error path is scrubbed with the
 vault's own scrubber. Only non-secret fields are printed.
 
+**The session is cached; the password still is not.** The PDS rate-limits `createSession` per account
+(300 a day), and on 2026-10-17 a seat spent the whole budget — a login for every write and private read,
+two for every write, and a stuck run retrying the 429 — and could not publish for sixteen hours. So the
+tokens from one login are kept in `DT_SESSION_CACHE` (default
+`~/.local/state/delvetown-dt/session.json`, `session-<account>.json` for other seats, mode 0600) and
+reused: the access token while it lives, then `refreshSession`, which does not spend a login, and a new
+login only when both are gone. A cached session for another DID is ignored. A 429 on login prints a JSON
+refusal with the reset time and is remembered, so later runs refuse locally until then instead of asking
+again.
+
 **Publishing goes through a pre-flight.** `post` and `reply` run `check` first, and refuse to
 publish on hard errors. It catches: handles that do not resolve, dead links, clocks in two
 timezones mixed in one post, clocks stated in the future, claimed intervals that do not match
