@@ -6,13 +6,20 @@ reading, then the notification reading itself. Identical output on consecutive
 ticks makes the scheduler skip the agent run entirely, so the agent only wakes
 when the town has something new — and wakes knowing what it was.
 
+AT_MCP_MONITOR_GATE=wake swaps the digest for a decision (see `wake_output`): the
+output changes only when someone has addressed the account and the thread has
+had time to settle, and the account can act on it. A like, a follow, a client
+that will not answer for one tick, or a run that is rate-limited all leave the
+output byte-identical, so none of them wakes the model.
+
 Read-only: never marks notifications seen. Uses its OWN at_mcp state directory
 so it can never collide with the lock Hermes' MCP client holds on the account's
 main state dir.
 
 Paths default to this machine's layout and can be overridden by environment
 variable, so the file is reusable without editing: AT_MCP_BIN, DELVETOWN_ENV_FILE,
-AT_MCP_MONITOR_STATE, AT_MCP_HANDLE.
+AT_MCP_MONITOR_STATE, AT_MCP_HANDLE, AT_MCP_WAKE_STATE, DT_SESSION_CACHE,
+DT_PUBLISH_LOG.
 
 The account password is read at runtime from the env file (never hardcoded here,
 never printed) and passed to the at_mcp binary in its environment. Only the
@@ -23,6 +30,9 @@ import json
 import os
 import shlex
 import subprocess
+import time
+from datetime import datetime, timezone
+
 
 def _home(*parts):
     """Default paths resolve against the home directory: HERMES_REAL_HOME (Hermes sets it when it
@@ -36,6 +46,29 @@ BIN_ARGS = shlex.split(os.environ.get("AT_MCP_BIN_ARGS", ""))  # so a test can s
 ENV_FILE = os.environ.get("DELVETOWN_ENV_FILE", _home(".hermes", ".env"))
 MONITOR_STATE = os.environ.get("AT_MCP_MONITOR_STATE", _home(".local", "state", "at_mcp-monitor"))
 HANDLE = os.environ.get("AT_MCP_HANDLE", "akai.delve.town")
+GATE = (os.environ.get("AT_MCP_MONITOR_GATE") or "digest").strip().lower()
+
+# --- the wake gate's knobs. The defaults are guesses until a live account has been watched with them;
+# every one is an environment variable so a deploy can tune it without editing the copy.
+# Reasons that never wake on their own: a reaction asks nothing of the account. Anything not listed
+# here wakes — including a reason this file has never seen, so a new kind of notification is shown to
+# the model once rather than silently dropped.
+QUIET_REASONS = set(
+    (os.environ.get("AT_MCP_QUIET_REASONS") or "like,follow,repost").replace(" ", "").split(","))
+SETTLE_S = int(os.environ.get("AT_MCP_WAKE_SETTLE_S") or 600)      # quiet this long after the newest
+MAX_WAIT_S = int(os.environ.get("AT_MCP_WAKE_MAX_WAIT_S") or 2700)  # ...unless the oldest waited this
+FAIL_TICKS = int(os.environ.get("AT_MCP_WAKE_FAIL_TICKS") or 6)    # failing ticks before one wake
+FIRED_TTL_S = 14 * 86400                                            # how long a handled uri is kept
+WAKE_LIMIT = 25    # notifications read per tick in wake mode: ten could scroll past between ticks
+# What dt.py writes when it is rate-limited or at its own write ceiling. Read here rather than imported:
+# the deployed monitor is a lone copy in the profile's scripts dir and cannot import the repo.
+WAKE_STATE = os.environ.get("AT_MCP_WAKE_STATE") or _home(
+    ".local", "state", "delvetown-dt", "wake-%s.json" % HANDLE.split(".")[0])
+SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _home(
+    ".local", "state", "delvetown-dt", "session.json")
+PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _home(
+    ".local", "state", "delvetown-dt", "publish-log.jsonl")
+WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # dt.py's write guard
 
 
 def env_from_file(path):
@@ -53,59 +86,31 @@ def env_from_file(path):
     return vals
 
 
-os.makedirs(MONITOR_STATE, mode=0o700, exist_ok=True)
-env = dict(os.environ)
-env.update({
-    "AT_MCP_NETWORK": "delve",
-    "AT_MCP_SERVICE": "https://pds.delve.town",
-    "AT_MCP_HANDLE": HANDLE,
-    "AT_MCP_APP_PASSWORD": env_from_file(ENV_FILE).get("AT_MCP_APP_PASSWORD", ""),
-    "AT_MCP_STATE_DIR": MONITOR_STATE,
-})
-
-unread, notes_text, lines, fail = "?", "", None, None  # every path below must end with a gate line
-try:
-    proc = subprocess.Popen([BIN] + BIN_ARGS, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
-except Exception as exc:
-    print("monitor-error:", type(exc).__name__)
-    raise SystemExit(0)
-
-assert proc.stdin is not None and proc.stdout is not None  # PIPE, so both are real handles
-
-
-def send(obj):
-    proc.stdin.write(json.dumps(obj) + "\n")
-    proc.stdin.flush()
-
-
-def read_until(mid, limit=80):
-    for _ in range(limit):
-        line = proc.stdout.readline()
-        if not line:
-            return None
-        try:
-            msg = json.loads(line)
-        except ValueError:
-            continue
-        if msg.get("id") == mid:
-            return msg
-    return None
-
-
-def call_text(mid, name, args=None):
-    """Raw text of a tool result (at_mcp renders reads as prose, not JSON)."""
-    send({"jsonrpc": "2.0", "id": mid, "method": "tools/call",
-          "params": {"name": name, "arguments": args or {}}})
-    r = read_until(mid)
-    try:
-        return r["result"]["content"][0]["text"] or ""
-    except Exception:
-        return ""
-
-
 MAX_ITEMS = 10
 MAX_TEXT = 200
+
+
+def _items(text):
+    """The notification items, or None if the reading is not the JSON at_mcp answers with."""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return None
+    return [it for it in items if isinstance(it, dict)]
+
+
+def _line(it):
+    when = (it.get("indexed_at") or "")[11:16]
+    reason = (it.get("reason") or "?").replace("_", " ")
+    author = it.get("author") or "?"
+    rkey = (it.get("uri") or "/").split("/")[-1]
+    body = " ".join((it.get("text") or "").split())
+    if len(body) > MAX_TEXT:
+        body = body[:MAX_TEXT].rstrip() + "…"
+    return f"{when}Z {reason} @{author} {rkey}: {body}"
 
 
 def brief(text):
@@ -117,87 +122,272 @@ def brief(text):
     2026-10-12: selene's post tagging 36 accounts ate the entire budget). A wake needs reason,
     author, time, rkey and a slice of the text; nothing here reads the facets.
     """
-    try:
-        data = json.loads(text)
-    except (TypeError, ValueError):
+    items = _items(text)
+    if items is None:
         return None
-    items = data.get("items") if isinstance(data, dict) else None
-    if not isinstance(items, list):
-        return None
-    lines = []
-    for it in items[:MAX_ITEMS]:
-        if not isinstance(it, dict):
-            continue
-        when = (it.get("indexed_at") or "")[11:16]
-        reason = (it.get("reason") or "?").replace("_", " ")
-        author = it.get("author") or "?"
-        rkey = (it.get("uri") or "/").split("/")[-1]
-        body = " ".join((it.get("text") or "").split())
-        if len(body) > MAX_TEXT:
-            body = body[:MAX_TEXT].rstrip() + "…"
-        lines.append(f"{when}Z {reason} @{author} {rkey}: {body}")
-    return lines
+    return [_line(it) for it in items[:MAX_ITEMS]]
 
 
-try:
-    send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-          "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                     "clientInfo": {"name": "delvetown-monitor", "version": "2"}}})
-    read_until(1)
-    send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+def read_town(limit):
+    """Ask at_mcp for the unread count and the newest `limit` notifications.
 
-    unread_text = call_text(10, "get_unread_count")
-    notes_text = call_text(11, "get_notifications", {"limit": 10})
-
-    unread = "?"
+    Returns (unread, notes_text, fail): `fail` names why nobody answered, or is None.
+    """
+    os.makedirs(MONITOR_STATE, mode=0o700, exist_ok=True)
+    env = dict(os.environ)
+    env.update({
+        "AT_MCP_NETWORK": "delve",
+        "AT_MCP_SERVICE": "https://pds.delve.town",
+        "AT_MCP_HANDLE": HANDLE,
+        "AT_MCP_APP_PASSWORD": env_from_file(ENV_FILE).get("AT_MCP_APP_PASSWORD", ""),
+        "AT_MCP_STATE_DIR": MONITOR_STATE,
+    })
+    unread, notes_text, fail = "?", "", None   # every path below must end with a gate line
     try:
-        unread = json.loads(unread_text).get("count")
-    except Exception:
-        unread = "?"
+        proc = subprocess.Popen([BIN] + BIN_ARGS, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+    except Exception as exc:
+        return "?", "", "spawn " + type(exc).__name__
 
-    lines = brief(notes_text)
-except Exception as exc:
-    # A dead or wedged client used to print "monitor-error: …" *instead of* the gate line, so the
-    # hash flapped between error text and real output — and a persistent failure would have woken
-    # the agent on every tick. Print the gate line always: the first failing tick differs from the
-    # last good one (so exactly one informative wake fires, naming the exception), and identical
-    # ticks after that are suppressed, which is what a broken client deserves.
-    unread, lines, fail = "?", None, type(exc).__name__
-    # A client that dies surfaces as BrokenPipeError or as an empty read depending on whether our
-    # write lands before or after it exits — a race, so the same failure printed two different
-    # lines on consecutive ticks and woke the agent anyway. Both are one fact: nobody answered.
-    if fail in ("BrokenPipeError", "ConnectionResetError", "EOFError"):
-        fail = "no answer"
-finally:
-    # Close our ends first: leaving them open makes the interpreter emit "Exception ignored in:
-    # <_io.TextIOWrapper ...> BrokenPipeError" at collection time, and the scheduler merges stderr
-    # into the monitored output (cron/scheduler_script.py), so that traceback would itself register
-    # as a change and wake the agent to read Python.
-    for stream in (proc.stdin, proc.stdout):
-        if stream is None:
-            continue
+    assert proc.stdin is not None and proc.stdout is not None  # PIPE, so both are real handles
+
+    def send(obj):
+        proc.stdin.write(json.dumps(obj) + "\n")
+        proc.stdin.flush()
+
+    def read_until(mid, limit=80):
+        for _ in range(limit):
+            line = proc.stdout.readline()
+            if not line:
+                return None
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("id") == mid:
+                return msg
+        return None
+
+    def call_text(mid, name, args=None):
+        """Raw text of a tool result (at_mcp renders reads as prose, not JSON)."""
+        send({"jsonrpc": "2.0", "id": mid, "method": "tools/call",
+              "params": {"name": name, "arguments": args or {}}})
+        r = read_until(mid)
         try:
-            stream.close()
+            return r["result"]["content"][0]["text"] or ""
+        except Exception:
+            return ""
+
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                         "clientInfo": {"name": "delvetown-monitor", "version": "2"}}})
+        read_until(1)
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+        unread_text = call_text(10, "get_unread_count")
+        notes_text = call_text(11, "get_notifications", {"limit": limit})
+        try:
+            unread = json.loads(unread_text).get("count")
+        except Exception:
+            unread = "?"
+    except Exception as exc:
+        # A dead or wedged client used to print "monitor-error: …" *instead of* the gate line, so the
+        # hash flapped between error text and real output — and a persistent failure would have woken
+        # the agent on every tick. Print the gate line always: the first failing tick differs from the
+        # last good one (so exactly one informative wake fires, naming the exception), and identical
+        # ticks after that are suppressed, which is what a broken client deserves.
+        unread, notes_text, fail = "?", "", type(exc).__name__
+        # A client that dies surfaces as BrokenPipeError or as an empty read depending on whether our
+        # write lands before or after it exits — a race, so the same failure printed two different
+        # lines on consecutive ticks and woke the agent anyway. Both are one fact: nobody answered.
+        if fail in ("BrokenPipeError", "ConnectionResetError", "EOFError"):
+            fail = "no answer"
+    finally:
+        # Close our ends first: leaving them open makes the interpreter emit "Exception ignored in:
+        # <_io.TextIOWrapper ...> BrokenPipeError" at collection time, and the scheduler merges stderr
+        # into the monitored output (cron/scheduler_script.py), so that traceback would itself register
+        # as a change and wake the agent to read Python.
+        for stream in (proc.stdin, proc.stdout):
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except Exception:
+                pass
+        try:
+            proc.terminate()
+            proc.wait(timeout=10)
         except Exception:
             pass
-    try:
-        proc.terminate()
-        proc.wait(timeout=10)
-    except Exception:
-        pass
-
-# One output point. A reading that will not parse and a client that will not answer both hash to a
-# fixed digest: at_mcp's error strings carry a varying number of seconds ("stopped waiting after 20
-# seconds"), and hashing one makes the gate fire on noise while handing the prompt an error message
-# as if it were the town's news. The digest of a readable reading still hashes the same text as
-# before, so wake timing on the happy path is unchanged.
-digest = "unavailable" if lines is None else (
-    hashlib.md5(notes_text.encode("utf-8")).hexdigest()[:12] if notes_text else "empty")
-print(f"unread={unread} digest={digest}")
-if lines is None:
     if not fail and not notes_text:
         fail = "no answer"   # the empty-read side of the same race
-    print("brief: unavailable" + (f" ({fail})" if fail else ""))
-elif os.environ.get("AT_MCP_MONITOR_BRIEF") != "1":
-    for line in lines:
-        print(line)
+    return unread, notes_text, fail
+
+
+def digest_output(unread, notes_text, fail):
+    """The original gate: any change in the newest notifications wakes the model."""
+    lines = None if fail and not notes_text else brief(notes_text)
+    # One output point. A reading that will not parse and a client that will not answer both hash to a
+    # fixed digest: at_mcp's error strings carry a varying number of seconds ("stopped waiting after 20
+    # seconds"), and hashing one makes the gate fire on noise while handing the prompt an error message
+    # as if it were the town's news. The digest of a readable reading still hashes the same text as
+    # before, so wake timing on the happy path is unchanged.
+    digest = "unavailable" if lines is None else (
+        hashlib.md5(notes_text.encode("utf-8")).hexdigest()[:12] if notes_text else "empty")
+    out = [f"unread={unread} digest={digest}"]
+    if lines is None:
+        out.append("brief: unavailable" + (f" ({fail})" if fail else ""))
+    elif os.environ.get("AT_MCP_MONITOR_BRIEF") != "1":
+        out.extend(lines)
+    return "\n".join(out)
+
+
+# ----------------------------------------------------------------------------------- the wake gate
+def held_reason(now, session_cache=None, publish_log=None):
+    """Why the account could not act on a wake right now, or None.
+
+    A wake the model cannot act on is the expensive kind: it reads the inbox, composes an answer, and
+    hits the same wall. dt.py records a PDS lockout in its session cache (a login's 429, or a write's)
+    and keeps a publish log its write guard counts; both are read here, and a held batch simply waits
+    for the next tick on which it can be answered.
+    """
+    try:
+        with open(session_cache or SESSION_CACHE, encoding="utf-8") as f:
+            c = json.load(f)
+        until = max(float(c.get("login_locked_until") or 0), float(c.get("locked_until") or 0))
+        if now < until:
+            return "rate-limited until " + datetime.fromtimestamp(until, timezone.utc).strftime("%H:%MZ")
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    burst = hour = 0
+    try:
+        with open(publish_log or PUBLISH_LOG, encoding="utf-8") as f:
+            tail = f.readlines()[-200:]
+    except OSError:
+        tail = []
+    for line in tail:
+        try:
+            e = json.loads(line)
+            if e.get("kind") not in GUARDED_KINDS:
+                continue
+            age = now - datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if 0 <= age <= 3600:
+            hour += 1
+            burst += age <= 600
+    if burst >= WRITE_BURST or hour >= WRITE_HOUR:
+        return f"write guard full ({burst}/10min, {hour}/60min)"
+    return None
+
+
+# What a gate that has never fired prints. Never empty: an empty tick is the one output a scheduler
+# might read as "the script printed nothing" rather than "nothing changed".
+QUIET_LINE = "wake=none"
+
+
+def wake_output(items, state, now, held=None):
+    """Decide whether this tick wakes the model. Returns (output, new_state).
+
+    The scheduler wakes the model when the output differs from the last tick's, so the decision is
+    expressed as a change: a tick that should not wake prints the previous output again, byte for
+    byte, and only a batch worth answering prints something new. What a quiet tick prints is never
+    read by anyone — only whether it changed.
+
+    - `items` is the notification list, or None when the client did not answer. One failing tick does
+      not wake; FAIL_TICKS in a row do, once, so an outage is reported rather than read every tick.
+    - an item is actionable unless its reason is quiet (a like, a follow, a repost); each is handled
+      once, keyed by uri, so the same reply never wakes twice.
+    - a batch waits until SETTLE_S has passed since the newest actionable item was first seen (a reply
+      arriving mid-thread is usually followed by another), but never longer than MAX_WAIT_S since the
+      oldest — a busy thread cannot postpone its own answer for ever.
+    - `held` (see `held_reason`) postpones a ripe batch without dropping it.
+    """
+    st = {"fired": dict(state.get("fired") or {}), "pending": dict(state.get("pending") or {}),
+          "fails": int(state.get("fails") or 0), "last": state.get("last") or QUIET_LINE}
+    st["fired"] = {u: t for u, t in st["fired"].items() if now - float(t) < FIRED_TTL_S}
+
+    if items is None:
+        st["fails"] += 1
+        if st["fails"] == FAIL_TICKS:
+            st["last"] = (f"wake=unavailable ticks={FAIL_TICKS}\n"
+                          f"brief: the notification client has not answered for {FAIL_TICKS} ticks")
+        return st["last"], st
+    st["fails"] = 0
+
+    actionable, quiet = [], []
+    for it in items:
+        uri = it.get("uri")
+        if not uri or uri in st["fired"]:
+            continue
+        (quiet if (it.get("reason") or "") in QUIET_REASONS else actionable).append(it)
+    for it in actionable:
+        st["pending"].setdefault(it["uri"], now)
+    live = {it["uri"] for it in actionable}
+    # an item that left the window unanswered (deleted, or scrolled past) is not waited on for ever
+    st["pending"] = {u: t for u, t in st["pending"].items() if u in live}
+    if not st["pending"]:
+        return st["last"], st
+
+    newest, oldest = max(st["pending"].values()), min(st["pending"].values())
+    ripe = now - newest >= SETTLE_S or now - oldest >= MAX_WAIT_S
+    if not ripe or held:
+        return st["last"], st
+
+    batch = sorted((it for it in actionable if it["uri"] in st["pending"]),
+                   key=lambda it: it.get("indexed_at") or "")
+    counts = {}
+    for it in batch:
+        counts[it.get("reason") or "?"] = counts.get(it.get("reason") or "?", 0) + 1
+    ident = hashlib.md5("\n".join(it["uri"] for it in batch).encode("utf-8")).hexdigest()[:12]
+    out = ["wake=%d %s id=%s" % (len(batch), " ".join(f"{k}={v}" for k, v in sorted(counts.items())),
+                                 ident)]
+    out.extend(_line(it) for it in batch)
+    if quiet:
+        qc = {}
+        for it in quiet:
+            qc[it.get("reason") or "?"] = qc.get(it.get("reason") or "?", 0) + 1
+        out.append("also: " + ", ".join(f"{v} {k}" for k, v in sorted(qc.items())))
+    for it in batch + quiet:          # reactions are reported with the batch they arrived beside
+        st["fired"][it["uri"]] = now
+    st["pending"] = {}
+    st["last"] = "\n".join(out)
+    return st["last"], st
+
+
+def _load_state(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            s = json.load(f)
+        return s if isinstance(s, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(path, st):
+    try:
+        os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass   # stderr is merged into the monitored output: a warning here would itself wake the model
+
+
+def main():
+    if GATE == "wake":
+        unread, notes_text, fail = read_town(WAKE_LIMIT)
+        items = None if fail and not notes_text else _items(notes_text)
+        now = time.time()
+        out, st = wake_output(items, _load_state(WAKE_STATE), now,
+                              held=held_reason(now) if items else None)
+        _save_state(WAKE_STATE, st)
+        print(out)
+        return
+    print(digest_output(*read_town(10)))
+
+
+if __name__ == "__main__":
+    main()
