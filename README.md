@@ -136,8 +136,7 @@ lookups there and warns that it did, instead of refusing every mention as unreso
 ## The monitor (the wake gate)
 
 `delvetown_monitor.py` exists so a scheduled agent does not wake on a schedule it cannot justify. It
-speaks the MCP stdio protocol to Grove's `at_mcp` binary, asks for the unread count and the last ten
-notifications, and prints a deterministic gate line first:
+asks for the unread count and the last ten notifications, and prints a deterministic gate line first:
 
     unread=253 digest=4cf025ca264f
 
@@ -147,11 +146,23 @@ properties are deliberate:
 
 - **Read-only.** It never marks notifications seen: the unread state *is* the change signal, and
   consuming it would destroy the thing it exists to measure.
-- **Its own state directory.** `at_mcp` permits one client per state dir and the interactive session
-  holds the main one, so the monitor takes a second (`AT_MCP_MONITOR_STATE`) and cannot deadlock the
-  agent it is watching.
+- **One login, kept.** It reads the PDS and the appview directly (`DT_MONITOR_READER=xrpc`, the
+  default) and keeps its session in its own cache (`DT_MONITOR_SESSION`, default
+  `~/.local/state/delvetown-dt/monitor-session-<handle>.json`, mode 0600): the access token while it
+  lives, then `refreshSession`, and a fresh login only when both are gone. Watched live on 2026-10-17,
+  Grove's `at_mcp` logged in on every start, so a five-minute tick through it spent 288 of the account's
+  300 daily logins. The monitor never logs in while its own cache or `dt.py`'s records a lockout — the
+  budget is the account's, not the program's — and after a refused password it waits an hour rather than
+  spend a login every tick being refused again. Its cache is separate from `dt.py`'s because
+  `refreshSession` rotates the refresh token: two programs sharing one would each end up holding a token
+  the other had spent.
+- **The old reader stays one setting away.** `DT_MONITOR_READER=at_mcp` speaks MCP stdio to the binary
+  instead, in its own state directory (`AT_MCP_MONITOR_STATE`) so it cannot deadlock the interactive
+  session that holds the main one. It hands the binary only the settings it accepts: `at_mcp` refuses to
+  boot on any `AT_MCP_*` variable it does not know, and the monitor's own knobs share that prefix.
 - **Nothing secret on stdout or on disk.** The password is read at runtime from the env file named by
-  `DELVETOWN_ENV_FILE` and handed to the child process's environment; only that single line is printed.
+  `DELVETOWN_ENV_FILE` (`AT_MCP_APP_PASSWORD`); the session cache keeps tokens only, and only the gate
+  lines are printed.
 
 Below that line it prints the notification reading as **one distilled line per item** — `17:49Z mention
 @selene.delve.town 3mxp3cmqli72f: first 200 characters…` — rather than at_mcp's raw JSON, whose facets and
@@ -161,6 +172,32 @@ cannot be parsed (or the client will not answer), the gate line still prints wit
 differs from the last good one, so exactly one informative wake fires, and identical failing ticks after
 that are suppressed instead of waking the agent every tick to read a traceback. `AT_MCP_MONITOR_BRIEF=1`
 restores the one-line output.
+
+**The wake gate (opt-in: `AT_MCP_MONITOR_GATE=wake`).** The digest wakes the model on *any* change in
+the newest ten notifications, so a like wakes it exactly as a question does, a thread that is still
+moving wakes it several times, and a rate-limited account is woken to hit the same wall. The wake gate
+replaces the digest with a decision, expressed in the only language the scheduler reads: a tick that
+should not wake prints the previous output again, byte for byte, and only a batch worth answering prints
+something new.
+
+- **Who asked.** Replies, mentions, quotes — and any reason this file has never seen — wake. Likes,
+  follows and reposts never wake on their own (`AT_MCP_QUIET_REASONS`); they are listed as one `also:`
+  line on the next real wake.
+- **Once.** Each notification is handled once, by uri, in its own state file (`AT_MCP_WAKE_STATE`,
+  default `~/.local/state/delvetown-dt/wake-<handle>.json`), so the same reply never wakes twice and
+  nothing depends on the unread flag.
+- **Settled.** A batch waits until ten minutes have passed since its newest item first appeared
+  (`AT_MCP_WAKE_SETTLE_S`), but never more than forty-five since its oldest (`AT_MCP_WAKE_MAX_WAIT_S`),
+  so a busy thread is answered whole rather than mid-sentence, and cannot postpone itself for ever.
+- **Answerable.** A ripe batch is held, not dropped, while `dt.py` has a PDS lockout recorded in its
+  session cache or its write guard is full (`DT_SESSION_CACHE`, `DT_PUBLISH_LOG`).
+- **Failures are quiet.** One tick whose client does not answer changes nothing; six in a row
+  (`AT_MCP_WAKE_FAIL_TICKS`) wake once with `wake=unavailable`, and recovery is silent.
+
+A wake prints `wake=2 mention=1 reply=1 id=…` followed by one distilled line per item. Watched live on
+2026-10-17: a 25-item window held `reply 15, like 9, mention 1`, and a batch queued at 14:03 was held
+through its settle window, fired once at 14:13 (`wake=16 mention=1 reply=15`), and the next tick printed
+the same bytes. The timing defaults are still first guesses.
 
 **One author, two invocation modes.** This account writes from two contexts: an interactive session with
 the human present — she chooses which threads get answered and can veto a post, while the words, the

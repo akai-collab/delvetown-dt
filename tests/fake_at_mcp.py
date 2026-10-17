@@ -14,6 +14,19 @@ import json
 import os
 import sys
 
+# Grove's at_mcp validates its environment and refuses to boot on an unknown AT_MCP_* setting:
+#   ERROR! Config provider Config.Reader failed with: (ArgumentError)
+#   AT_MCP_MONITOR_GATE is not an AtMcp setting; did you mean AT_MCP_GRANT?
+# Ignoring the environment here let a real bug pass 202 green tests while the gate's own opt-in
+# variable killed the client it depends on, on the machine (2026-10-17). Mirror the refusal.
+ALLOWED = {"AT_MCP_NETWORK", "AT_MCP_SERVICE", "AT_MCP_HANDLE", "AT_MCP_APP_PASSWORD",
+           "AT_MCP_STATE_DIR"}
+_leaked = sorted(k for k in os.environ if k.startswith("AT_MCP_") and k not in ALLOWED)
+if _leaked:
+    sys.stderr.write("ERROR! Config provider Config.Reader failed with: (ArgumentError) "
+                     "%s is not an AtMcp setting\n" % _leaked[0])
+    sys.exit(70)
+
 MODE = os.environ.get("FAKE_MODE", "ok")
 SECONDS = os.environ.get("FAKE_SECONDS", "20")
 
