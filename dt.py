@@ -417,7 +417,7 @@ def user_agent():
         "%s/1.0 (+https://github.com/akai-collab/delvetown-dt)" % (HANDLE or "delvetown")
 
 
-def req(method, url, body=None, token=None, params=None):
+def req(method, url, body=None, token=None, params=None, headers_out=None):
     if DRY_RUN:
         # Writes are answered as if accepted, reads return nothing: nothing leaves the machine.
         if method.upper() in ("POST", "PUT", "DELETE"):
@@ -440,8 +440,12 @@ def req(method, url, body=None, token=None, params=None):
     r = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(r, timeout=90) as resp:
+            if headers_out is not None:
+                headers_out.update({k.lower(): v for k, v in resp.headers.items()})
             return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as e:
+        if headers_out is not None:
+            headers_out.update({k.lower(): v for k, v in (e.headers or {}).items()})
         raw = e.read().decode("utf-8", "replace")
         try:
             return e.code, json.loads(raw)
@@ -567,18 +571,152 @@ def upload_blob(path, token):
         return json.loads(resp.read().decode("utf-8"))["blob"]
 
 
+# The session is cached. createSession is the PDS's login, and it is rate-limited per account: 300 a
+# day. On 2026-10-17 the skillissue seat spent all of them — every write and every private read logged
+# in afresh, every write logged in twice (once for the token, once for the identity check), and a run
+# stuck on the 429 kept retrying — and the PDS answered 429 with Retry-After 60355: no publishing for
+# sixteen hours, from anywhere. So one login is kept and reused: the access token for as long as it
+# lives, then refreshSession (which is not the login and does not spend the login budget), and a fresh
+# createSession only when both are gone. The cache holds tokens, never the password; it is per account
+# and mode 0600, and a cached session for any DID but this account's is ignored.
+SESSION_CACHE = os.environ.get(
+    "DT_SESSION_CACHE",
+    os.path.join(
+        os.path.expanduser("~"), ".local", "state", "delvetown-dt",
+        "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT,
+    ),
+)
+SESSION_MARGIN = 300     # seconds of life a cached token must still have to be used
+_SESSION = None          # one process, one session
+_SESSION_SOURCE = None   # "cache", "refresh" or "login" — what this process's session came from
+
+
+def _jwt_exp(tok):
+    """A JWT's `exp` claim, unverified — enough to decide whether to use it. Anything unreadable: None."""
+    try:
+        import base64
+        part = str(tok).split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        return int(claims["exp"])
+    except Exception:
+        return None
+
+
+def _token_usable(tok, now=None):
+    exp = _jwt_exp(tok) if tok else None
+    return bool(exp) and exp - (now or time.time()) > SESSION_MARGIN
+
+
+def _read_session_cache():
+    try:
+        with open(SESSION_CACHE, "r", encoding="utf-8") as f:
+            c = json.load(f)
+        return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_session_cache(c):
+    """Write the cache 0600 from the first byte (no window where another user can read it). A cache that
+    cannot be written costs the next run a login, not this run its write."""
+    try:
+        os.makedirs(os.path.dirname(SESSION_CACHE) or ".", mode=0o700, exist_ok=True)
+        tmp = SESSION_CACHE + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(c, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, SESSION_CACHE)
+    except OSError as exc:
+        print(f"session: not cached ({exc})", file=sys.stderr)
+
+
+class _session_lock:
+    """Serialise get-or-refresh across processes: refreshSession rotates the refresh token, so two runs
+    refreshing with the same one at once can leave one of them holding a dead token."""
+
+    def __enter__(self):
+        self.f = None
+        try:
+            import fcntl
+            os.makedirs(os.path.dirname(SESSION_CACHE) or ".", mode=0o700, exist_ok=True)
+            self.f = open(SESSION_CACHE + ".lock", "a")
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.f:
+            self.f.close()
+
+
+def _login_refused(until, retry_after, body=None):
+    """A login the PDS has refused for a while: say until when, in JSON, and exit — and do not ask again
+    before then. A run that retries a 429 spends nothing it can get back and keeps the bucket at zero."""
+    print(json.dumps({"status": 0, "refused": "createSession is rate-limited for this account",
+                      "retry_after_s": max(0, int(retry_after)),
+                      "until": datetime.fromtimestamp(until, timezone.utc).isoformat()
+                               .replace("+00:00", "Z"),
+                      "until_local": _local(datetime.fromtimestamp(until, timezone.utc).isoformat()),
+                      "error": (body or {}).get("error"),
+                      "why": "the PDS's login budget for this account is spent; every write needs a "
+                             "session, so nothing can publish before then — do not retry"}, indent=2))
+    raise SystemExit(1)
+
+
 def session():
+    global _SESSION, _SESSION_SOURCE
     if DRY_RUN:
         return {"accessJwt": "dry-run-token", "did": DID, "handle": HANDLE}
-    sec = secret()
-    # Log in by DID, not by handle: a DID never changes, so an account that renames itself (which is
-    # the point of the `handle` command below) cannot lock this client out of its own account. The PDS
-    # accepts either and answers with the current handle.
-    status, s = req("POST", PDS + "/xrpc/com.atproto.server.createSession",
-                    {"identifier": DID or HANDLE, "password": sec["password"]})
-    if status != 200 or not s.get("accessJwt"):
-        raise SystemExit("createSession failed: " + scrub_secret_from_text(json.dumps(s), sec))
-    return s
+    if _SESSION is not None:
+        return _SESSION
+    with _session_lock():
+        now = time.time()
+        c = _read_session_cache()
+        if c.get("did") != DID:            # another account's session, or none: never borrow it
+            c = {}
+        # 1. the cached access token, confirmed by the PDS (a revoked token fails here, not mid-write)
+        if _token_usable(c.get("accessJwt"), now):
+            st, who = req("GET", PDS + "/xrpc/com.atproto.server.getSession", token=c["accessJwt"])
+            if st == 200 and who.get("did") == DID:
+                _SESSION, _SESSION_SOURCE = c, "cache"
+                return c
+        # 2. the refresh token: a new pair without spending a login
+        if _token_usable(c.get("refreshJwt"), now):
+            st, s = req("POST", PDS + "/xrpc/com.atproto.server.refreshSession", token=c["refreshJwt"])
+            if st == 200 and s.get("accessJwt") and s.get("did") == DID:
+                _write_session_cache(s)
+                _SESSION, _SESSION_SOURCE = s, "refresh"
+                return s
+        # 3. a known lockout: answer it here, without asking the PDS again
+        locked = c.get("login_locked_until") or 0
+        if now < locked:
+            _login_refused(locked, locked - now)
+        # 4. log in. By DID, not by handle: a DID never changes, so an account that renames itself (the
+        # point of the `handle` command) cannot lock this client out of its own account.
+        sec = secret()
+        hdrs = {}
+        status, s = req("POST", PDS + "/xrpc/com.atproto.server.createSession",
+                        {"identifier": DID or HANDLE, "password": sec["password"]}, headers_out=hdrs)
+        if status == 429:
+            try:
+                retry = int(float(hdrs.get("retry-after") or 0))
+            except ValueError:
+                retry = 0
+            if not retry:
+                try:
+                    retry = int(float(hdrs.get("ratelimit-reset") or 0) - now)
+                except ValueError:
+                    retry = 0
+            retry = max(retry, 60)
+            _write_session_cache({"did": DID, "login_locked_until": now + retry})
+            _login_refused(now + retry, retry, s)
+        if status != 200 or not s.get("accessJwt"):
+            raise SystemExit("createSession failed: " + scrub_secret_from_text(json.dumps(s), sec))
+        _write_session_cache(s)
+        _SESSION, _SESSION_SOURCE = s, "login"
+        return s
 
 
 def merge_profile(cur, display_name=None, description=None, pronouns=None):
@@ -1055,6 +1193,16 @@ def check_text(text, token=None, verbose=True, online=True):
     `online=False` skips the network checks (handles, links, correction rate) — for tests.
     """
     hard, warn = [], []
+
+    # A dry run reads nothing, so every lookup below would come back empty and file a real handle as a
+    # typo: a dry run could not exercise a post with a mention in it, which is the post most worth
+    # exercising. Skip the lookups and say so, rather than refusing on an answer nobody gave.
+    if online and DRY_RUN:
+        unchecked = (len(set(HANDLE_RE.findall(text))) + len(set(ATURI_RE.findall(text)))
+                     + len(set(POSTLINK_RE.findall(text))))
+        if unchecked:
+            warn.append(f"dry run: {unchecked} handle(s)/record link(s) not checked (no network)")
+        online = False
 
     for h in (sorted(set(HANDLE_RE.findall(text))) if online else []):
         if not _resolve_any(h):
@@ -1673,7 +1821,7 @@ def parent_root(parent_uri, fetch=None):
 
 
 def feed_target(args):
-    """dt.py feed [limit] [<generator-uri>|<handle>] [--following] → ("feed"|"following"|"actor", target)
+    """dt.py feed [limit] [<generator-uri>|<handle>|<did>] [--following] → ("feed"|"following"|"actor", target)
 
     The URI has to reach the server. This command once swallowed it and read the town feed instead, so
     three different generator URIs came back as one identical page, and a claim I built on that page
@@ -1685,7 +1833,8 @@ def feed_target(args):
     """
     if "--following" in args:
         return "following", None
-    given = [a for a in args if not a.isdigit()]
+    # flags (--force, --no-sign) are the caller's business, not a target; main() reads the limit
+    given = [a for a in args if not a.isdigit() and not a.startswith("--")]
     uris = [a for a in given if a.startswith("at://")]
     handles = [a for a in given if not a.startswith("at://")]
     if len(uris) + len(handles) > 1:
@@ -1697,6 +1846,8 @@ def feed_target(args):
         # instead: the same silent substitution the docstring indicts, applied to the likeliest
         # argument rather than the rarest one. It reads that account's feed now, or refuses.
         h = handles[0].lstrip("@").strip()
+        if h.startswith("did:"):       # a DID names an account as well as a handle does
+            return "actor", h
         if "." not in h or "/" in h or " " in h:
             _usage("feed cannot read %r: pass a limit, a generator at:// URI, a handle, or --following"
                    % handles[0])
@@ -1765,13 +1916,14 @@ def main():
     if cmd == "reply" and len(sys.argv) < 5:
         _usage(USAGE["reply"])
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
-    token = session()["accessJwt"] if needs else None
+    # one session per process: this used to call session() twice for every write, two logins each
+    _s = session() if needs else None
+    token = _s["accessJwt"] if _s else None
     if needs and cmd in WRITE_CMDS:
         # A write must come from the account it was meant to be. If the vault resolved a different
         # login (wrong interpreter, a profile home that was never set, an inherited environment), the
         # record goes out under the wrong name and the 200 looks exactly like success — this is how a
         # seat's first run published as akai. Check the session's DID against the account's, every write.
-        _s = session()
         _who = _s.get("did") or req("GET", PDS + "/xrpc/com.atproto.server.getSession",
                                     token=_s["accessJwt"])[1].get("did")
         if _who and _who != DID:
@@ -1783,8 +1935,8 @@ def main():
         status, who = req("GET", PDS + "/xrpc/com.atproto.server.getSession", token=token)
         print(json.dumps({"status": status, "did": who.get("did"), "handle": who.get("handle"),
                           "active": who.get("active"), "status_doc": who.get("status"),
-                          "email": who.get("email"), "emailConfirmed": who.get("emailConfirmed")},
-                         indent=2))
+                          "email": who.get("email"), "emailConfirmed": who.get("emailConfirmed"),
+                          "session_from": _SESSION_SOURCE}, indent=2))
 
     elif cmd == "membership":
         status, m = req("GET", APPVIEW + "/xrpc/town.delve.membership.getMembership", token=token)
@@ -1832,7 +1984,8 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
-        idx = appview_has(res.get("uri")) if status == 200 else None
+        # a dry run sent nothing, so there is nothing for the appview to hold: null, not false
+        idx = appview_has(res.get("uri")) if status == 200 and not DRY_RUN else None
         if status == 200:
             log_write("post", res, text=text, indexed=idx,
                       subject=("image:" + os.path.basename(img)) if img else None)
@@ -1897,7 +2050,8 @@ def main():
         status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
-        idx = appview_has(res.get("uri")) if status == 200 else None
+        # a dry run sent nothing, so there is nothing for the appview to hold: null, not false
+        idx = appview_has(res.get("uri")) if status == 200 and not DRY_RUN else None
         if status == 200:
             log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
                       text=text, indexed=idx)
@@ -2029,7 +2183,7 @@ def main():
             status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                               {"repo": DID, "collection": "town.delve.graph.follow",
                                "rkey": tid(), "record": rec}, token=token)
-            if status == 200:      # follows count against the write guard: log them, like deletes
+            if status == 200:      # a follow is a write, so it is logged; GUARDED_KINDS leaves it out of the quota
                 log_write("follow", res, subject=subj)
             print(json.dumps({"target": arg, "subject": subj, "status": status,
                               "uri": res.get("uri"), "error": res.get("error")}, indent=2))
@@ -2080,8 +2234,9 @@ def main():
         # no URI     = the town's own feed (town.delve.feed.getFeed?feed=<TOWN_FEED>, works logged out)
         # <uri>      = that generator's feed, passed through as given
         # --following = town.delve.feed.getTimeline (needs the session, and lives on the PDS)
-        rest = [a for a in sys.argv[2:] if not a.startswith("--")]
-        limit = int(rest[0]) if rest and rest[0].isdigit() else 20
+        # the limit is whichever argument is a number, before or after the target
+        nums = [a for a in sys.argv[2:] if a.isdigit()]
+        limit = int(nums[0]) if nums else 20
         kind, target = feed_target(sys.argv[2:])
         if kind == "following":
             # getTimeline lives on the PDS (pds.delve.town); the appview rejects a PDS token
