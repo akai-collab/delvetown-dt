@@ -1678,6 +1678,60 @@ class RateLimits(unittest.TestCase):
         self.assertGreater(refusal["retry_after_s"], 0)
 
 
+    def test_the_retry_after_helper_reads_every_form(self):
+        """A 429 may carry delta seconds, an HTTP-date, or only a reset header — and reading just the
+        number turned the date form into zero, which the old floor raised to a minute, which walked the
+        run back into the same 429 (2026-10-17)."""
+        import email.utils
+        from datetime import datetime, timezone
+        now = time.time()
+        self.assertAlmostEqual(dt._retry_after_seconds({"Retry-After": "60355"}), 60355, delta=2)
+        when = email.utils.format_datetime(datetime.fromtimestamp(now + 700, timezone.utc))
+        self.assertAlmostEqual(dt._retry_after_seconds({"retry-after": when}), 700, delta=5)
+        self.assertAlmostEqual(dt._retry_after_seconds({"RateLimit-Reset": str(int(now + 900))}),
+                               900, delta=5)
+        self.assertAlmostEqual(dt._retry_after_seconds({"RateLimit-Reset": "120"}), 120, delta=2)
+        self.assertEqual(dt._retry_after_seconds({"Retry-After": "soonish"}), 60.0,
+                         "unreadable: the floor, never zero")
+        self.assertEqual(dt._retry_after_seconds({}), 60.0, "no header at all: the floor")
+
+    def test_a_login_lockout_keeps_the_cached_token_pair(self):
+        """The lock is on logging in, not on the session we already hold: a refresh costs no login. The
+        cache was rewritten as just {"did", "login_locked_until"}, so the moment the lock lifted the
+        seat had to log in fresh — a login spent for nothing (2026-10-17)."""
+        import contextlib
+        import io
+        self._stub_urlopen(self._only_a_429_comes_back(retry_after="60355"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                dt.session()
+        self.assertIn("createSession", out.getvalue())
+        with open(dt.SESSION_CACHE, encoding="utf-8") as f:
+            kept = json.load(f)
+        self.assertEqual(kept.get("accessJwt"), "a.b.c", kept)
+        self.assertEqual(kept.get("refreshJwt"), "d.e.f", kept)
+        self.assertEqual(kept.get("did"), dt.DID)
+        self.assertGreater(kept.get("login_locked_until", 0), time.time())
+
+    def test_a_date_shaped_retry_after_does_not_collapse_to_the_floor(self):
+        import contextlib
+        import email.utils
+        import io
+        from datetime import datetime, timezone
+        when = email.utils.format_datetime(datetime.fromtimestamp(time.time() + 700, timezone.utc))
+        self._stub_urlopen(self._only_a_429_comes_back(retry_after=when))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit):
+                dt.req("POST", dt.PDS + "/xrpc/com.atproto.repo.createRecord", body={}, token="t")
+        refusal = json.loads(out.getvalue())
+        self.assertAlmostEqual(refusal["retry_after_s"], 700, delta=5)
+        self.assertNotEqual(refusal["retry_after_s"], 60, "the date must not collapse to the floor")
+        with open(dt.SESSION_CACHE, encoding="utf-8") as f:
+            self.assertGreater(json.load(f).get("locked_until", 0), time.time() + 600)
+
+
 class SuiteIntegrity(unittest.TestCase):
     """A duplicate class name in this file silently drops the earlier class's tests: Python keeps the
     last definition, so a second `class FeedTarget` replaced the first and its tests stopped running
