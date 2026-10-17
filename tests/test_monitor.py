@@ -16,7 +16,7 @@ MONITOR = os.path.join(ROOT, "delvetown_monitor.py")
 GATE = re.compile(r"^unread=\S+ digest=\S+$")
 
 
-def run_monitor(mode="ok", seconds="20", brief=None):
+def run_monitor(mode="ok", seconds="20", brief=None, extra=None):
     env = dict(os.environ)
     env.update({
         "AT_MCP_BIN": sys.executable,
@@ -30,6 +30,7 @@ def run_monitor(mode="ok", seconds="20", brief=None):
     env.pop("AT_MCP_MONITOR_BRIEF", None)
     if brief is not None:
         env["AT_MCP_MONITOR_BRIEF"] = brief
+    env.update(extra or {})
     with tempfile.TemporaryDirectory() as state:
         env["AT_MCP_MONITOR_STATE"] = state
         proc = subprocess.run([sys.executable, MONITOR], env=env, capture_output=True, text=True,
@@ -38,6 +39,21 @@ def run_monitor(mode="ok", seconds="20", brief=None):
 
 
 class Monitor(unittest.TestCase):
+
+    def test_the_monitors_own_knobs_do_not_reach_the_client(self):
+        """Our opt-ins are AT_MCP_-prefixed, and at_mcp refuses to boot on an unknown AT_MCP_* setting,
+        so a monitor that passes its whole environment through kills the client it reads with. That is
+        what the gate's own documented opt-in did on the machine: every tick said "no answer" while the
+        digest, with no such variable set, worked. The fake client now refuses the same way it does."""
+        for key, value in (("AT_MCP_MONITOR_GATE", "wake"), ("AT_MCP_MONITOR_BRIEF", "1"),
+                           ("AT_MCP_WAKE_SETTLE_S", "30")):
+            out, err = run_monitor("ok", extra={key: value})
+            first = (out.strip().splitlines() or [""])[0]
+            self.assertNotIn("unavailable", first,
+                             "%s reached the client and it refused to boot: %r" % (key, first))
+            self.assertTrue(first.startswith(("wake=", "unread=")), first)
+
+
     """The monitor runs a fake binary: see fake_at_mcp.py for the modes."""
 
     def test_gate_line_then_distilled_brief(self):

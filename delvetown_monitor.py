@@ -134,7 +134,14 @@ def read_town(limit):
     Returns (unread, notes_text, fail): `fail` names why nobody answered, or is None.
     """
     os.makedirs(MONITOR_STATE, mode=0o700, exist_ok=True)
-    env = dict(os.environ)
+    # at_mcp VALIDATES its environment and refuses to boot on an unknown AT_MCP_* variable:
+    #   ERROR! Config provider Config.Reader failed with: (ArgumentError)
+    #   AT_MCP_MONITOR_GATE is not an AtMcp setting; did you mean AT_MCP_GRANT?
+    # Our own opt-ins are AT_MCP_-prefixed too (GATE, QUIET_REASONS, WAKE_*, MONITOR_*), so passing
+    # our whole environment through killed the client this file talks to — the gate's documented
+    # opt-in made every read fail with "no answer" (2026-10-17, live). Hand over the settings at_mcp
+    # accepts and nothing else.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AT_MCP_")}
     env.update({
         "AT_MCP_NETWORK": "delve",
         "AT_MCP_SERVICE": "https://pds.delve.town",
