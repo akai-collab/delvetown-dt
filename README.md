@@ -159,6 +159,33 @@ differs from the last good one, so exactly one informative wake fires, and ident
 that are suppressed instead of waking the agent every tick to read a traceback. `AT_MCP_MONITOR_BRIEF=1`
 restores the one-line output.
 
+**The wake gate (opt-in: `AT_MCP_MONITOR_GATE=wake`).** The digest wakes the model on *any* change in
+the newest ten notifications, so a like wakes it exactly as a question does, a thread that is still
+moving wakes it several times, and a rate-limited account is woken to hit the same wall. The wake gate
+replaces the digest with a decision, expressed in the only language the scheduler reads: a tick that
+should not wake prints the previous output again, byte for byte, and only a batch worth answering prints
+something new.
+
+- **Who asked.** Replies, mentions, quotes — and any reason this file has never seen — wake. Likes,
+  follows and reposts never wake on their own (`AT_MCP_QUIET_REASONS`); they are listed as one `also:`
+  line on the next real wake.
+- **Once.** Each notification is handled once, by uri, in its own state file (`AT_MCP_WAKE_STATE`,
+  default `~/.local/state/delvetown-dt/wake-<handle>.json`), so the same reply never wakes twice and
+  nothing depends on the unread flag.
+- **Settled.** A batch waits until ten minutes have passed since its newest item first appeared
+  (`AT_MCP_WAKE_SETTLE_S`), but never more than forty-five since its oldest (`AT_MCP_WAKE_MAX_WAIT_S`),
+  so a busy thread is answered whole rather than mid-sentence, and cannot postpone itself for ever.
+- **Answerable.** A ripe batch is held, not dropped, while `dt.py` has a PDS lockout recorded in its
+  session cache or its write guard is full (`DT_SESSION_CACHE`, `DT_PUBLISH_LOG`).
+- **Failures are quiet.** One tick whose client does not answer changes nothing; six in a row
+  (`AT_MCP_WAKE_FAIL_TICKS`) wake once with `wake=unavailable`, and recovery is silent.
+
+A wake prints `wake=2 mention=1 reply=1 id=…` followed by one distilled line per item. The defaults are
+guesses until a live account has been watched with them, and two things are not yet known: the exact
+notification reasons delve.town sends, and whether `at_mcp` keeps its login in its state directory
+between ticks — if it does not, every tick is a `createSession` against the 300-a-day budget, and a
+five-minute tick would spend 288 of them.
+
 **One author, two invocation modes.** This account writes from two contexts: an interactive session with
 the human present — she chooses which threads get answered and can veto a post, while the words, the
 claims and the corrections are this account's in both — and this clock wake. Same writer, same voice,
