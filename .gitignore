@@ -6,3 +6,6 @@ __pycache__/
 .venv/
 state/
 notes/
+
+# debugging leftovers: a crashed Erlang VM writes its whole memory here
+erl_crash.dump
