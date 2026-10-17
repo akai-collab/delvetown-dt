@@ -1605,15 +1605,16 @@ class RateLimits(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self.saved = (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt._SESSION, dt._SESSION_SOURCE)
+        self.saved = (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt.secret, dt._SESSION, dt._SESSION_SOURCE)
         dt.SESSION_CACHE = os.path.join(self.tmp, "state", "session.json")
         dt.DRY_RUN = False
         dt._SESSION = dt._SESSION_SOURCE = None
+        dt.secret = lambda: {"password": "pw"}   # never the real vault: a test has no business with it
         dt._write_session_cache({"did": dt.DID, "handle": dt.HANDLE,
                                  "accessJwt": "a.b.c", "refreshJwt": "d.e.f"})
 
     def tearDown(self):
-        (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt._SESSION, dt._SESSION_SOURCE) = self.saved
+        (dt.SESSION_CACHE, dt.DRY_RUN, dt.req, dt.secret, dt._SESSION, dt._SESSION_SOURCE) = self.saved
         shutil.rmtree(self.tmp)
 
     def _only_a_429_comes_back(self, retry_after="60355", body=b'{"error":"RateLimitExceeded"}'):
