@@ -540,20 +540,34 @@ def wake_output(items, state, now, held=None):
         if not uri or uri in st["fired"]:
             continue
         (quiet if (it.get("reason") or "") in QUIET_REASONS else actionable).append(it)
+    # A pending entry keeps the item itself, not only when it was first seen: the window is only the
+    # newest WAKE_LIMIT notifications, and while a batch is held (a lockout can last sixteen hours) or
+    # settling, likes alone can scroll a reply out of it. Pruning to the window dropped exactly the
+    # batch "held, not dropped" promises to keep. An entry now leaves only by firing or, unanswered,
+    # after FIRED_TTL_S; a reply deleted meanwhile is shown once from what was kept, which is cheaper
+    # than an answer that never comes.
+    pending = {}
+    for u, v in st["pending"].items():
+        if isinstance(v, dict) and isinstance(v.get("item"), dict):
+            pending[u] = {"t": float(v["t"]) if isinstance(v.get("t"), (int, float)) else now,
+                          "item": v["item"]}
+        elif isinstance(v, (int, float)):            # state written before items were kept
+            pending[u] = {"t": float(v), "item": None}
     for it in actionable:
-        st["pending"].setdefault(it["uri"], now)
-    live = {it["uri"] for it in actionable}
-    # an item that left the window unanswered (deleted, or scrolled past) is not waited on for ever
-    st["pending"] = {u: t for u, t in st["pending"].items() if u in live}
+        entry = pending.setdefault(it["uri"], {"t": now, "item": None})
+        entry["item"] = it                           # the freshest reading of it
+    st["pending"] = {u: e for u, e in pending.items()
+                     if e["item"] is not None and now - e["t"] < FIRED_TTL_S}
     if not st["pending"]:
         return st["last"], st
 
-    newest, oldest = max(st["pending"].values()), min(st["pending"].values())
+    seen = [e["t"] for e in st["pending"].values()]
+    newest, oldest = max(seen), min(seen)
     ripe = now - newest >= SETTLE_S or now - oldest >= MAX_WAIT_S
     if not ripe or held:
         return st["last"], st
 
-    batch = sorted((it for it in actionable if it["uri"] in st["pending"]),
+    batch = sorted((e["item"] for e in st["pending"].values()),
                    key=lambda it: it.get("indexed_at") or "")
     counts = {}
     for it in batch:

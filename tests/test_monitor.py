@@ -184,6 +184,29 @@ class WakeGate(unittest.TestCase):
         out, st = self.tick([note("r1")], st, 4000)
         self.assertTrue(out.startswith("wake=1"), "the hold lifted: the batch is still there")
 
+    def test_a_held_reply_survives_scrolling_out_of_the_window(self):
+        """Twenty-five likes during a lockout push the reply out of what the monitor reads; the reply
+        must still wake once the hold lifts."""
+        _, st = self.tick([note("r1")], {}, 0)
+        _, st = self.tick([note("r1")], st, 700, held="rate-limited until 03:45Z")
+        likes = [note("l%d" % i, "like") for i in range(25)]
+        out, st = self.tick(likes, st, 800, held="rate-limited until 03:45Z")
+        self.assertEqual(out, "wake=none")
+        out, st = self.tick(likes, st, 5000)
+        self.assertTrue(out.startswith("wake=1 reply=1"), out)
+        self.assertIn("r1: hullo r1", out)
+        again, st = self.tick(likes, st, 9000)
+        self.assertEqual(again, out, "and it wakes once")
+
+    def test_pending_state_from_before_items_were_kept_still_fires(self):
+        out, st = self.tick([note("r1")], {"pending": {note("r1")["uri"]: 0}}, 700)
+        self.assertTrue(out.startswith("wake=1"), out)
+
+    def test_an_unanswered_pending_entry_expires(self):
+        _, st = self.tick([note("r1")], {}, 0, held="x")
+        _, st = self.tick([], st, self.m.FIRED_TTL_S + 1, held="x")
+        self.assertEqual(st["pending"], {})
+
     def test_one_failing_tick_is_silent_and_a_long_outage_wakes_once(self):
         _, st = self.tick([note("r1")], {}, 0)
         good, st = self.tick([note("r1")], st, 600)
