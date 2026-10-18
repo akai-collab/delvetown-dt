@@ -105,6 +105,52 @@ class Monitor(unittest.TestCase):
             self.assertEqual(out, run_monitor("die")[0])
 
 
+class Paths(unittest.TestCase):
+    """The monitor reads the same state files dt.py writes, named for the account it watches. Two
+    accounts can share a machine; a monitor that read akai's session cache while watching another
+    would hold that account's wake for a lockout that was never its own, and miss its own."""
+
+    ENV = ("AT_MCP_WAKE_STATE", "DT_SESSION_CACHE", "DT_PUBLISH_LOG", "DT_MONITOR_SESSION")
+
+    def module_for(self, handle, extra=None):
+        """Load the monitor fresh, with the per-account path vars cleared unless the test sets one."""
+        import importlib.util
+        saved = {k: os.environ.get(k) for k in self.ENV + ("AT_MCP_HANDLE",)}
+        for k in self.ENV:
+            os.environ.pop(k, None)
+        os.environ["AT_MCP_HANDLE"] = handle
+        os.environ.update(extra or {})
+        try:
+            spec = importlib.util.spec_from_file_location("mon_" + handle.split(".")[0], MONITOR)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return mod
+
+    def test_akai_keeps_the_bare_names(self):
+        m = self.module_for("akai.delve.town")
+        self.assertTrue(m.SESSION_CACHE.endswith("/session.json"), m.SESSION_CACHE)
+        self.assertTrue(m.PUBLISH_LOG.endswith("/publish-log.jsonl"), m.PUBLISH_LOG)
+        self.assertTrue(m.WAKE_STATE.endswith("/wake-akai.json"), m.WAKE_STATE)
+
+    def test_another_account_gets_its_own_client_paths(self):
+        m = self.module_for("skillissue.delve.town")
+        self.assertTrue(m.SESSION_CACHE.endswith("/session-skillissue.json"), m.SESSION_CACHE)
+        self.assertTrue(m.PUBLISH_LOG.endswith("/publish-log-skillissue.jsonl"), m.PUBLISH_LOG)
+        self.assertTrue(m.WAKE_STATE.endswith("/wake-skillissue.json"), m.WAKE_STATE)
+        self.assertTrue(m.MONITOR_SESSION.endswith("/monitor-session-skillissue.json"), m.MONITOR_SESSION)
+
+    def test_an_explicit_path_still_wins(self):
+        m = self.module_for("skillissue.delve.town",
+                            extra={"DT_PUBLISH_LOG": "/tmp/explicit-log.jsonl"})
+        self.assertEqual(m.PUBLISH_LOG, "/tmp/explicit-log.jsonl")
+
+
 def load_monitor():
     """The monitor as a module: its logic is importable now, and only main() talks to at_mcp."""
     import importlib.util

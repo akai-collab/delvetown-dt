@@ -55,6 +55,7 @@ BIN_ARGS = shlex.split(os.environ.get("AT_MCP_BIN_ARGS", ""))  # so a test can s
 ENV_FILE = os.environ.get("DELVETOWN_ENV_FILE", _home(".hermes", ".env"))
 MONITOR_STATE = os.environ.get("AT_MCP_MONITOR_STATE", _home(".local", "state", "at_mcp-monitor"))
 HANDLE = os.environ.get("AT_MCP_HANDLE", "akai.delve.town")
+ACCOUNT = HANDLE.split(".")[0]      # akai, skillissue, ... — what names every path below
 GATE = (os.environ.get("AT_MCP_MONITOR_GATE") or "digest").strip().lower()
 
 # --- the wake gate's knobs. The defaults are guesses until a live account has been watched with them;
@@ -71,12 +72,18 @@ FIRED_TTL_S = 14 * 86400                                            # how long a
 WAKE_LIMIT = 25    # notifications read per tick in wake mode: ten could scroll past between ticks
 # What dt.py writes when it is rate-limited or at its own write ceiling. Read here rather than imported:
 # the deployed monitor is a lone copy in the profile's scripts dir and cannot import the repo.
+# Every file below is named for the account this monitor watches, and dt.py names them the same way:
+# the bare name is akai's, any other account gets its own. One machine can run two accounts, and a
+# monitor that read akai's lockout or write guard while watching a second account would hold that
+# account's wake for a reason that was never its own — and never see its own lockout at all.
 WAKE_STATE = os.environ.get("AT_MCP_WAKE_STATE") or _home(
-    ".local", "state", "delvetown-dt", "wake-%s.json" % HANDLE.split(".")[0])
+    ".local", "state", "delvetown-dt", "wake-%s.json" % ACCOUNT)
 SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _home(
-    ".local", "state", "delvetown-dt", "session.json")
+    ".local", "state", "delvetown-dt",
+    "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT)
 PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _home(
-    ".local", "state", "delvetown-dt", "publish-log.jsonl")
+    ".local", "state", "delvetown-dt",
+    "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT)
 WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # dt.py's write guard
 
 # --- the direct reader (DT_MONITOR_READER=xrpc). Its session cache is its own, not dt.py's:
@@ -87,7 +94,7 @@ PDS = (os.environ.get("DT_PDS") or "https://pds.delve.town").rstrip("/")
 APPVIEW = (os.environ.get("DT_APPVIEW") or "https://api.delve.town").rstrip("/")
 APPVIEW_DID = os.environ.get("DT_APPVIEW_DID") or "did:web:api.delve.town"
 MONITOR_SESSION = os.environ.get("DT_MONITOR_SESSION") or _home(
-    ".local", "state", "delvetown-dt", "monitor-session-%s.json" % HANDLE.split(".")[0])
+    ".local", "state", "delvetown-dt", "monitor-session-%s.json" % ACCOUNT)
 SESSION_MARGIN = 120        # seconds of life a cached token must still have to be used
 LOGIN_REFUSED_WAIT = 3600   # after a wrong password, do not try again for this long
 HTTP_TIMEOUT = 30
