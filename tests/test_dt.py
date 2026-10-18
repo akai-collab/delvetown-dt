@@ -111,9 +111,12 @@ class Clocks(unittest.TestCase):
         hard, _ = offline("posted 15:00Z, then about two hours after that, at 17:24Z, it lapsed")
         self.assertFalse(any("interval" in h for h in hard), hard)
 
-    def test_mixed_zones_warn(self):
-        _, warn = offline("started 14:00Z and ended at 16:30")
-        self.assertTrue(any("mixes" in w for w in warn), warn)
+    def test_mixed_zones_refuse(self):
+        # was a warning until 2026-10-18; promoted because this is the class that got an interval
+        # wrong in public, and the fix (mark both ends) is three characters
+        hard, warn = offline("started 14:00Z and ended at 16:30")
+        self.assertTrue(any("mixes" in h for h in hard), hard)
+        self.assertFalse(any("mixes" in w for w in warn), warn)
 
     def test_dated_time_without_zone_is_local(self):
         # Both branches used to say +00:00, so a zoneless "2026-10-11 14:30" was read as UTC.
@@ -2000,3 +2003,48 @@ class RefusalsActuallyStop(unittest.TestCase):
         finally:
             sys.argv, dt.write_blocked = old_argv, old_blocked
         self.assertIn("flag, not a post", buf.getvalue())
+
+
+class PreflightRefusesAmbiguousClocks(unittest.TestCase):
+    """The clock states that encode a past public error refuse the publish.
+
+    2026-10-18: promoted from warnings after two posts in one day went out anyway — one with a
+    relative day word, one with a range whose zone was marked at only one end. The advisory
+    warnings (numeric-claim reminders, the rolling correction count, day words while the local
+    and UTC dates agree) stay warnings: that is style advice, not ambiguity.
+    """
+
+    # the real text that warned and published anyway, kept as the regression case
+    MIXED = ("v2 on glucose3 did the N=36 case in 962 s wall clock (16 min 2 s; "
+             "09:15:25 -> 09:31:27Z), build included.")
+
+    def test_mixed_marked_and_unmarked_times_refuse(self):
+        hard, warn = offline(self.MIXED)
+        self.assertTrue(any("mixes zone-marked" in h for h in hard), hard)
+        self.assertFalse(any("mixes zone-marked" in w for w in warn), warn)
+
+    def test_a_bare_time_with_no_zone_refuses(self):
+        hard, _ = offline("It finished between 11:15 and 11:31 and that was that.")
+        self.assertTrue(any("no zone stated" in h for h in hard), hard)
+
+    def test_a_day_word_across_the_date_boundary_refuses(self):
+        # only ambiguous when local and UTC fall on different dates, so force that case
+        from datetime import timezone, timedelta
+        old = dt.LOCAL_TZ
+        try:
+            dt.LOCAL_TZ = timezone(timedelta(hours=-10))     # far enough behind to be yesterday
+            hard, _ = offline("That was this morning, and it is settled.")
+            self.assertTrue(any("while local date" in h for h in hard), hard)
+        finally:
+            dt.LOCAL_TZ = old
+
+    def test_the_advisory_warnings_stay_warnings(self):
+        from datetime import timezone
+        old = dt.LOCAL_TZ
+        try:
+            dt.LOCAL_TZ = timezone.utc                        # dates agree: advice, not ambiguity
+            hard, warn = offline("That was this morning, and it is settled.")
+            self.assertFalse(any("while local date" in h for h in hard), hard)
+            self.assertTrue(any("prefer an explicit time" in w for w in warn), warn)
+        finally:
+            dt.LOCAL_TZ = old
