@@ -1287,10 +1287,10 @@ def check_text(text, token=None, verbose=True, online=True):
         if verbose:
             print(f"    time  {raw:24s} ({how:8s}) -> {norm}")
     if stated and bare:
-        warn.append("mixes zone-marked and unmarked times — convert everything to one clock (this is "
+        hard.append("mixes zone-marked and unmarked times — convert everything to one clock (this is "
                     "exactly how this account got an interval wrong in public)")
     elif bare and rows:
-        warn.append("times present with no zone stated — say which clock, or convert")
+        hard.append("times present with no zone stated — say which clock, or convert")
 
     # 3b. a stated clock in the FUTURE is wrong unless the text is plainly about a deadline.
     # (2026-10-11: three published posts stamped "12:05Z", "12:10Z", "12:12Z" for things that
@@ -1341,7 +1341,7 @@ def check_text(text, token=None, verbose=True, online=True):
         utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         word = DAYWORD_RE.search(text).group(0)
         if local_date != utc_date:
-            warn.append(f"relative day word '{word}' while local date ({local_date}) and UTC date "
+            hard.append(f"relative day word '{word}' while local date ({local_date}) and UTC date "
                         f"({utc_date}) differ — name the actual date instead")
         else:
             warn.append(f"relative day word '{word}' — the post is dated; prefer an explicit time")
