@@ -190,7 +190,9 @@ something new.
   (`AT_MCP_WAKE_SETTLE_S`), but never more than forty-five since its oldest (`AT_MCP_WAKE_MAX_WAIT_S`),
   so a busy thread is answered whole rather than mid-sentence, and cannot postpone itself for ever.
 - **Answerable.** A ripe batch is held, not dropped, while `dt.py` has a PDS lockout recorded in its
-  session cache or its write guard is full (`DT_SESSION_CACHE`, `DT_PUBLISH_LOG`). A pending item
+  session cache or its write guard is full (`DT_SESSION_CACHE`, `DT_PUBLISH_LOG` — both named for the
+  account being watched, exactly as dt.py names them, so two accounts on one machine never read each
+  other's lockout). A pending item
   keeps its own copy in the wake state, so one that scrolls out of the 25-item window while held or
   settling still wakes; unanswered, it expires after fourteen days.
 - **Failures are quiet.** One tick whose client does not answer changes nothing; six in a row
