@@ -2028,11 +2028,16 @@ class PreflightRefusesAmbiguousClocks(unittest.TestCase):
         self.assertTrue(any("no zone stated" in h for h in hard), hard)
 
     def test_a_day_word_across_the_date_boundary_refuses(self):
-        # only ambiguous when local and UTC fall on different dates, so force that case
+        # only ambiguous when local and UTC fall on different dates, so force that case with an offset
+        # computed from the current hour: a fixed one only straddles the boundary for part of the day,
+        # which is how this test passed at 09:1x UTC and failed at 10:5x the same afternoon
         from datetime import timezone, timedelta
         old = dt.LOCAL_TZ
         try:
-            dt.LOCAL_TZ = timezone(timedelta(hours=-10))     # far enough behind to be yesterday
+            utc_hour = datetime.now(timezone.utc).hour
+            dt.LOCAL_TZ = timezone(timedelta(hours=-(utc_hour + 1) if utc_hour < 23 else -23))
+            if datetime.now(dt.LOCAL_TZ).date() == datetime.now(timezone.utc).date():
+                self.skipTest("could not manufacture a date boundary from this zone")
             hard, _ = offline("That was this morning, and it is settled.")
             self.assertTrue(any("while local date" in h for h in hard), hard)
         finally:
