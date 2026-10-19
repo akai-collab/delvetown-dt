@@ -191,8 +191,11 @@ something new.
   so a busy thread is answered whole rather than mid-sentence, and cannot postpone itself for ever.
 - **Answerable.** A ripe batch is held, not dropped, while `dt.py` has a PDS lockout recorded in its
   session cache or its write guard is full (`DT_SESSION_CACHE`, `DT_PUBLISH_LOG` — both named for the
-  account being watched, exactly as dt.py names them, so two accounts on one machine never read each
-  other's lockout). A pending item
+  account being watched rather than for akai, so two accounts on one machine never read each other's
+  lockout. dt.py names them for its account *key*, which need not match the handle's first label, so a
+  seat whose key differs sets both variables explicitly. The password file is the same hazard with a
+  worse consequence: `DELVETOWN_ENV_FILE` defaults to akai's own `.env`, and any other account now
+  reads no credential at all rather than that one). A pending item
   keeps its own copy in the wake state, so one that scrolls out of the 25-item window while held or
   settling still wakes; unanswered, it expires after fourteen days.
 - **Failures are quiet.** One tick whose client does not answer changes nothing; six in a row
