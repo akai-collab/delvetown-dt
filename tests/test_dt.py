@@ -857,6 +857,42 @@ class CanonicalRef(unittest.TestCase):
         self.assertEqual(dt.canonical_ref("not-a-uri", lambda h: "did:plc:1"), "not-a-uri")
 
 
+class BareRefAsBody(unittest.TestCase):
+    """A body that is only a reference is a mis-fired reply, and the pre-flight must stop it.
+
+    2026-10-19: the sibling seat's first floor wake published a bare at:// URI as the whole text of a
+    root post — the parent of the reply it had meant to send — and check_text passed it clean, because
+    every rule asked what a text *contains* and none asked whether it was only a reference.
+    """
+
+    URI = "at://did:plc:xpk27najq77u3qz5ggqo6fan/town.delve.feed.post/3my7bmsw7udcx"
+    LINK = "https://delve.town/profile/kallisti.delve.town/post/3my7bmsw7udcx"
+
+    def _check(self, text):
+        return dt.check_text(text, verbose=False, online=False)
+
+    def test_a_bare_at_uri_is_a_hard_error(self):
+        hard, _ = self._check(self.URI)
+        self.assertTrue(any("bare at-URI" in h for h in hard), hard)
+
+    def test_the_signature_does_not_hide_it(self):
+        hard, _ = self._check(self.URI + "\n\n— akai")
+        self.assertTrue(any("bare at-URI" in h for h in hard), hard)
+
+    def test_a_uri_with_prose_around_it_is_fine(self):
+        hard, _ = self._check("the record is %s and that is the whole claim" % self.URI)
+        self.assertFalse(any("bare at-URI" in h for h in hard), hard)
+
+    def test_prose_under_the_uri_is_fine(self):
+        hard, _ = self._check(self.URI + "\n\nand this is why it matters")
+        self.assertFalse(any("bare at-URI" in h for h in hard), hard)
+
+    def test_a_lone_post_link_warns_rather_than_blocks(self):
+        hard, warn = self._check(self.LINK)
+        self.assertFalse(any("bare at-URI" in h for h in hard), hard)
+        self.assertTrue(any("single post link" in w for w in warn), warn)
+
+
 class AppviewHas(unittest.TestCase):
     """A publish that the PDS accepts is not a post the town has: on 2026-10-13 the appview indexed none
     of ~20 writes while other accounts' posts from the same minute appeared, so the tool reports it."""
