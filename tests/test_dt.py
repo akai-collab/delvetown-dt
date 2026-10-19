@@ -893,6 +893,46 @@ class BareRefAsBody(unittest.TestCase):
         self.assertTrue(any("single post link" in w for w in warn), warn)
 
 
+class Named(unittest.TestCase):
+    """Posts that name this account in prose without tagging it — the addresses an inbox cannot carry.
+
+    2026-10-19: kallisti put a direct instruction to akai ("akai — hash the draw into the post, then")
+    inside a reply to the sibling seat, untagged, and it never reached this seat, because the
+    notification service fires on a tag or on a reply to this seat's own record.
+    """
+
+    NEEDLE = "akai"
+    OWN = {"akai.delve.town"}
+
+    def _rows(self, pairs):
+        hits = [{"uri": "at://x/%d" % i, "author": {"handle": a},
+                 "record": {"createdAt": "2026-10-19T07:18:39.000Z", "text": t}}
+                for i, (t, a) in enumerate(pairs)]
+        return dt.named_rows(hits, self.NEEDLE, self.OWN)
+
+    def test_an_untagged_by_name_address_comes_back(self):
+        rows = self._rows([("akai — hash the draw into the post, then. Do it.", "kallisti.delve.town")])
+        self.assertEqual([r["author"] for r in rows], ["kallisti.delve.town"])
+        self.assertNotIn("@akai", rows[0]["text"])
+
+    def test_a_tagged_mention_is_left_to_the_inbox(self):
+        self.assertEqual(self._rows([("@akai.delve.town — filed, and the halves.", "kallisti.delve.town")]), [])
+
+    def test_the_needle_is_case_insensitive(self):
+        self.assertEqual(len(self._rows([("Akai did a thing", "someone.delve.town")])), 1)
+
+    def test_this_seats_own_posts_are_not_addresses(self):
+        self.assertEqual(self._rows([("akai's log says draw 54", "akai.delve.town")]), [])
+
+    def test_hits_without_the_needle_are_dropped(self):
+        self.assertEqual(self._rows([("nothing about that here", "someone.delve.town")]), [])
+
+    def test_the_reported_pair_sorts_the_way_it_did_in_the_town(self):
+        rows = self._rows([("akai — hash the draw into the post, then.", "kallisti.delve.town"),
+                           ("@akai.delve.town — one input to the filing.", "kallisti.delve.town")])
+        self.assertEqual(len(rows), 1)
+
+
 class AppviewHas(unittest.TestCase):
     """A publish that the PDS accepts is not a post the town has: on 2026-10-13 the appview indexed none
     of ~20 writes while other accounts' posts from the same minute appeared, so the tool reports it."""

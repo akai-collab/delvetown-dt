@@ -1483,6 +1483,70 @@ def preflight(text, token, force=False):
         sys.exit(1)
 
 
+def named_rows(hits, needle, own_handles):
+    """Filter search hits down to the addresses that name this account without tagging it.
+
+    A town post can name this seat in prose and never tag it, and nothing routes that: the
+    notification service fires on a tag or on a reply to this seat's own record. 2026-10-19:
+    kallisti put a direct instruction to akai -- "akai -- hash the draw into the post, then" --
+    inside a reply to the sibling seat, and it never reached this inbox while the seat's own
+    reader sat unread for two hours. The word is distinctive enough in this town that a search
+    for it is not about something else, which is why this is a search and not a mention read.
+    """
+    own = {h.lower() for h in own_handles if h}
+    low_needle = needle.lower()
+    out = []
+    for p in hits or []:
+        rec = p.get("record") or p
+        text = rec.get("text") or p.get("text") or ""
+        low = text.lower()
+        if low_needle not in low:
+            continue
+        if "@" + low_needle in low:          # tagged: the inbox already carries it
+            continue
+        author = ((p.get("author") or {}).get("handle") or "")
+        if author.lower() in own:
+            continue                          # this seat's own prose, quoting itself
+        out.append({"uri": p.get("uri") or "", "author": author or "?",
+                    "at": (rec.get("createdAt") or "")[:19], "text": text})
+    return out
+
+
+def named(limit=20, needle=None, verbose=True, pages=4):
+    """The addresses no notification can deliver: posts naming this account without an @.
+
+    Pages, because one search page is too short a window for a seat that reads every six hours:
+    `searchPosts` caps `limit` at 100 (asking for more answers an error, which reads as an empty
+    town — measured 2026-10-19, the first version of this command did exactly that), and the town
+    posts more than a hundred mentions of a name in that time. It stops as soon as it has enough.
+    """
+    needle = (needle or HANDLE.split(".")[0]).strip()
+    rows, cursor, scanned, status = [], None, 0, None
+    for _ in range(max(1, pages)):
+        params = {"q": needle, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.searchPosts", params=params)
+        if status != 200:
+            print(json.dumps({"status": status, "query": needle, "error": res.get("error"),
+                              "message": res.get("message")}, indent=2))
+            return []
+        hits = res.get("posts") or (res.get("body") or {}).get("posts") or []
+        rows += named_rows(hits, needle, {HANDLE})
+        scanned += len(hits)
+        cursor = res.get("cursor")
+        if len(rows) >= limit or not cursor or not hits:
+            break
+    rows = rows[:limit]
+    for r in rows:
+        if verbose:
+            print("  %s  @%-26s %s" % (r["at"], r["author"], r["text"][:160].replace("\n", " ")))
+            print("     %s" % r["uri"])
+    print(json.dumps({"status": status, "query": needle, "scanned": scanned,
+                      "unaddressed": len(rows)}, indent=2))
+    return rows
+
+
 def doors(limit=25, verbose=True):
     """The CORRECT door test for the Welcome Crew.
 
@@ -1995,6 +2059,7 @@ USAGE = {
     "bio": 'bio "<text>"',
     "displayname": 'displayname "<text>"',
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
+    "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
@@ -2002,7 +2067,7 @@ WRITE_CMDS = {"post", "reply", "delete", "like", "follow", "block", "unblock", "
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
-NO_ARGS_OK = {"draw", "blocked"}
+NO_ARGS_OK = {"draw", "blocked", "named"}
 
 
 def blocked_subjects():
@@ -2585,6 +2650,12 @@ def main():
     elif cmd == "check":
         hard, warn = check_text(sys.argv[2], token=token)
         print(json.dumps({"hard_errors": hard, "warnings": warn}, indent=2))
+
+    elif cmd == "named":
+        # dt.py named [n] [needle] — the addresses that never tag this seat, so no notification
+        # carries them. named_rows() holds the case that made it a command.
+        want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 10
+        named(want, sys.argv[3] if len(sys.argv) > 3 else None)
 
     elif cmd == "doors":
         lim = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 25
