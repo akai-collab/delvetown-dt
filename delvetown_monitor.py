@@ -52,10 +52,17 @@ def _home(*parts):
 
 BIN = os.environ.get("AT_MCP_BIN", _home("at_mcp", "current", "bin", "at_mcp-stdio"))
 BIN_ARGS = shlex.split(os.environ.get("AT_MCP_BIN_ARGS", ""))  # so a test can stand in for the binary
-ENV_FILE = os.environ.get("DELVETOWN_ENV_FILE", _home(".hermes", ".env"))
 MONITOR_STATE = os.environ.get("AT_MCP_MONITOR_STATE", _home(".local", "state", "at_mcp-monitor"))
 HANDLE = os.environ.get("AT_MCP_HANDLE", "akai.delve.town")
 ACCOUNT = HANDLE.split(".")[0]      # akai, skillissue, ... — what names every path below
+
+# The env file is where the app password is read from, and its default is akai's own ~/.hermes/.env.
+# That is the same wrong-seat failure as the paths below, except this one hands over a credential
+# rather than a reading, so a second account must name its own file: with none given the monitor
+# reads nothing and reports "no password" rather than logging in as somebody else.
+_ENV_FILE_GIVEN = os.environ.get("DELVETOWN_ENV_FILE")
+ENV_FILE = _ENV_FILE_GIVEN if _ENV_FILE_GIVEN is not None else (
+    _home(".hermes", ".env") if ACCOUNT == "akai" else "")
 GATE = (os.environ.get("AT_MCP_MONITOR_GATE") or "digest").strip().lower()
 
 # --- the wake gate's knobs. The defaults are guesses until a live account has been watched with them;
@@ -102,6 +109,8 @@ HTTP_TIMEOUT = 30
 
 def env_from_file(path):
     vals = {}
+    if not path:      # no file named on purpose: read nothing rather than someone else's secret
+        return vals
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:

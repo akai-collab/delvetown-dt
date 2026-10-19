@@ -110,7 +110,8 @@ class Paths(unittest.TestCase):
     accounts can share a machine; a monitor that read akai's session cache while watching another
     would hold that account's wake for a lockout that was never its own, and miss its own."""
 
-    ENV = ("AT_MCP_WAKE_STATE", "DT_SESSION_CACHE", "DT_PUBLISH_LOG", "DT_MONITOR_SESSION")
+    ENV = ("AT_MCP_WAKE_STATE", "DT_SESSION_CACHE", "DT_PUBLISH_LOG", "DT_MONITOR_SESSION",
+           "DELVETOWN_ENV_FILE")
 
     def module_for(self, handle, extra=None):
         """Load the monitor fresh, with the per-account path vars cleared unless the test sets one."""
@@ -144,6 +145,22 @@ class Paths(unittest.TestCase):
         self.assertTrue(m.PUBLISH_LOG.endswith("/publish-log-skillissue.jsonl"), m.PUBLISH_LOG)
         self.assertTrue(m.WAKE_STATE.endswith("/wake-skillissue.json"), m.WAKE_STATE)
         self.assertTrue(m.MONITOR_SESSION.endswith("/monitor-session-skillissue.json"), m.MONITOR_SESSION)
+
+    def test_akai_keeps_akai_s_env_file(self):
+        m = self.module_for("akai.delve.town")
+        self.assertTrue(m.ENV_FILE.endswith("/.hermes/.env"), m.ENV_FILE)
+
+    def test_another_account_does_not_inherit_akai_s_secret(self):
+        """The default env file holds akai's app password. A monitor watching a second account must
+        not read it: better no credential — and the "no password" report — than somebody else's."""
+        m = self.module_for("skillissue.delve.town")
+        self.assertEqual(m.ENV_FILE, "", "must not point at akai's .env")
+        self.assertEqual(m.env_from_file(m.ENV_FILE), {}, "and reading it yields no secret")
+
+    def test_an_explicit_env_file_still_wins(self):
+        m = self.module_for("skillissue.delve.town",
+                            extra={"DELVETOWN_ENV_FILE": "/tmp/seat.env"})
+        self.assertEqual(m.ENV_FILE, "/tmp/seat.env")
 
     def test_an_explicit_path_still_wins(self):
         m = self.module_for("skillissue.delve.town",
