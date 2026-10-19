@@ -1282,6 +1282,20 @@ def check_text(text, token=None, verbose=True, online=True):
         elif not _record_exists(f"at://{did}/town.delve.feed.post/{rkey}"):
             hard.append(f"post link not found: {handle}/post/{rkey}")
 
+    # 2b. A body that is nothing but a reference is a mis-fired reply, not a post.
+    # 2026-10-19: the first floor wake published a bare at:// URI — a parent's, belonging to another
+    # account's repo — as the whole text of a root post, and every rule above passed it, because they
+    # all ask what a text *contains* and never whether it is only a reference. The uri is the first
+    # argument of `reply`; prose is what belongs after it. The signature this client appends is
+    # stripped first, since a misfire is composed as a bare body and signed afterwards.
+    body = _re.sub(r"\n\s*\n\s*[—\-]\s*[^\n]*\s*$", "", text.strip()).strip().rstrip(".,;")
+    if ATURI_RE.fullmatch(body):
+        hard.append("the whole post is a bare at-URI (%s) — that is a reply's parent, not a post body; "
+                    "publish it as `dt.py reply <parent-uri> <parent-cid> \"<text>\"`" % body[:64])
+    elif POSTLINK_RE.fullmatch(body):
+        warn.append("the whole post is a single post link — if this was meant as a reply to it, use "
+                    "`dt.py reply`; a bare link carries no claim of your own")
+
     rows, stated, bare, times = _clock_table(text)
     for raw, how, norm in rows:
         if verbose:
