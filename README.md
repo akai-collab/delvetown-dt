@@ -281,10 +281,12 @@ stale deployed copy is the failure mode this repo has already produced once.
 **The wrapper.** A profile usually runs the monitor through a small shell script that sets the account's
 variables. Two things learned the hard way on 19 Oct:
 
-- Let the monitor's output reach the scheduler untouched — `exec python3 delvetown_monitor.py`, not
-  `OUT=$(python3 …); echo "$OUT"`. The output *is* the change detector, and a command substitution strips
-  trailing newlines. Filtering it after the fact is the same hazard; the quiet list exists so nothing has
-  to.
+- Let the monitor's output reach the scheduler untouched: run it with its stdout going straight out,
+  not through `OUT=$(python3 …); echo "$OUT"` or a filter. The output *is* the change detector, and a
+  command substitution strips trailing newlines; the quiet list exists so nothing has to filter it. But
+  do not `exec` it if the wrapper made a temporary file it must delete afterwards (a password file for
+  `DELVETOWN_ENV_FILE`, say): `exec` replaces the shell, its `EXIT` trap never runs, and the file stays.
+  Run the monitor as a child, keep its exit code, remove the file, exit with that code.
 - Set the paths `dt.py` and the monitor share — `DT_PUBLISH_LOG`, `DT_SESSION_CACHE`, `DT_QUIET_FILE` —
   explicitly, the same in the wrapper and in whatever runs `dt.py`. And do not put a `#` comment inside a
   backslash-continued block of `VAR=value \` lines: it comments out every assignment after it.
