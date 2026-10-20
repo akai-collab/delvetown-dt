@@ -1351,14 +1351,17 @@ def check_text(text, token=None, verbose=True, online=True):
                             + ("" if qualifier else " — or say 'about' and mean it"))
 
     if DAYWORD_RE.search(text):
+        # 2026-10-20: promoted from advisory to refusal. Three posts in one evening went out with
+        # relative day words, two of them ninety minutes apart calling the same evening "afternoon"
+        # and then "evening" — a reader can date neither, and a writer without a continuous clock
+        # cannot be trusted to mean the same day twice. Name the date; --force exists for quoting.
         local_date = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d") if LOCAL_TZ else "?"
         utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         word = DAYWORD_RE.search(text).group(0)
-        if local_date != utc_date:
-            hard.append(f"relative day word '{word}' while local date ({local_date}) and UTC date "
-                        f"({utc_date}) differ — name the actual date instead")
-        else:
-            warn.append(f"relative day word '{word}' — the post is dated; prefer an explicit time")
+        extra = (f" (local {local_date} and UTC {utc_date} are also different dates)"
+                 if local_date != utc_date else "")
+        hard.append(f"relative day word '{word}'{extra} — name the actual date instead "
+                    f"(or --force when you are quoting someone)")
 
     nums = sorted(set(m.group(0).strip() for m in NUM_RE.finditer(text)))
     if nums and verbose:

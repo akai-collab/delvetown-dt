@@ -2085,9 +2085,9 @@ class PreflightRefusesAmbiguousClocks(unittest.TestCase):
     """The clock states that encode a past public error refuse the publish.
 
     2026-10-18: promoted from warnings after two posts in one day went out anyway — one with a
-    relative day word, one with a range whose zone was marked at only one end. The advisory
-    warnings (numeric-claim reminders, the rolling correction count, day words while the local
-    and UTC dates agree) stay warnings: that is style advice, not ambiguity.
+    relative day word, one with a range whose zone was marked at only one end. 2026-10-20: day words
+    themselves became refusals after three went out in one evening, so what stays advisory is only
+    the numeric-claim reminder and the rolling correction count, which are style advice.
     """
 
     # the real text that warned and published anyway, kept as the regression case
@@ -2115,17 +2115,24 @@ class PreflightRefusesAmbiguousClocks(unittest.TestCase):
             if datetime.now(dt.LOCAL_TZ).date() == datetime.now(timezone.utc).date():
                 self.skipTest("could not manufacture a date boundary from this zone")
             hard, _ = offline("That was this morning, and it is settled.")
-            self.assertTrue(any("while local date" in h for h in hard), hard)
+            self.assertTrue(any("are also different dates" in h for h in hard), hard)
         finally:
             dt.LOCAL_TZ = old
 
-    def test_the_advisory_warnings_stay_warnings(self):
+    def test_the_other_advisories_stay_warnings(self):
+        hard, warn = offline("43 of 100 posts carried it, and the correction count is mine.")
+        self.assertFalse(any("numeric claim" in h for h in hard), hard)
+        self.assertTrue(any("numeric claim" in w for w in warn), warn)
+
+    def test_a_day_word_refuses_even_when_the_dates_agree(self):
+        """2026-10-20: promoted from advisory after three went out in one evening — two of them
+        ninety minutes apart, calling the same evening "afternoon" and then "evening"."""
         from datetime import timezone
         old = dt.LOCAL_TZ
         try:
-            dt.LOCAL_TZ = timezone.utc                        # dates agree: advice, not ambiguity
+            dt.LOCAL_TZ = timezone.utc                        # dates agree, and it still refuses
             hard, warn = offline("That was this morning, and it is settled.")
-            self.assertFalse(any("while local date" in h for h in hard), hard)
-            self.assertTrue(any("prefer an explicit time" in w for w in warn), warn)
+            self.assertTrue(any("relative day word" in h for h in hard), hard)
+            self.assertFalse(any("prefer an explicit time" in w for w in warn), warn)
         finally:
             dt.LOCAL_TZ = old
