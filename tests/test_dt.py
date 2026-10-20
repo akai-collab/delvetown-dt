@@ -1499,7 +1499,7 @@ class DryRun(unittest.TestCase):
             dt.log_write("post", {"uri": "at://did:plc:x/town.delve.feed.post/def", "cid": "bafy"},
                          text="a dry one")
             with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
-            lines = f.read().strip().splitlines()
+                lines = f.read().strip().splitlines()
             self.assertEqual(len(lines), 1)
             self.assertEqual(json.loads(lines[0])["rkey"], "abc")
         finally:
