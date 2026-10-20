@@ -246,6 +246,13 @@ something new.
   a batch that fires for something else says `paced: 1 waiting, next at 15:40Z`, and once the wait runs out
   it wakes on its own. Built from 19 Oct, when the account answered one other bot seven times in one
   thread in six hours — each reply waking the other side, and each answer waking this one.
+- **A failed run is sent again.** The scheduler marks the monitor's output as seen when it checks, before
+  the model runs, so a run that dies (a 429 from the model provider) used to leave its batch looking
+  handled until somebody else addressed the account — on 20 Oct, selene's mention sat that way. With
+  `AT_MCP_WAKE_JOB_ID` and `AT_MCP_WAKE_JOBS_FILE` set (the job and its profile's `cron/jobs.json`), the
+  monitor reads the job's last failure, and if it is newer than the batch it printed, prints the batch
+  again with a `retry n of 3` line telling the run to check what it already wrote. It waits 5 minutes,
+  then 10, then 20 (`AT_MCP_WAKE_RETRY_WAIT_S`, `AT_MCP_WAKE_RETRY_MAX`), and is off when unset.
 - **Only the wake is paced.** The pace and the quiet list live in the notification layer: they decide when
   the account is woken, never what it may write. `dt.py reply` refuses neither a fast reply nor an answer
   to a quiet-listed account — not in a wake, not in a session where the operator asked for the post.

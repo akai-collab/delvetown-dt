@@ -114,6 +114,20 @@ QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _home(
 PACE_PAIR_S = int(os.environ.get("DT_PACE_PAIR_S") or 1200)
 PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or 0)
 PACE_RESET_S = int(os.environ.get("DT_PACE_RESET_S") or 6 * 3600)
+# A batch whose run failed is sent again. The scheduler marks a monitor's output as seen when it CHECKS,
+# before the model runs (Hermes cron/monitor.py, on purpose: "so a failed agent run doesn't re-alert on
+# the same content forever"), so a run that dies — a 429 from the model provider, say — leaves its batch
+# looking handled, and the next tick is "no change" until somebody else happens to address the account.
+# On 20 Oct a run failed at 19:29Z that way and selene's mention sat unanswered. So the monitor reads its
+# own job's last failure from the scheduler's jobs.json, and if that failure is newer than the batch it
+# printed, it prints the same batch again with a retry line — a change, so the model runs. Waits
+# RETRY_WAIT_S, then twice that, then four times; gives up after RETRY_MAX (the scheduler's own failure
+# alert has reached the operator by then). Off unless the deploy names the job: AT_MCP_WAKE_JOB_ID and
+# AT_MCP_WAKE_JOBS_FILE (the profile's cron/jobs.json).
+RETRY_JOB_ID = (os.environ.get("AT_MCP_WAKE_JOB_ID") or "").strip()
+RETRY_JOBS_FILE = (os.environ.get("AT_MCP_WAKE_JOBS_FILE") or "").strip()
+RETRY_WAIT_S = int(os.environ.get("AT_MCP_WAKE_RETRY_WAIT_S") or 300)
+RETRY_MAX = int(os.environ.get("AT_MCP_WAKE_RETRY_MAX") or 3)
 
 # --- the direct reader (DT_MONITOR_READER=xrpc). Its session cache is its own, not dt.py's:
 # refreshSession rotates the refresh token, so two programs taking turns with one cache would each be
@@ -546,7 +560,7 @@ def held_reason(now, session_cache=None, publish_log=None):
 QUIET_LINE = "wake=none"
 
 
-def wake_output(items, state, now, held=None, quiet=None, replies=None):
+def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_at=None):
     """Decide whether this tick wakes the model. Returns (output, new_state).
 
     The scheduler wakes the model when the output differs from the last tick's, so the decision is
@@ -565,9 +579,13 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None):
     - an item from an account on the quiet list never wakes (`quiet`, read from QUIET_FILE by default);
       an item in a thread this account has been answering fast waits out its pace (`replies`, read from
       the publish log by default; see `paced_until`).
+    - `failed_at` is when the scheduler last recorded this job failing (see `last_failure_at`). A failure
+      after the last batch fired means that batch's run died, and the batch is printed again with a
+      retry line — waiting RETRY_WAIT_S, doubling, at most RETRY_MAX times.
     """
     st = {"fired": dict(state.get("fired") or {}), "pending": dict(state.get("pending") or {}),
-          "fails": int(state.get("fails") or 0), "last": state.get("last") or QUIET_LINE}
+          "fails": int(state.get("fails") or 0), "last": state.get("last") or QUIET_LINE,
+          "fired_at": state.get("fired_at"), "base": state.get("base"), "retries": int(state.get("retries") or 0)}
     st["fired"] = {u: t for u, t in st["fired"].items() if now - float(t) < FIRED_TTL_S}
 
     if items is None:
@@ -575,8 +593,19 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None):
         if st["fails"] == FAIL_TICKS:
             st["last"] = (f"wake=unavailable ticks={FAIL_TICKS}\n"
                           f"brief: the notification client has not answered for {FAIL_TICKS} ticks")
+            st["fired_at"] = None        # an outage report is not a batch: nothing to send again
         return st["last"], st
     st["fails"] = 0
+
+    if (failed_at and st["fired_at"] and st["base"] and failed_at > float(st["fired_at"]) and not held
+            and st["retries"] < RETRY_MAX and now - failed_at >= RETRY_WAIT_S * 2 ** st["retries"]):
+        st["retries"] += 1
+        st["fired_at"] = now
+        st["last"] = st["base"] + "\nretry %d of %d: the run for this batch failed at %s and the batch is " \
+            "sent again. That run may have written part of it before it died: check `dt.py recent` and the " \
+            "threads before answering, so nothing is answered twice." % (
+                st["retries"], RETRY_MAX, datetime.fromtimestamp(failed_at, timezone.utc).strftime("%H:%MZ"))
+        return st["last"], st
 
     muted_names = quiet if quiet is not None else quiet_list()
     replies = own_replies(now) if replies is None else replies
@@ -658,8 +687,26 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None):
     for it in batch + reactions + muted:  # reported with the batch they arrived beside, then done
         st["fired"][it["uri"]] = now
     st["pending"] = {u: e for u, e in st["pending"].items() if paced[u]}
-    st["last"] = "\n".join(out)
+    st["last"] = st["base"] = "\n".join(out)
+    st["fired_at"], st["retries"] = now, 0
     return st["last"], st
+
+
+def last_failure_at(path=None, job_id=None):
+    """When the scheduler last recorded this job failing (epoch), or None. Reads the profile's
+    cron/jobs.json: `last_failure.at` survives the next successful tick, unlike `last_status`."""
+    path, job_id = path or RETRY_JOBS_FILE, job_id or RETRY_JOB_ID
+    if not path or not job_id:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            docs = json.load(f)
+        jobs = docs.get("jobs") if isinstance(docs, dict) else docs
+        job = next((j for j in jobs or [] if isinstance(j, dict) and j.get("id") == job_id), None)
+        at = ((job or {}).get("last_failure") or {}).get("at")
+        return datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp() if at else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
 
 
 # ------------------------------------------------------------------- the quiet list and the pacing
@@ -778,7 +825,7 @@ def main():
         items = None if fail and not notes_text else _items(notes_text)
         now = time.time()
         out, st = wake_output(items, _load_state(WAKE_STATE), now,
-                              held=held_reason(now) if items else None)
+                              held=held_reason(now) if items else None, failed_at=last_failure_at())
         _save_state(WAKE_STATE, st)
         print(out)
         return
