@@ -15,6 +15,7 @@ Usage:
   dt.py displayname "<text>"    -> the shown name alone (keeps bio, avatar, labels)
   dt.py handle <new-handle>     -> repoint the account's handle (DID and all refs unchanged)
   dt.py unfollow <handle|did>   -> delete my follow record(s) for that subject
+  dt.py quiet [add|remove <handle|did>] -> the private block list: no wake, no reply, nothing public
   dt.py follows                 -> who I follow + counts (appview)
   dt.py delete <rkey> [collection]
   dt.py check "<text>"           -> pre-flight a composed post (run this BEFORE post/reply)
@@ -179,6 +180,20 @@ WRITE_HOUR = 16      # publishing writes allowed in any 60 minutes before the gu
 # like or a follow is a reaction that publishes nothing, so listing them would make the ceiling mean
 # something other than what it enforces.
 GUARDED_KINDS = ("post", "reply", "delete")
+
+# The quiet list and thread pacing, shared with delvetown_monitor.py (which reads the same file and the
+# same knobs, named the same way: by the handle's first label, so locksmith's file is quiet-skillissue.json
+# in both). The monitor uses them to decide what wakes the account; this client uses them to refuse a
+# reply a wake would not have been woken for — the clock wakes read the town themselves, and on 19 Oct
+# one of them answered a muted account because only the gate knew about the mute.
+# Resolved against HERMES_REAL_HOME as the monitor resolves it: a profile can run with its own HOME, and
+# two programs reading "the" quiet list from two homes would each hold a different one.
+QUIET_FILE = os.environ.get("DT_QUIET_FILE") or os.path.join(
+    os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
+    "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0])
+PACE_PAIR_S = int(os.environ.get("DT_PACE_PAIR_S") or 1200)
+PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or 600)
+PACE_RESET_S = int(os.environ.get("DT_PACE_RESET_S") or 6 * 3600)
 
 
 def write_pressure(entries=None, now=None):
@@ -2089,6 +2104,7 @@ USAGE = {
     "displayname": 'displayname "<text>"',
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
+    "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (the private block: no wake, no reply)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
@@ -2096,7 +2112,7 @@ WRITE_CMDS = {"post", "reply", "delete", "like", "follow", "block", "unblock", "
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
-NO_ARGS_OK = {"draw", "blocked", "named"}
+NO_ARGS_OK = {"draw", "blocked", "named", "quiet"}
 
 
 def blocked_subjects():
@@ -2125,6 +2141,105 @@ def blocked_refusal(target, force=False):
     if did and did in blocked_subjects():
         return ("this seat blocks %s — a reply, like or follow would engage an account it has blocked; "
                 "the block record is public, so unblock it first or pass --force to override" % did)
+    return None
+
+
+# --- the quiet list and thread pacing (the same functions as delvetown_monitor.py's; see QUIET_FILE)
+def quiet_entries(path=None):
+    """The quiet list's entries as dicts with `did`/`handle`/`note`/`added`. Also reads a bare list of
+    names and the `{"handles": [...]}` shape of the 19 Oct stopgap. Unreadable → empty."""
+    try:
+        with open(path or QUIET_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict):
+        data = data.get("accounts") if "accounts" in data else data.get("handles")
+    out = []
+    for e in data if isinstance(data, list) else []:
+        if isinstance(e, dict):
+            out.append(e)
+        elif isinstance(e, str) and e.strip():
+            name = e.strip().lstrip("@")
+            out.append({"did": name} if name.startswith("did:") else {"handle": name})
+    return out
+
+
+def quiet_list(path=None):
+    """Lowercased DIDs and handles on the quiet list."""
+    return {str(v).strip().lstrip("@").lower() for e in quiet_entries(path)
+            for v in (e.get("did"), e.get("handle")) if isinstance(v, str) and v.strip()}
+
+
+def _did_of(uri):
+    parts = str(uri or "").split("/")
+    return parts[2] if len(parts) > 2 and str(uri).startswith("at://") else None
+
+
+def own_replies(now, entries=None):
+    """This account's replies in the last day as (epoch, thread root, DID answered), oldest first."""
+    out = []
+    for e in (entries if entries is not None else read_publish_log(500)):
+        if not isinstance(e, dict) or e.get("kind") != "reply":
+            continue
+        try:
+            t = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            continue
+        root = e.get("root_uri") or e.get("parent_uri")
+        if root and 0 <= now - t <= 86400:
+            out.append((t, root, _did_of(e.get("parent_uri"))))
+    return sorted(out)
+
+
+def pace_wait(times, base):
+    """When the next reply may go: the last reply plus base, doubled for each earlier reply in the same
+    unbroken run (a gap of PACE_RESET_S ends a run). None when there is nothing to wait on."""
+    if base <= 0 or not times:
+        return None
+    n = 1
+    for earlier, later in zip(reversed(times[:-1]), reversed(times[1:])):
+        if later - earlier >= PACE_RESET_S:
+            break
+        n += 1
+    return times[-1] + min(base * 2 ** (n - 1), PACE_RESET_S)
+
+
+def quiet_refusal(target, force=False):
+    """A refusal when this reply would answer an account on the quiet list, else None. `--force` still
+    goes through: the list keeps a run from answering by accident, not the operator on purpose."""
+    did = _did_of(target) if str(target or "").startswith("at://") else target
+    if force or not did:
+        return None
+    if did.lower() in quiet_list():
+        return ("%s is on this seat's quiet list (%s) — its posts do not wake the seat and are not "
+                "answered; `dt.py quiet remove` takes it off, or pass --force to answer anyway"
+                % (did, QUIET_FILE))
+    return None
+
+
+def pace_refusal(root_uri, parent_uri, force=False, now=None, entries=None):
+    """A refusal when a reply into this thread would come faster than its pace allows, else None.
+
+    The same two clocks the monitor holds a wake on (see delvetown_monitor.py, PACE_*): replies to the
+    same account in the same thread, and replies in the thread at all. A wake that the gate paced is
+    never woken for that thread; this is the same rule for the runs that read the town without the
+    gate — the clock wakes and a session — so none of them can be the seventh fast reply."""
+    if force or not root_uri:
+        return None
+    now = now if now is not None else time.time()
+    replies = own_replies(now, entries)
+    who = _did_of(parent_uri)
+    thread = [t for t, r, _ in replies if r == root_uri]
+    pair = [t for t, r, d in replies if r == root_uri and who and d == who]
+    for times, base, what in ((pair, PACE_PAIR_S, "to %s in this thread" % who),
+                              (thread, PACE_THREAD_S, "in this thread")):
+        until = pace_wait(times, base)
+        if until and until > now:
+            at = datetime.fromtimestamp(until, timezone.utc).strftime("%H:%MZ")
+            return ("%d recent repl%s %s: the next one waits until %s (the wait doubles with each turn "
+                    "and resets after %dh without one) — pass --force to override"
+                    % (len(times), "y" if len(times) == 1 else "ies", what, at, PACE_RESET_S // 3600))
     return None
 
 
@@ -2264,6 +2379,12 @@ def main():
         elif four and sys.argv[4] != root_uri:
             print(json.dumps({"note": "declared root corrected", "declared": sys.argv[4],
                               "thread_root": root_uri}), file=sys.stderr)
+        _held = (quiet_refusal(par_uri, "--force" in sys.argv)
+                 or pace_refusal(root_uri, par_uri, "--force" in sys.argv))
+        if _held:
+            print(json.dumps({"status": 0, "refused": _held, "parent": par_uri, "thread_root": root_uri},
+                             indent=2))
+            sys.exit(1)
         if text_arg.strip().startswith("-"):
             print(json.dumps({"status": 0, "refused": "the text argument starts with '-' (%r) — that is a "
                               "flag, not a reply; see dt.py --help" % text_arg[:20]}, indent=2))
@@ -2490,6 +2611,49 @@ def main():
             out.append({"subject": subj, "handle": handle, "uri": rec["uri"],
                         "createdAt": (rec.get("value") or {}).get("createdAt")})
         print(json.dumps({"count": len(out), "blocks": out}, indent=2))
+
+    elif cmd == "quiet":
+        # dt.py quiet [list] | add <handle|did> ["why"] | remove <handle|did>
+        # The private alternative to `block`: nothing is written to the town. The monitor stops waking for
+        # a listed account and `reply` refuses to answer one; both re-read the file, so it applies at once.
+        sub = sys.argv[2] if len(sys.argv) > 2 else "list"
+        entries = quiet_entries()
+        if sub == "list":
+            print(json.dumps({"file": QUIET_FILE, "count": len(entries), "accounts": entries}, indent=2))
+            return
+        if sub not in ("add", "remove") or len(sys.argv) < 4:
+            _usage(USAGE["quiet"])
+        arg = sys.argv[3].lstrip("@").strip()
+        # Stored by DID, so a rename cannot reopen it; the handle rides along for whoever reads the file.
+        did = arg if arg.startswith("did:") else resolve(arg)
+        if not did:
+            print(json.dumps({"status": 0, "refused": "%s does not resolve to an account" % arg}, indent=2))
+            sys.exit(1)
+        key = {did.lower(), arg.lower()}
+        kept = [e for e in entries
+                if not ({str(e.get("did") or "").lower(), str(e.get("handle") or "").lower()} & key)]
+        if sub == "add":
+            handle = arg if not arg.startswith("did:") else None
+            if not handle:
+                try:
+                    handle = req("GET", PDS + "/xrpc/com.atproto.repo.describeRepo",
+                                 params={"repo": did})[1].get("handle")
+                except Exception:
+                    handle = None
+            kept.append({"did": did, "handle": handle,
+                         "note": " ".join(a for a in sys.argv[4:] if not a.startswith("--")) or None,
+                         "added": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")})
+        elif len(kept) == len(entries):
+            print(json.dumps({"note": "%s was not on the quiet list" % arg, "file": QUIET_FILE}, indent=2))
+            return
+        os.makedirs(os.path.dirname(QUIET_FILE) or ".", mode=0o700, exist_ok=True)
+        tmp = QUIET_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"accounts": kept}, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, QUIET_FILE)       # the monitor reads it every tick: never a half-written file
+        print(json.dumps({"file": QUIET_FILE, "added" if sub == "add" else "removed": did,
+                          "count": len(kept)}, indent=2))
 
     elif cmd == "like":
         # dt.py like <uri|rkey|url> [...]  — town.delve.feed.like, one record per post.

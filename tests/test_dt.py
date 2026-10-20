@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 # answers every write with a synthetic record and stubs the session, so a broken guard fails a test
 # instead of publishing. Set before dt.py is executed, since the module reads it at load.
 os.environ.setdefault("DT_DRY_RUN", "1")
+# The machine's own quiet list must not decide a test's reply: point the client at one that is not there.
+os.environ.setdefault("DT_QUIET_FILE", os.path.join(tempfile.gettempdir(), "dt-test-no-quiet-list.json"))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("dt", os.path.join(HERE, "..", "dt.py"))
