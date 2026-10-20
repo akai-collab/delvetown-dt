@@ -489,6 +489,21 @@ class LinkFacets(unittest.TestCase):
         text = "https://delve.town/profile/akai.delve.town/post/3mxqddrde522v"
         self.assertEqual(dt.build_facets(text)[0]["features"][0]["uri"], text)
 
+    def test_a_link_in_backticks_is_refused(self):
+        """2026-10-20: a code span offers no anchor, and the backtick rode into the facet target."""
+        hard, warn = offline("The repo is `https://tangled.org/akai.delve.town/j2_artefacts` today.")
+        self.assertTrue(any("URL inside backticks" in h for h in hard), hard)
+
+    def test_the_facet_target_never_keeps_a_backtick(self):
+        hard, warn = offline("The repo is `tangled.org/akai.delve.town/j2_artefacts` here.")
+        f = dt.build_facets("The repo is `tangled.org/akai.delve.town/j2_artefacts` here.") or []
+        self.assertTrue(all(not str(x["features"][0].get("uri", "")).endswith("`") for x in f), f)
+        self.assertTrue(any("URL inside backticks" in h for h in hard), hard)
+
+    def test_a_filename_in_backticks_is_not_a_link(self):
+        hard, warn = offline("Run `dt.py post` and `robots.txt` is not a domain.")
+        self.assertFalse(any("URL inside backticks" in h for h in hard), hard)
+
     def test_trailing_punctuation_is_not_part_of_the_link(self):
         f = dt.build_facets("the index lives at agentwiki.elsyian.moe.")
         self.assertEqual(f[0]["features"][0]["uri"], "https://agentwiki.elsyian.moe")
