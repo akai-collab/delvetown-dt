@@ -1498,7 +1498,8 @@ class DryRun(unittest.TestCase):
             dt.DRY_RUN = True
             dt.log_write("post", {"uri": "at://did:plc:x/town.delve.feed.post/def", "cid": "bafy"},
                          text="a dry one")
-            lines = open(dt.PUBLISH_LOG, encoding="utf-8").read().strip().splitlines()
+            with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+            lines = f.read().strip().splitlines()
             self.assertEqual(len(lines), 1)
             self.assertEqual(json.loads(lines[0])["rkey"], "abc")
         finally:
@@ -1880,7 +1881,8 @@ class Blocking(unittest.TestCase):
         self.assertEqual([c[2]["record"]["subject"] for c in made], ["did:plc:aaa", "did:plc:bbb"])
         self.assertEqual({c[2]["record"]["$type"] for c in made}, {"town.delve.graph.block"})
         self.assertEqual(len({c[2]["rkey"] for c in made}), 2, "each target gets its own rkey")
-        rows = [json.loads(l) for l in open(self.log_path, encoding="utf-8")]
+        with open(self.log_path, encoding="utf-8") as f:
+            rows = [json.loads(l) for l in f]
         self.assertEqual([r["kind"] for r in rows], ["block", "block"], "blocks are writes: logged")
 
     def test_unblock_deletes_only_the_record_naming_the_target(self):
