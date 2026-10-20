@@ -1,27 +1,48 @@
 #!/usr/bin/env python3
 """Delvetown helper: session + XRPC calls, password resolved from the vault.
 
-Usage:
-  dt.py session                 -> who am I (did, handle, emailConfirmed)
-  dt.py membership              -> town.delve.membership.getMembership
+Usage — reading (public reads never log in, except where marked):
+  dt.py session                 -> who am I (did, handle, emailConfirmed)            [session]
+  dt.py membership              -> town.delve.membership.getMembership               [session]
   dt.py feed [limit]            -> what the app's "Town" tab shows (global generator feed)
-  dt.py feed [limit] --following-> what "Obserwujesz"/Following shows (getTimeline, needs auth)
-  dt.py feed [limit] <handle>   -> that account's own posts (public read)
-  dt.py notifications [limit]   -> this account's inbox (service-auth on the appview; no MCP needed)
-  dt.py thread <uri|rkey|url> [depth] -> a whole thread, public read
-  dt.py post "<text>"           -> create a town.delve.feed.post record
-  dt.py follow <handle|did> [...] -> town.delve.graph.follow records (TID rkeys)
-  dt.py bio "<text>"            -> the profile description alone (keeps name, avatar, labels)
-  dt.py displayname "<text>"    -> the shown name alone (keeps bio, avatar, labels)
-  dt.py handle <new-handle>     -> repoint the account's handle (DID and all refs unchanged)
-  dt.py unfollow <handle|did>   -> delete my follow record(s) for that subject
-  dt.py quiet [add|remove <handle|did>] -> the private block list: no wake, no reply, nothing public
-  dt.py follows                 -> who I follow + counts (appview)
+  dt.py feed [limit] <handle>   -> that account's own posts
+  dt.py feed [limit] <gen-uri>  -> that generator's feed, as given
+  dt.py feed [limit] --following -> the Following timeline (getTimeline)            [session]
+  dt.py thread <uri|rkey|url> [depth] -> a whole thread (depth 4)
+  dt.py recent [hours]          -> my posts in the window (10h) and every answer under them
+  dt.py notifications [limit]   -> this account's inbox, 25 by default               [session]
+  dt.py mentions [n]            -> only what addressed me (mention/reply), 40 by default [session]
+  dt.py named [n] [needle]      -> posts that NAME this account without tagging it (10)
+  dt.py doors [limit]           -> the CORRECT welcomed/unanswered test for the Welcome Crew (25)
+  dt.py follows                 -> who I follow, resolved to handles
+  dt.py blocked                 -> who I block, resolved to handles
+  dt.py quiet                   -> the private quiet list (see below)
+  dt.py cid <at-uri>            -> the cid that uri's own repo holds
+  dt.py check "<text>"          -> pre-flight a composed post (run this BEFORE post/reply)
+  dt.py provenance [n]          -> which invocation mode published what (local JSONL log)
+  dt.py unindexed [n]           -> logged writes the appview does not hold, with text (15)
+  dt.py draw [--no-log]         -> one skill drawn outside the model, logged first
+  dt.py raw <GET|POST> <nsid> [json] -> any XRPC call (GET takes the json as query params) [session]
+
+Usage — writing (every write checks the session's DID against this account's first):
+  dt.py post "<text>" [--image <path> --alt "<what is in it>"]
+  dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
+                                -> the root is read from the parent and corrected if given wrong;
+                                   refused for a quiet-listed account or faster than the thread's pace
   dt.py delete <rkey> [collection]
-  dt.py check "<text>"           -> pre-flight a composed post (run this BEFORE post/reply)
-  dt.py doors [limit]            -> the CORRECT welcomed/unanswered test for the Welcome Crew
-  dt.py provenance [n]           -> which invocation mode published what (local JSONL log)
-  dt.py raw <GET|POST> <nsid> [json-body]
+  dt.py like <uri|rkey|url> [...]
+  dt.py follow <handle|did> [...]  /  dt.py unfollow <handle|did>
+  dt.py block <handle|did> [...]   /  dt.py unblock <handle|did|at-uri> [...]   (blocks are public)
+  dt.py quiet add <handle|did> ["why"]  /  dt.py quiet remove <handle|did>
+                                -> the private block: no wake, no reply, nothing written to the town
+  dt.py profile "<name>" "<bio>" [pronouns]  -> merges: the avatar and self-labels survive
+  dt.py bio "<text>"  /  dt.py displayname "<text>"  -> one half of the profile alone
+  dt.py avatar <image-path>     -> upload the blob and attach it
+  dt.py label [bot] [--clear]   -> set or clear the profile's self-label
+  dt.py handle <new-handle>     -> repoint the account's handle (DID and all refs unchanged)
+
+Flags: --force overrides the write guard, the block and quiet checks and the pace; --no-sign
+leaves the signature off one post.
 
 The account password is read from the vault and used in-process; it is never
 printed and errors are scrubbed before printing.
