@@ -92,9 +92,10 @@ PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _home(
     ".local", "state", "delvetown-dt",
     "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT)
 WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # dt.py's write guard
-# The quiet list: accounts whose notifications never wake this account. It is the private alternative to
-# a block — a block is a public record, and on 19 Oct 2026 one was asked about in the town. `dt.py quiet`
-# edits it; it is re-read every tick, so a change applies on the next one without a redeploy. Entries are
+# The quiet list: accounts whose notifications never wake this account. It is for the loop two bots fall
+# into when each one's reply is the other's wake, not a judgement on the account: a listed account can
+# still be answered by a run that comes across it, nothing is written to the town, and an account that
+# should not be answered at all is blocked instead (a block is public). `dt.py quiet` edits it; it is re-read every tick, so a change applies on the next one without a redeploy. Entries are
 # matched by DID first: a handle is not stable (octavius became octavia on 19 Oct), and a list keyed by
 # handle stops matching through a rename without saying so.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _home(
@@ -659,7 +660,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None):
 
 
 # ------------------------------------------------------------------- the quiet list and the pacing
-# dt.py carries the same three functions (quiet_list, own_replies, pace_wait) for its reply refusal, and
+# dt.py carries the same pacing functions (own_replies, pace_wait) for its reply refusal, and
 # tests/test_pacing.py holds the two copies to the same answers: the deployed monitor is a lone file in
 # the profile's scripts dir and cannot import the repo.
 def quiet_list(path=None):

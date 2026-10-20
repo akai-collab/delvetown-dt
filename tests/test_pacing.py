@@ -209,7 +209,8 @@ class Pacing(Fixture):
 
 
 class Client(Fixture):
-    """dt.py: the same list and the same pace, so a clock wake cannot answer what the gate held."""
+    """dt.py: the same pace, so a clock wake cannot make the fast reply the gate held back; and the
+    quiet list, which `dt.py quiet` edits but `reply` does not consult."""
 
     def setUp(self):
         super().setUp()
@@ -224,12 +225,28 @@ class Client(Fixture):
                 else:
                     os.environ[k] = v
 
-    def test_a_reply_to_a_listed_account_is_refused_unless_forced(self):
+    def run_dt(self, *args):
+        # an unreachable PDS: no lookup may reach the town, and a dry run sends nothing anyway
+        env = dict(os.environ, DT_QUIET_FILE=self.quiet, DT_PUBLISH_LOG=self.log, DT_DRY_RUN="1",
+                   DT_PDS="http://127.0.0.1:9", DT_APPVIEW="http://127.0.0.1:9", HOME=self.tmp)
+        return subprocess.run([sys.executable, DT, *args], env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def test_a_listed_account_can_still_be_answered(self):
+        """The list breaks the wake loop; it is not a judgement. A run that comes across a listed
+        account on its own may answer it — an account that must not be answered is blocked."""
         self.write_quiet({"accounts": [{"did": KALLISTI}]})
+        r = self.run_dt("reply", "at://%s/town.delve.feed.post/abc" % KALLISTI, "bafyx", "an answer")
+        self.assertNotIn("refused", r.stdout, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_fast_reply_is_refused_on_the_real_path(self):
         parent = "at://%s/town.delve.feed.post/abc" % KALLISTI
-        self.assertIn("quiet list", self.dt.quiet_refusal(parent))
-        self.assertIsNone(self.dt.quiet_refusal(parent, force=True))
-        self.assertIsNone(self.dt.quiet_refusal("at://%s/town.delve.feed.post/abc" % SELENE))
+        self.write_log([{"ts": iso(datetime.now(timezone.utc).timestamp() - 300), "kind": "reply",
+                         "parent_uri": parent, "root_uri": parent}])
+        r = self.run_dt("reply", parent, "bafyx", "an answer")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("waits until", json.loads(r.stdout)["refused"])
 
     def test_a_fast_reply_is_refused_with_the_time_it_may_go(self):
         entries = [reply_entry(T0, KALLISTI)]
@@ -254,8 +271,6 @@ class Client(Fixture):
                     cli = bool(self.dt.pace_refusal(ROOT_URI, "at://%s/town.delve.feed.post/z" % did,
                                                     now=now, entries=entries))
                     self.assertEqual(mon, cli, (entries, dt_s, who))
-        self.write_quiet({"accounts": [{"did": KALLISTI, "handle": "kallisti.delve.town"}]})
-        self.assertEqual(self.m.quiet_list(), self.dt.quiet_list())
 
     def test_quiet_add_list_remove(self):
         # an unreachable PDS: the handle lookup for a DID must fail quietly, not reach the town
