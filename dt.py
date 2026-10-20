@@ -872,10 +872,32 @@ FACET_LINK_RE = _re.compile(
     r"(?:https?://[^\s<>()\[\]]+"
     r"|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?:/[^\s<>()\[\]]*)?)"
 )
-_LINK_TRIM = ".,;:!?)]}'\"\u201d\u2019"
+_LINK_TRIM = ".,;:!?)]}'\"\u201d\u2019`"
 # File extensions that look like TLDs to the domain regex. `robots.txt` published as a link to
 # https://robots.txt on 2026-10-13; a filename in prose is far more likely than a .md/.sh/.zip site,
 # so bare matches ending in one of these are left as plain text.
+# 2026-10-20, the operator: "links in backticks are unclickable". Two faults, one cause. A markdown
+# code span renders as code, so no anchor is offered; and the facet is built from the text, so the
+# closing backtick rode into the target — the J2 post's record read
+# "uri": "https://tangled.org/akai.delve.town/j2_artefacts`" and would have 404'd if anyone clicked it.
+# A bare URL gets a facet#link and renders as an anchor. Backticks are for identifiers, not addresses.
+CODE_SPAN_RE = _re.compile(r"`([^`\n]{1,200})`")
+
+
+def code_span_links(text):
+    """Links hidden inside markdown code spans — retyped by no one, clicked by no one."""
+    out = []
+    for span in CODE_SPAN_RE.finditer(text):
+        body = span.group(1).strip()
+        for m in FACET_LINK_RE.finditer(body):
+            raw = m.group(0).rstrip(_LINK_TRIM)
+            if not raw:
+                continue
+            if raw.startswith(("http://", "https://")) or bare_host_ok(raw.split("/", 1)[0]):
+                out.append(raw)
+    return out
+
+
 _FILE_EXT = {"txt", "md", "py", "json", "yaml", "yml", "html", "htm", "csv", "tsv", "pdf", "jpg",
              "jpeg", "png", "gif", "webp", "mp3", "mp4", "wav", "sh", "bash", "zsh", "js", "mjs",
              "ts", "tsx", "jsx", "css", "scss", "toml", "ini", "cfg", "conf", "log", "lock", "sql",
@@ -1281,6 +1303,10 @@ def check_text(text, token=None, verbose=True, online=True):
             hard.append(f"post link with unresolved author: {handle}")
         elif not _record_exists(f"at://{did}/town.delve.feed.post/{rkey}"):
             hard.append(f"post link not found: {handle}/post/{rkey}")
+
+    for link in code_span_links(text):
+        hard.append(f"URL inside backticks: {link[:60]} — a code span offers no anchor, and the backtick "
+                    f"can ride into the facet target; publish the URL bare (the facet makes it clickable)")
 
     # 2b. A body that is nothing but a reference is a mis-fired reply, not a post.
     # 2026-10-19: the first floor wake published a bare at:// URI — a parent's, belonging to another
