@@ -28,20 +28,21 @@ Usage — writing (every write checks the session's DID against this account's f
   dt.py post "<text>" [--image <path> --alt "<what is in it>"]
   dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
                                 -> the root is read from the parent and corrected if given wrong;
-                                   refused for a quiet-listed account or faster than the thread's pace
+                                   refused when it comes faster than the thread's pace
   dt.py delete <rkey> [collection]
   dt.py like <uri|rkey|url> [...]
   dt.py follow <handle|did> [...]  /  dt.py unfollow <handle|did>
   dt.py block <handle|did> [...]   /  dt.py unblock <handle|did|at-uri> [...]   (blocks are public)
   dt.py quiet add <handle|did> ["why"]  /  dt.py quiet remove <handle|did>
-                                -> the private block: no wake, no reply, nothing written to the town
+                                -> their notifications stop waking this account; it can still answer
+                                   them, and nothing is written to the town
   dt.py profile "<name>" "<bio>" [pronouns]  -> merges: the avatar and self-labels survive
   dt.py bio "<text>"  /  dt.py displayname "<text>"  -> one half of the profile alone
   dt.py avatar <image-path>     -> upload the blob and attach it
   dt.py label [bot] [--clear]   -> set or clear the profile's self-label
   dt.py handle <new-handle>     -> repoint the account's handle (DID and all refs unchanged)
 
-Flags: --force overrides the write guard, the block and quiet checks and the pace; --no-sign
+Flags: --force overrides the write guard, the block check and the pace; --no-sign
 leaves the signature off one post.
 
 The account password is read from the vault and used in-process; it is never
@@ -204,9 +205,10 @@ GUARDED_KINDS = ("post", "reply", "delete")
 
 # The quiet list and thread pacing, shared with delvetown_monitor.py (which reads the same file and the
 # same knobs, named the same way: by the handle's first label, so locksmith's file is quiet-skillissue.json
-# in both). The monitor uses them to decide what wakes the account; this client uses them to refuse a
-# reply a wake would not have been woken for — the clock wakes read the town themselves, and on 19 Oct
-# one of them answered a muted account because only the gate knew about the mute.
+# in both). The quiet list only decides what WAKES the account: it exists to break the loop of two bots
+# waking each other with their notifications, not to say who may be answered — a listed account can still
+# be answered by a run that comes across it, and an account that should not be answered is blocked. The
+# pace is enforced here as well as in the gate, because the clock wakes read the town without the gate.
 # Resolved against HERMES_REAL_HOME as the monitor resolves it: a profile can run with its own HOME, and
 # two programs reading "the" quiet list from two homes would each hold a different one.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or os.path.join(
@@ -2125,7 +2127,7 @@ USAGE = {
     "displayname": 'displayname "<text>"',
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
-    "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (the private block: no wake, no reply)',
+    "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
@@ -2186,12 +2188,6 @@ def quiet_entries(path=None):
     return out
 
 
-def quiet_list(path=None):
-    """Lowercased DIDs and handles on the quiet list."""
-    return {str(v).strip().lstrip("@").lower() for e in quiet_entries(path)
-            for v in (e.get("did"), e.get("handle")) if isinstance(v, str) and v.strip()}
-
-
 def _did_of(uri):
     parts = str(uri or "").split("/")
     return parts[2] if len(parts) > 2 and str(uri).startswith("at://") else None
@@ -2224,19 +2220,6 @@ def pace_wait(times, base):
             break
         n += 1
     return times[-1] + min(base * 2 ** (n - 1), PACE_RESET_S)
-
-
-def quiet_refusal(target, force=False):
-    """A refusal when this reply would answer an account on the quiet list, else None. `--force` still
-    goes through: the list keeps a run from answering by accident, not the operator on purpose."""
-    did = _did_of(target) if str(target or "").startswith("at://") else target
-    if force or not did:
-        return None
-    if did.lower() in quiet_list():
-        return ("%s is on this seat's quiet list (%s) — its posts do not wake the seat and are not "
-                "answered; `dt.py quiet remove` takes it off, or pass --force to answer anyway"
-                % (did, QUIET_FILE))
-    return None
 
 
 def pace_refusal(root_uri, parent_uri, force=False, now=None, entries=None):
@@ -2400,8 +2383,7 @@ def main():
         elif four and sys.argv[4] != root_uri:
             print(json.dumps({"note": "declared root corrected", "declared": sys.argv[4],
                               "thread_root": root_uri}), file=sys.stderr)
-        _held = (quiet_refusal(par_uri, "--force" in sys.argv)
-                 or pace_refusal(root_uri, par_uri, "--force" in sys.argv))
+        _held = pace_refusal(root_uri, par_uri, "--force" in sys.argv)
         if _held:
             print(json.dumps({"status": 0, "refused": _held, "parent": par_uri, "thread_root": root_uri},
                              indent=2))
@@ -2635,8 +2617,9 @@ def main():
 
     elif cmd == "quiet":
         # dt.py quiet [list] | add <handle|did> ["why"] | remove <handle|did>
-        # The private alternative to `block`: nothing is written to the town. The monitor stops waking for
-        # a listed account and `reply` refuses to answer one; both re-read the file, so it applies at once.
+        # Not a block and not a judgement: nothing is written to the town, and a listed account can still be
+        # answered. The monitor stops waking for its notifications — the loop two bots fall into when each
+        # one's reply is the other's wake. The monitor re-reads the file every tick, so it applies at once.
         sub = sys.argv[2] if len(sys.argv) > 2 else "list"
         entries = quiet_entries()
         if sub == "list":
