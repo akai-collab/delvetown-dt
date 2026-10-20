@@ -202,6 +202,23 @@ class Pacing(Fixture):
         again, st = self.m.wake_output(items, st, T0 + 800)
         self.assertEqual(again, out, "nothing new: no second wake")
 
+    def test_the_thread_clock_is_off_by_default(self):
+        fresh = load(MONITOR, "mon_defaults")
+        self.assertEqual(fresh.PACE_THREAD_S, 0)
+        self.assertEqual(fresh.PACE_PAIR_S, 1200)
+
+    def test_two_people_in_one_thread_are_both_woken_for(self):
+        """With the thread clock off, answering one person never holds back the next person's ask: a
+        batch that fires carries both, so neither is marked handled unanswered."""
+        self.m.PACE_THREAD_S = 0
+        self.write_log([reply_entry(T0, KALLISTI)])
+        items = [item("s1", author="selene.delve.town", did=SELENE),
+                 item("o1", author="other.delve.town", did="did:plc:otherotherotherotherot")]
+        _, st = self.m.wake_output(items, {}, T0 + 60)
+        out, st = self.m.wake_output(items, st, T0 + 700)
+        self.assertTrue(out.startswith("wake=2 reply=2"), out)
+        self.assertEqual(st["pending"], {})
+
     def test_the_publish_log_is_read_for_replies_only(self):
         self.write_log([reply_entry(T0, KALLISTI), {"ts": iso(T0), "kind": "post"},
                         {"ts": iso(T0), "kind": "like", "subject": ROOT_URI}, "not json"])
@@ -209,8 +226,8 @@ class Pacing(Fixture):
 
 
 class Client(Fixture):
-    """dt.py: the same pace, so a clock wake cannot make the fast reply the gate held back; and the
-    quiet list, which `dt.py quiet` edits but `reply` does not consult."""
+    """dt.py: it edits the quiet list (`dt.py quiet`) and consults neither the list nor the pace when it
+    replies — both only decide what wakes the account."""
 
     def setUp(self):
         super().setUp()
@@ -240,37 +257,21 @@ class Client(Fixture):
         self.assertNotIn("refused", r.stdout, r.stdout + r.stderr)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
-    def test_a_fast_reply_is_refused_on_the_real_path(self):
+    def test_a_fast_reply_is_never_refused(self):
+        """Pacing is the notification layer's: it delays a wake, never a reply someone chose to write —
+        a second turn because something came up, or a post the operator asked for in a session."""
         parent = "at://%s/town.delve.feed.post/abc" % KALLISTI
-        self.write_log([{"ts": iso(datetime.now(timezone.utc).timestamp() - 300), "kind": "reply",
+        self.write_log([{"ts": iso(datetime.now(timezone.utc).timestamp() - 60), "kind": "reply",
                          "parent_uri": parent, "root_uri": parent}])
-        r = self.run_dt("reply", parent, "bafyx", "an answer")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("waits until", json.loads(r.stdout)["refused"])
+        r = self.run_dt("reply", parent, "bafyx", "one more thing")
+        self.assertNotIn("refused", r.stdout, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(hasattr(self.dt, "pace_refusal"))
 
-    def test_a_fast_reply_is_refused_with_the_time_it_may_go(self):
-        entries = [reply_entry(T0, KALLISTI)]
-        parent = "at://%s/town.delve.feed.post/next" % KALLISTI
-        msg = self.dt.pace_refusal(ROOT_URI, parent, now=T0 + 60, entries=entries)
-        self.assertIn("to %s in this thread" % KALLISTI, msg)
-        self.assertIn(datetime.fromtimestamp(T0 + 1200, timezone.utc).strftime("%H:%MZ"), msg)
-        self.assertIsNone(self.dt.pace_refusal(ROOT_URI, parent, now=T0 + 1201, entries=entries))
-        self.assertIsNone(self.dt.pace_refusal(ROOT_URI, parent, force=True, now=T0 + 60, entries=entries))
-
-    def test_the_monitor_and_the_client_agree(self):
-        """Every combination below gets the same verdict from both copies."""
-        logs = [[], [reply_entry(T0, KALLISTI)],
-                [reply_entry(T0, KALLISTI, rkey="a"), reply_entry(T0 + 1300, KALLISTI, rkey="b")],
-                [reply_entry(T0, SELENE)], [reply_entry(T0, KALLISTI, root=OTHER_ROOT)]]
-        for entries in logs:
-            for dt_s in (30, 650, 1250, 2500, 3800, 7 * 3600):
-                for who, did in (("kallisti.delve.town", KALLISTI), ("selene.delve.town", SELENE)):
-                    now = T0 + 1300 + dt_s
-                    self.write_log(entries)
-                    mon = bool(self.m.paced_until(item("z", author=who, did=did), now, self.m.own_replies(now)))
-                    cli = bool(self.dt.pace_refusal(ROOT_URI, "at://%s/town.delve.feed.post/z" % did,
-                                                    now=now, entries=entries))
-                    self.assertEqual(mon, cli, (entries, dt_s, who))
+    def test_both_programs_read_one_quiet_file(self):
+        self.write_quiet({"accounts": [{"did": KALLISTI, "handle": "kallisti.delve.town", "note": "x"}]})
+        names = {str(v).lower() for e in self.dt.quiet_entries() for v in (e.get("did"), e.get("handle")) if v}
+        self.assertEqual(names, self.m.quiet_list())
 
     def test_quiet_add_list_remove(self):
         # an unreachable PDS: the handle lookup for a DID must fail quietly, not reach the town
