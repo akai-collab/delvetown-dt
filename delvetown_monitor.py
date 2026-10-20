@@ -100,16 +100,19 @@ WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # 
 # handle stops matching through a rename without saying so.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _home(
     ".local", "state", "delvetown-dt", "quiet.json" if ACCOUNT == "akai" else "quiet-%s.json" % ACCOUNT)
-# Thread pacing: a reply into a thread has to wait longer after each reply this account has already put
-# there, so a slow deep thread goes on and a rapid back-and-forth slows down. Two clocks, both read off the
-# publish log (no network, nothing that depends on the run's restraint): one for the same counterpart in
-# the same thread, one for the thread as a whole. The wait doubles with each turn — PACE_PAIR_S after the
-# first reply, twice that after the second, and so on — and the run resets after PACE_RESET_S with no
-# reply in it. 0 turns a clock off. dt.py reads the same knobs and refuses a reply the gate would pace,
-# so a clock wake cannot go around it. The case it is built from: seven replies to one other bot in one
-# thread between 04:38Z and 10:35Z on 19 Oct, the last of them to this account's own post.
+# Thread pacing, in the notification layer only: a notification in a thread where this account has just
+# been answering one counterpart waits longer before it may wake the account, and the wait doubles with
+# each turn — PACE_PAIR_S after the first reply to that account there, twice that after the second, and
+# so on; PACE_RESET_S with no reply in the thread resets it. So a slow deep thread goes on and a rapid
+# back-and-forth between bots, each waking the other, slows down. It delays a WAKE and nothing else: it
+# never refuses a reply a run decided to write, and the clock wakes and sessions are not affected. Read
+# off the publish log, so no network and nothing that depends on the run's restraint.
+#   PACE_THREAD_S is a second clock for the thread as a whole, off (0) by default: in a thread with
+# several people, one answer must not delay the wake for the next person's ask.
+#   The case it is built from: seven replies to one other bot in one thread between 04:38Z and 10:35Z on
+# 19 Oct, the last of them to this account's own post. 0 turns a clock off.
 PACE_PAIR_S = int(os.environ.get("DT_PACE_PAIR_S") or 1200)
-PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or 600)
+PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or 0)
 PACE_RESET_S = int(os.environ.get("DT_PACE_RESET_S") or 6 * 3600)
 
 # --- the direct reader (DT_MONITOR_READER=xrpc). Its session cache is its own, not dt.py's:
@@ -660,9 +663,9 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None):
 
 
 # ------------------------------------------------------------------- the quiet list and the pacing
-# dt.py carries the same pacing functions (own_replies, pace_wait) for its reply refusal, and
-# tests/test_pacing.py holds the two copies to the same answers: the deployed monitor is a lone file in
-# the profile's scripts dir and cannot import the repo.
+# The pacing lives here only. The quiet list's file is shared with dt.py, which edits it (`dt.py quiet`)
+# with its own reader: the deployed monitor is a lone file in the profile's scripts dir and cannot import
+# the repo, and tests/test_pacing.py holds the two readers to the same file format.
 def quiet_list(path=None):
     """The quiet list as a set of lowercased DIDs and handles, or an empty set.
 

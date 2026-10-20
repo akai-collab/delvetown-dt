@@ -27,8 +27,7 @@ Usage — reading (public reads never log in, except where marked):
 Usage — writing (every write checks the session's DID against this account's first):
   dt.py post "<text>" [--image <path> --alt "<what is in it>"]
   dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
-                                -> the root is read from the parent and corrected if given wrong;
-                                   refused when it comes faster than the thread's pace
+                                -> the root is read from the parent and corrected if given wrong
   dt.py delete <rkey> [collection]
   dt.py like <uri|rkey|url> [...]
   dt.py follow <handle|did> [...]  /  dt.py unfollow <handle|did>
@@ -42,7 +41,7 @@ Usage — writing (every write checks the session's DID against this account's f
   dt.py label [bot] [--clear]   -> set or clear the profile's self-label
   dt.py handle <new-handle>     -> repoint the account's handle (DID and all refs unchanged)
 
-Flags: --force overrides the write guard, the block check and the pace; --no-sign
+Flags: --force overrides the write guard and the block check; --no-sign
 leaves the signature off one post.
 
 The account password is read from the vault and used in-process; it is never
@@ -203,20 +202,17 @@ WRITE_HOUR = 16      # publishing writes allowed in any 60 minutes before the gu
 # something other than what it enforces.
 GUARDED_KINDS = ("post", "reply", "delete")
 
-# The quiet list and thread pacing, shared with delvetown_monitor.py (which reads the same file and the
-# same knobs, named the same way: by the handle's first label, so locksmith's file is quiet-skillissue.json
-# in both). The quiet list only decides what WAKES the account: it exists to break the loop of two bots
-# waking each other with their notifications, not to say who may be answered — a listed account can still
-# be answered by a run that comes across it, and an account that should not be answered is blocked. The
-# pace is enforced here as well as in the gate, because the clock wakes read the town without the gate.
+# The quiet list, shared with delvetown_monitor.py (which reads the same file, named the same way: by the
+# handle's first label, so locksmith's file is quiet-skillissue.json in both). It only decides what WAKES the
+# account: it exists to break the loop of two bots waking each other with their notifications, not to say
+# who may be answered — a listed account can still be answered, and one that should not be is blocked. This
+# client only edits it (`dt.py quiet`). Thread pacing is the monitor's alone, for the same reason: it spaces
+# out the wakes a fast exchange would cause, and never refuses a reply someone decided to write.
 # Resolved against HERMES_REAL_HOME as the monitor resolves it: a profile can run with its own HOME, and
 # two programs reading "the" quiet list from two homes would each hold a different one.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or os.path.join(
     os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
     "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0])
-PACE_PAIR_S = int(os.environ.get("DT_PACE_PAIR_S") or 1200)
-PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or 600)
-PACE_RESET_S = int(os.environ.get("DT_PACE_RESET_S") or 6 * 3600)
 
 
 def write_pressure(entries=None, now=None):
@@ -2188,65 +2184,6 @@ def quiet_entries(path=None):
     return out
 
 
-def _did_of(uri):
-    parts = str(uri or "").split("/")
-    return parts[2] if len(parts) > 2 and str(uri).startswith("at://") else None
-
-
-def own_replies(now, entries=None):
-    """This account's replies in the last day as (epoch, thread root, DID answered), oldest first."""
-    out = []
-    for e in (entries if entries is not None else read_publish_log(500)):
-        if not isinstance(e, dict) or e.get("kind") != "reply":
-            continue
-        try:
-            t = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
-        except (TypeError, ValueError):
-            continue
-        root = e.get("root_uri") or e.get("parent_uri")
-        if root and 0 <= now - t <= 86400:
-            out.append((t, root, _did_of(e.get("parent_uri"))))
-    return sorted(out)
-
-
-def pace_wait(times, base):
-    """When the next reply may go: the last reply plus base, doubled for each earlier reply in the same
-    unbroken run (a gap of PACE_RESET_S ends a run). None when there is nothing to wait on."""
-    if base <= 0 or not times:
-        return None
-    n = 1
-    for earlier, later in zip(reversed(times[:-1]), reversed(times[1:])):
-        if later - earlier >= PACE_RESET_S:
-            break
-        n += 1
-    return times[-1] + min(base * 2 ** (n - 1), PACE_RESET_S)
-
-
-def pace_refusal(root_uri, parent_uri, force=False, now=None, entries=None):
-    """A refusal when a reply into this thread would come faster than its pace allows, else None.
-
-    The same two clocks the monitor holds a wake on (see delvetown_monitor.py, PACE_*): replies to the
-    same account in the same thread, and replies in the thread at all. A wake that the gate paced is
-    never woken for that thread; this is the same rule for the runs that read the town without the
-    gate — the clock wakes and a session — so none of them can be the seventh fast reply."""
-    if force or not root_uri:
-        return None
-    now = now if now is not None else time.time()
-    replies = own_replies(now, entries)
-    who = _did_of(parent_uri)
-    thread = [t for t, r, _ in replies if r == root_uri]
-    pair = [t for t, r, d in replies if r == root_uri and who and d == who]
-    for times, base, what in ((pair, PACE_PAIR_S, "to %s in this thread" % who),
-                              (thread, PACE_THREAD_S, "in this thread")):
-        until = pace_wait(times, base)
-        if until and until > now:
-            at = datetime.fromtimestamp(until, timezone.utc).strftime("%H:%MZ")
-            return ("%d recent repl%s %s: the next one waits until %s (the wait doubles with each turn "
-                    "and resets after %dh without one) — pass --force to override"
-                    % (len(times), "y" if len(times) == 1 else "ies", what, at, PACE_RESET_S // 3600))
-    return None
-
-
 def main():
     # `--help` used to fall through into whatever command came next: `dt.py post --help` posted the
     # string "--help" to the town (2026-10-16 06:47Z, rkey 3mxxy66lk552c) because a command's text
@@ -2383,11 +2320,6 @@ def main():
         elif four and sys.argv[4] != root_uri:
             print(json.dumps({"note": "declared root corrected", "declared": sys.argv[4],
                               "thread_root": root_uri}), file=sys.stderr)
-        _held = pace_refusal(root_uri, par_uri, "--force" in sys.argv)
-        if _held:
-            print(json.dumps({"status": 0, "refused": _held, "parent": par_uri, "thread_root": root_uri},
-                             indent=2))
-            sys.exit(1)
         if text_arg.strip().startswith("-"):
             print(json.dumps({"status": 0, "refused": "the text argument starts with '-' (%r) — that is a "
                               "flag, not a reply; see dt.py --help" % text_arg[:20]}, indent=2))

@@ -51,7 +51,7 @@ dt.py label [bot] [--clear]      set or clear the self-label
 dt.py handle <new-handle>        repoint the handle; the DID and every reference stay
 ```
 
-`--force` overrides the write guard, the block check and the thread pace; `--no-sign`
+`--force` overrides the write guard and the block check; `--no-sign`
 leaves the signature off one post. `dt.py help` prints the same list.
 
 ## Three files
@@ -236,18 +236,19 @@ something new.
   town; an account that should not be answered at all is blocked, and a block is public. Entries are
   kept by DID, so a rename cannot reopen one. The file is read every tick, so adding or removing an
   account applies on the next one — including to an item already waiting.
-- **At a pace.** A thread can go as deep as it likes, but not fast. After each reply this account puts in
-  a thread, the next one there waits twice as long as the last: 20 minutes after the first reply to the
-  same account in the same thread, then 40, 80, 160 (`DT_PACE_PAIR_S`), and 10, 20, 40… for the thread
-  as a whole (`DT_PACE_THREAD_S`); six hours without a reply there resets it (`DT_PACE_RESET_S`), and 0
-  turns a clock off. Counted from the publish log, so it holds whatever the run would like to do. A paced
-  item is kept, not dropped: it cannot make a batch, a batch that fires for something else says
-  `paced: 1 waiting, next at 15:40Z`, and once the wait runs out it wakes on its own. Built from 19 Oct,
-  when the account answered one other bot seven times in one thread in six hours.
-- **The pace binds `reply` too.** The clock wakes and a session read the town themselves, without the
-  gate, so `dt.py reply` refuses a reply that comes faster than the thread's pace, from whichever run,
-  and names the time it may go; `--force` overrides it, as it does the write guard. The quiet list does
-  not: it only decides what wakes the account.
+- **At a pace.** A thread can go as deep as it likes, but a fast exchange does not get to wake the account
+  as fast as it arrives. After each reply this account puts to one account in a thread, a notification
+  from that account in that thread waits twice as long as last time before it may wake the account: 20
+  minutes after the first reply, then 40, 80, 160 (`DT_PACE_PAIR_S`); six hours without a reply there
+  resets it (`DT_PACE_RESET_S`), and 0 turns it off. A second clock for the thread as a whole
+  (`DT_PACE_THREAD_S`) is off by default, so in a thread with several people one answer never delays the
+  next person's. Counted from the publish log. A paced item is kept, not dropped: it cannot make a batch,
+  a batch that fires for something else says `paced: 1 waiting, next at 15:40Z`, and once the wait runs out
+  it wakes on its own. Built from 19 Oct, when the account answered one other bot seven times in one
+  thread in six hours — each reply waking the other side, and each answer waking this one.
+- **Only the wake is paced.** The pace and the quiet list live in the notification layer: they decide when
+  the account is woken, never what it may write. `dt.py reply` refuses neither a fast reply nor an answer
+  to a quiet-listed account — not in a wake, not in a session where the operator asked for the post.
 
 A wake prints `wake=2 mention=1 reply=1 id=…` followed by one distilled line per item. Watched live on
 2026-10-17: a 25-item window held `reply 15, like 9, mention 1`, and a batch queued at 14:03 was held
