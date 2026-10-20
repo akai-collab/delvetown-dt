@@ -92,6 +92,24 @@ PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _home(
     ".local", "state", "delvetown-dt",
     "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT)
 WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # dt.py's write guard
+# The quiet list: accounts whose notifications never wake this account. It is the private alternative to
+# a block — a block is a public record, and on 19 Oct 2026 one was asked about in the town. `dt.py quiet`
+# edits it; it is re-read every tick, so a change applies on the next one without a redeploy. Entries are
+# matched by DID first: a handle is not stable (octavius became octavia on 19 Oct), and a list keyed by
+# handle stops matching through a rename without saying so.
+QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _home(
+    ".local", "state", "delvetown-dt", "quiet.json" if ACCOUNT == "akai" else "quiet-%s.json" % ACCOUNT)
+# Thread pacing: a reply into a thread has to wait longer after each reply this account has already put
+# there, so a slow deep thread goes on and a rapid back-and-forth slows down. Two clocks, both read off the
+# publish log (no network, nothing that depends on the run's restraint): one for the same counterpart in
+# the same thread, one for the thread as a whole. The wait doubles with each turn — PACE_PAIR_S after the
+# first reply, twice that after the second, and so on — and the run resets after PACE_RESET_S with no
+# reply in it. 0 turns a clock off. dt.py reads the same knobs and refuses a reply the gate would pace,
+# so a clock wake cannot go around it. The case it is built from: seven replies to one other bot in one
+# thread between 04:38Z and 10:35Z on 19 Oct, the last of them to this account's own post.
+PACE_PAIR_S = int(os.environ.get("DT_PACE_PAIR_S") or 1200)
+PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or 600)
+PACE_RESET_S = int(os.environ.get("DT_PACE_RESET_S") or 6 * 3600)
 
 # --- the direct reader (DT_MONITOR_READER=xrpc). Its session cache is its own, not dt.py's:
 # refreshSession rotates the refresh token, so two programs taking turns with one cache would each be
@@ -432,7 +450,10 @@ def _item(n):
     """The appview's notification in the shape the gate reads (the same fields at_mcp handed over)."""
     author = n.get("author") if isinstance(n.get("author"), dict) else {}
     record = n.get("record") if isinstance(n.get("record"), dict) else {}
+    reply = record.get("reply") if isinstance(record.get("reply"), dict) else {}
+    root = (reply.get("root") or {}).get("uri") or (reply.get("parent") or {}).get("uri")
     return {"reason": n.get("reason"), "author": author.get("handle") or author.get("did"),
+            "author_did": author.get("did"), "root": root,
             "uri": n.get("uri"), "indexed_at": n.get("indexedAt"), "is_read": n.get("isRead"),
             "text": record.get("text") or ""}
 
@@ -521,7 +542,7 @@ def held_reason(now, session_cache=None, publish_log=None):
 QUIET_LINE = "wake=none"
 
 
-def wake_output(items, state, now, held=None):
+def wake_output(items, state, now, held=None, quiet=None, replies=None):
     """Decide whether this tick wakes the model. Returns (output, new_state).
 
     The scheduler wakes the model when the output differs from the last tick's, so the decision is
@@ -537,6 +558,9 @@ def wake_output(items, state, now, held=None):
       arriving mid-thread is usually followed by another), but never longer than MAX_WAIT_S since the
       oldest — a busy thread cannot postpone its own answer for ever.
     - `held` (see `held_reason`) postpones a ripe batch without dropping it.
+    - an item from an account on the quiet list never wakes (`quiet`, read from QUIET_FILE by default);
+      an item in a thread this account has been answering fast waits out its pace (`replies`, read from
+      the publish log by default; see `paced_until`).
     """
     st = {"fired": dict(state.get("fired") or {}), "pending": dict(state.get("pending") or {}),
           "fails": int(state.get("fails") or 0), "last": state.get("last") or QUIET_LINE}
@@ -550,12 +574,19 @@ def wake_output(items, state, now, held=None):
         return st["last"], st
     st["fails"] = 0
 
-    actionable, quiet = [], []
+    muted_names = quiet if quiet is not None else quiet_list()
+    replies = own_replies(now) if replies is None else replies
+    actionable, reactions, muted = [], [], []
     for it in items:
         uri = it.get("uri")
         if not uri or uri in st["fired"]:
             continue
-        (quiet if (it.get("reason") or "") in QUIET_REASONS else actionable).append(it)
+        if (it.get("reason") or "") in QUIET_REASONS:
+            reactions.append(it)
+        elif is_muted(it, muted_names):
+            muted.append(it)
+        else:
+            actionable.append(it)
     # A pending entry keeps the item itself, not only when it was first seen: the window is only the
     # newest WAKE_LIMIT notifications, and while a batch is held (a lockout can last sixteen hours) or
     # settling, likes alone can scroll a reply out of it. Pruning to the window dropped exactly the
@@ -572,18 +603,34 @@ def wake_output(items, state, now, held=None):
     for it in actionable:
         entry = pending.setdefault(it["uri"], {"t": now, "item": None})
         entry["item"] = it                           # the freshest reading of it
+    # An account put on the quiet list while its item was already waiting is quiet from now on: the
+    # list is read every tick so that a change applies at once, and that includes what is in the queue.
+    for u, e in list(pending.items()):
+        if e["item"] is not None and is_muted(e["item"], muted_names):
+            pending.pop(u)
+            if u not in {it["uri"] for it in muted}:
+                muted.append(e["item"])
     st["pending"] = {u: e for u, e in pending.items()
                      if e["item"] is not None and now - e["t"] < FIRED_TTL_S}
     if not st["pending"]:
         return st["last"], st
 
-    seen = [e["t"] for e in st["pending"].values()]
+    # A paced item stays in the queue, neither dropped nor counted: it cannot make a batch, and a batch
+    # that fires for something else leaves it waiting. When its thread's wait runs out it becomes an
+    # ordinary pending item, and since it has been waiting that long it is ripe at once — the answer is
+    # late, not lost, which is the point: the thread goes on, at a pace.
+    paced = {u: paced_until(e["item"], now, replies) for u, e in st["pending"].items()}
+    ready = {u: e for u, e in st["pending"].items() if not paced[u]}
+    if not ready:
+        return st["last"], st
+
+    seen = [e["t"] for e in ready.values()]
     newest, oldest = max(seen), min(seen)
     ripe = now - newest >= SETTLE_S or now - oldest >= MAX_WAIT_S
     if not ripe or held:
         return st["last"], st
 
-    batch = sorted((e["item"] for e in st["pending"].values()),
+    batch = sorted((e["item"] for e in ready.values()),
                    key=lambda it: it.get("indexed_at") or "")
     counts = {}
     for it in batch:
@@ -592,16 +639,113 @@ def wake_output(items, state, now, held=None):
     out = ["wake=%d %s id=%s" % (len(batch), " ".join(f"{k}={v}" for k, v in sorted(counts.items())),
                                  ident)]
     out.extend(_line(it) for it in batch)
-    if quiet:
-        qc = {}
-        for it in quiet:
-            qc[it.get("reason") or "?"] = qc.get(it.get("reason") or "?", 0) + 1
-        out.append("also: " + ", ".join(f"{v} {k}" for k, v in sorted(qc.items())))
-    for it in batch + quiet:          # reactions are reported with the batch they arrived beside
+    also = {}
+    for it in reactions:
+        also[it.get("reason") or "?"] = also.get(it.get("reason") or "?", 0) + 1
+    if muted:
+        also["muted"] = len(muted)       # a count, not the items: the list exists so they are not read
+    if also:
+        out.append("also: " + ", ".join(f"{v} {k}" for k, v in sorted(also.items())))
+    waiting = [paced[u] for u in st["pending"] if paced[u]]
+    if waiting:
+        # Said so that a run does not go looking for the thread itself: it is being answered later.
+        out.append("paced: %d waiting, next at %s" % (
+            len(waiting), datetime.fromtimestamp(min(waiting), timezone.utc).strftime("%H:%MZ")))
+    for it in batch + reactions + muted:  # reported with the batch they arrived beside, then done
         st["fired"][it["uri"]] = now
-    st["pending"] = {}
+    st["pending"] = {u: e for u, e in st["pending"].items() if paced[u]}
     st["last"] = "\n".join(out)
     return st["last"], st
+
+
+# ------------------------------------------------------------------- the quiet list and the pacing
+# dt.py carries the same three functions (quiet_list, own_replies, pace_wait) for its reply refusal, and
+# tests/test_pacing.py holds the two copies to the same answers: the deployed monitor is a lone file in
+# the profile's scripts dir and cannot import the repo.
+def quiet_list(path=None):
+    """The quiet list as a set of lowercased DIDs and handles, or an empty set.
+
+    The file is `{"accounts": [{"did": ..., "handle": ..., "note": ...}]}` as `dt.py quiet` writes it; a
+    bare list of names, or `{"handles": [...]}` (the 19 Oct stopgap's shape), is read too. Anything
+    unreadable is an empty list, never an error: stderr is merged into the monitored output."""
+    try:
+        with open(path or QUIET_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    if isinstance(data, dict):
+        data = data.get("accounts") if "accounts" in data else data.get("handles")
+    names = set()
+    for e in data if isinstance(data, list) else []:
+        for v in ((e.get("did"), e.get("handle")) if isinstance(e, dict) else (e,)):
+            if isinstance(v, str) and v.strip():
+                names.add(v.strip().lstrip("@").lower())
+    return names
+
+
+def is_muted(it, names):
+    return bool(names) and bool({str(it.get("author_did") or "").lower(),
+                                 str(it.get("author") or "").lower()} & names)
+
+
+def _did_of(uri):
+    """The repo (author) segment of an at:// uri, or None."""
+    parts = str(uri or "").split("/")
+    return parts[2] if len(parts) > 2 and str(uri).startswith("at://") else None
+
+
+def own_replies(now, publish_log=None):
+    """This account's recent replies as (time, thread root, DID answered), oldest first, from the
+    publish log. Only what can still bear on a wait: PACE_RESET_S is the longest any wait can be, so a
+    run is cut where a gap that long appears, and nothing older than a day is read at all."""
+    out = []
+    try:
+        with open(publish_log or PUBLISH_LOG, encoding="utf-8") as f:
+            tail = f.readlines()[-500:]
+    except OSError:
+        return out
+    for line in tail:
+        try:
+            e = json.loads(line)
+            if e.get("kind") != "reply":
+                continue
+            t = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError, AttributeError):
+            continue
+        root = e.get("root_uri") or e.get("parent_uri")
+        if root and 0 <= now - t <= 86400:
+            out.append((t, root, _did_of(e.get("parent_uri"))))
+    return sorted(out)
+
+
+def pace_wait(times, base):
+    """When the next reply may go, given the earlier ones' times (oldest first): the last one plus base,
+    doubled for each reply before it in the same unbroken run. None when nothing is waiting on."""
+    if base <= 0 or not times:
+        return None
+    n = 1
+    for earlier, later in zip(reversed(times[:-1]), reversed(times[1:])):
+        if later - earlier >= PACE_RESET_S:
+            break
+        n += 1
+    return times[-1] + min(base * 2 ** (n - 1), PACE_RESET_S)
+
+
+def paced_until(it, now, replies):
+    """The time until which this item's thread is paced, or None if it may be answered now.
+
+    The pair clock counts this account's replies to the item's author in the item's thread; the thread
+    clock counts all its replies there. An item with no thread root (a mention in a root post, or a
+    reading from at_mcp, whose items do not carry one) is never paced."""
+    root = it.get("root")
+    if not root:
+        return None
+    who = it.get("author_did")
+    thread = [t for t, r, _ in replies if r == root]
+    pair = [t for t, r, d in replies if r == root and who and d == who]
+    until = max([w for w in (pace_wait(pair, PACE_PAIR_S), pace_wait(thread, PACE_THREAD_S)) if w]
+                or [0])
+    return until if until > now else None
 
 
 def _load_state(path):

@@ -192,7 +192,8 @@ class WakeGate(unittest.TestCase):
         self.m.SETTLE_S, self.m.MAX_WAIT_S, self.m.FAIL_TICKS = 600, 2700, 3
 
     def tick(self, items, state, now, held=None):
-        return self.m.wake_output(items, state, now, held)
+        # no quiet list and no replies of its own: this machine's real ones must not decide these cases
+        return self.m.wake_output(items, state, now, held, quiet=set(), replies=[])
 
     def test_a_like_or_a_follow_never_wakes(self):
         out, st = self.tick([note("a", "like"), note("b", "follow"), note("c", "repost")], {}, 0)
@@ -342,6 +343,7 @@ def run_wake(mode, state_path, settle="0"):
         "AT_MCP_WAKE_SETTLE_S": settle,
         "DT_SESSION_CACHE": state_path + ".nocache",
         "DT_PUBLISH_LOG": state_path + ".nolog",
+        "DT_QUIET_FILE": state_path + ".noquiet",
         "FAKE_MODE": mode,
     })
     with tempfile.TemporaryDirectory() as mcp_state:
@@ -496,6 +498,7 @@ class DirectReader(unittest.TestCase):
             "DELVETOWN_ENV_FILE": self.env_file, "AT_MCP_HANDLE": "test.delve.town",
             "DT_MONITOR_SESSION": self.cache, "DT_SESSION_CACHE": self.dt_cache,
             "DT_PUBLISH_LOG": os.path.join(self.tmp, "publish-log.jsonl"),
+            "DT_QUIET_FILE": os.path.join(self.tmp, "quiet.json"),
             "AT_MCP_WAKE_STATE": os.path.join(self.tmp, "wake.json"), "AT_MCP_WAKE_SETTLE_S": "0",
             "AT_MCP_MONITOR_GATE": gate,
             # a reader that fell back to the binary would fail loudly rather than pass by accident
