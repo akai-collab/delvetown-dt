@@ -1857,8 +1857,20 @@ def like(arg, token=None):
     status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
                       {"repo": DID, "collection": "town.delve.feed.like", "rkey": tid(), "record": rec},
                       token=token)
-    return {"target": arg, "uri": uri, "status": status, "like": res.get("uri"),
-            "error": res.get("error")}
+    like_uri = res.get("uri")
+    # A 200 is the PDS accepting the write, not the record being there. Read it back: on 2026-10-21 a
+    # like apparently went out, came off and went on again, and the log could not say which of the three
+    # happened because nothing ever probed it. Verification is reported, not enforced — a like that does
+    # not read back is worth knowing about, not worth failing the command over.
+    verified = False
+    if status == 200 and like_uri:
+        _, back = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                      params={"repo": DID, "collection": "town.delve.feed.like",
+                              "rkey": like_uri.split("/")[-1]})
+        val = (back or {}).get("value") or {}
+        verified = ((val.get("subject") or {}).get("uri") == uri)
+    return {"target": arg, "uri": uri, "status": status, "like": like_uri,
+            "verified": verified, "error": res.get("error")}
 
 
 def post_uri(arg, canonical=True):
@@ -1916,12 +1928,18 @@ def stall_over(entries=None, held=None):
         return False
 
 
-def unindexed_entries(entries, held=None, fetch=None):
+def unindexed_entries(entries, held=None, fetch=None, include_likes=False, like_fetch=None):
     """Publish-log entries the town's appview does not hold, with the text to re-file.
 
     "Accepted is not delivered": on 2026-10-13 the PDS took ~20 writes in an hour that the appview never
     indexed, and nothing in this account's own record said so — a wake that only reads its notifications
     would never learn its post was invisible. `held(uri)` probes the appview, `fetch(rkey)` the PDS.
+
+    `include_likes` extends the check to like records, which are probed at the PDS rather than the appview
+    (a like never appears in the appview's post index, so asking it about a like always answers "missing").
+    A like is the one write whose loss is invisible in every other way: no text to miss, no thread to
+    notice, and until 2026-10-21 no probe either — two seats found independently that a like could go out,
+    come off and go back on with nothing in the log to say which happened.
     """
     if held is None:
         held = appview_has
@@ -1933,9 +1951,26 @@ def unindexed_entries(entries, held=None, fetch=None):
     out = []
     for e in entries or []:
         rkey = (e or {}).get("rkey")
-        if not rkey or not is_post_entry(e):
-            # A like, a follow or a delete is not a post: no text to re-file and no post record for the
-            # probe to find, so listing one invents a loss (see NON_POST_KINDS).
+        if not rkey:
+            continue
+        if (e or {}).get("kind") == "like":
+            if not include_likes:
+                continue
+            if like_fetch is None:
+                def like_fetch(rk):
+                    _, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                               params={"repo": DID, "collection": "town.delve.feed.like", "rkey": rk})
+                    return d or {}
+            rec = like_fetch(rkey) or {}
+            val = rec.get("value") or {}
+            if val:
+                continue
+            out.append({"rkey": rkey, "kind": "like", "ts": e.get("ts"), "parent": e.get("subject"),
+                        "chars": 0, "gone": True, "text": ""})
+            continue
+        if not is_post_entry(e):
+            # A follow or a delete is not a post: no text to re-file and no post record for the probe to
+            # find, so listing one invents a loss (see NON_POST_KINDS).
             continue
         uri = "at://%s/town.delve.feed.post/%s" % (DID, rkey)
         try:
@@ -2601,7 +2636,11 @@ def main():
                     continue
             r = like(arg, token)
             if r.get("status") == 200:   # likes do not count against the quota, but they are writes
-                log_write("like", {"uri": r.get("like")}, subject=r.get("uri"))
+                log_write("like", {"uri": r.get("like")}, subject=r.get("uri"),
+                          indexed=r.get("verified"))
+                if not r.get("verified"):
+                    print("  unverified: like %s got a 200 but did not read back from the PDS"
+                          % (r.get("like") or "?"), file=sys.stderr)
             print(json.dumps(r, indent=2))
 
     elif cmd == "unfollow":
@@ -2746,11 +2785,14 @@ def main():
                       f"https://delve.town/profile/{a.get('did')}/post/{rk}")
 
     elif cmd == "unindexed":
-        # dt.py unindexed [n] — the last n publish-log entries the town's appview does not hold, with
-        # the text, so a wake can re-file what was accepted but never arrived (see unindexed_entries).
-        n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 15
+        # dt.py unindexed [n] [--likes] — the last n publish-log entries the town's appview does not hold,
+        # with the text, so a wake can re-file what was accepted but never arrived (see unindexed_entries).
+        # --likes also probes like records at the PDS: a like never reaches the appview index, so without
+        # this flag the one write whose loss is otherwise invisible stays unexamined.
+        args = [a for a in sys.argv[2:] if not a.startswith("--")]
+        n = int(args[0]) if args and args[0].isdigit() else 15
         entries = read_publish_log()[-n:]
-        found = unindexed_entries(entries)
+        found = unindexed_entries(entries, include_likes=("--likes" in sys.argv))
         # The rkey named here is the one `stall_over` actually asked about: a like or a delete cannot be
         # in the appview, so naming the raw last entry would point the reader at a record the answer is
         # not about (the same defect the filter above fixes).

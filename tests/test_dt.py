@@ -319,6 +319,48 @@ class Likes(unittest.TestCase):
         self.assertEqual(body["record"]["subject"]["cid"], "bafycid123")
         self.assertTrue(body["record"]["subject"]["uri"].endswith("/3mxabc"))
 
+    def test_a_like_reports_whether_the_record_reads_back(self):
+        """A 200 is the PDS taking the write, not the record existing.
+
+        Recorded 2026-10-21 after two seats independently found an overnight like that looked liked,
+        unliked and liked again with nothing in the log able to say which. The command therefore reads the
+        like record back and reports `verified`, rather than trusting the status code.
+        """
+        seen = {}
+
+        def fake(method, url, body=None, token=None, params=None):
+            if url.endswith("getRecord") and (params or {}).get("collection", "").endswith(".like"):
+                # echo back exactly what the like record was created with, as the PDS would
+                return 200, {"value": {"subject": {"uri": seen["subject"]}}}
+            if url.endswith("getRecord"):
+                return 200, {"cid": "bafycid123"}
+            seen["subject"] = body["record"]["subject"]["uri"]
+            return 200, {"uri": "at://did:plc:x/town.delve.feed.like/3abc"}
+
+        _req, dt.req = dt.req, fake
+        try:
+            out = dt.like("3mxabc", token="tok")
+        finally:
+            dt.req = _req
+        self.assertEqual(out["status"], 200)
+        self.assertTrue(out["verified"])
+
+    def test_a_like_that_does_not_read_back_is_not_verified(self):
+        def fake(method, url, body=None, token=None, params=None):
+            if url.endswith("getRecord") and (params or {}).get("collection", "").endswith(".post"):
+                return 200, {"cid": "bafycid123"}
+            if url.endswith("getRecord"):
+                return 400, {"error": "RecordNotFound"}
+            return 200, {"uri": "at://did:plc:x/town.delve.feed.like/3abc"}
+
+        _req, dt.req = dt.req, fake
+        try:
+            out = dt.like("3mxabc", token="tok")
+        finally:
+            dt.req = _req
+        self.assertEqual(out["status"], 200)
+        self.assertFalse(out["verified"])
+
     def test_post_references_normalise(self):
         # canonical=False: the offline suite must not attempt a handle resolve
         self.assertEqual(dt.post_uri("https://delve.town/profile/x.delve.town/post/3abc", canonical=False),
@@ -990,6 +1032,18 @@ class UnindexedEntries(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertTrue(out[0]["gone"])
         self.assertEqual(out[0]["text"], "")
+
+    def test_a_like_is_only_probed_when_asked(self):
+        """A like never reaches the appview index, so it is probed at the PDS and only behind --likes."""
+        entries = [{"rkey": "3lk", "kind": "like", "ts": "2026-10-21T01:00:00Z",
+                    "subject": "at://did:plc:x/town.delve.feed.post/3p"}]
+        self.assertEqual(dt.unindexed_entries(entries, held=lambda u: False, fetch=lambda rk: {}), [])
+        gone = dt.unindexed_entries(entries, include_likes=True, like_fetch=lambda rk: {})
+        self.assertEqual([g["kind"] for g in gone], ["like"])
+        self.assertTrue(gone[0]["gone"])
+        present = dt.unindexed_entries(entries, include_likes=True,
+                                       like_fetch=lambda rk: {"value": {"subject": {"uri": "x"}}})
+        self.assertEqual(present, [])
 
     def test_a_probe_that_raises_does_not_claim_a_loss(self):
         def boom(uri):
