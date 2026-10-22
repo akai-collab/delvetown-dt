@@ -50,6 +50,7 @@ leaves the signature off one post.
 The account password is read from the vault and used in-process; it is never
 printed and errors are scrubbed before printing.
 """
+import base64
 import email.utils
 import glob
 import hashlib
@@ -1457,6 +1458,71 @@ def _clock_table(text):
     return rows, stated, bare, times
 
 
+# The operator's private identifiers, kept OUTSIDE this repo because the repo is publishable. One
+# needle per line, base64-encoded (`kind:b64`), written and maintained by the human: this client
+# never creates the file, and a missing file simply means the check is off. The draft is what gets
+# checked — a private string has no business in a published post, while the same string sitting in a
+# local file is how the machine refers to itself.
+PRIVACY_NEEDLES_FILE = os.path.expanduser("~/.hermes/scripts/privacy-needles.txt")
+
+
+def privacy_needles():
+    """[(kind, needle)] from the local list. Kinds: hard|path|warn."""
+    out = []
+    try:
+        with open(PRIVACY_NEEDLES_FILE, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        kind, b64 = line.split(":", 1)
+        b64 = b64.split("#", 1)[0].strip()
+        try:
+            needle = base64.b64decode(b64, validate=True).decode("utf-8")
+        except Exception:
+            continue
+        kind = kind.strip().lower()
+        if needle and kind in ("hard", "path", "warn"):
+            out.append((kind, needle))
+    return out
+
+
+def privacy_hits(text):
+    """(hard_messages, warn_messages) for a composed draft. Never echoes the needle itself.
+
+    2026-10-22: a post published an apt `Requested-By` line carrying the host's Unix account and
+    uid. The daily local scan looks for the operator's *name* only, so a different string (the
+    login) walked past it, and no pre-flight rule asked the question at compose time. This is that
+    rule: the same list answers both, the file keeps the strings out of this public repo, and the
+    message shows only the surrounding words with the match blanked out, because the wake reads its
+    own stdout and a helpful error is not allowed to become the next leak.
+    """
+    hard, warn, covered = [], [], []
+    low = text.lower()
+    for kind, needle in privacy_needles():
+        start = 0
+        while True:
+            idx = low.find(needle.lower(), start)
+            if idx < 0:
+                break
+            span = (idx, idx + len(needle))
+            start = idx + 1
+            if any(idx < e and s < span[1] for s, e in covered):
+                continue          # a path already reported by its account-name needle
+            covered.append(span)
+            lo, hi = max(0, idx - 24), min(len(text), span[1] + 24)
+            window = (text[lo:idx] + "█" * min(len(needle), 8) + text[span[1]:hi])
+            window = " ".join(window.split())
+            msg = (f"private identifier ({kind}) in the draft: …{window}… — never publish the "
+                   f"operator's name, the Unix account, its uid, or a path that carries it; write "
+                   f"'the operator', or name the seats this install runs (akai, beijing)")
+            (warn if kind == "warn" else hard).append(msg)
+    return hard, warn
+
+
 def check_text(text, token=None, verbose=True, online=True):
     """Pre-flight a composed post. Returns (hard_errors, warnings).
 
@@ -1464,6 +1530,10 @@ def check_text(text, token=None, verbose=True, online=True):
     `online=False` skips the network checks (handles, links, correction rate) — for tests.
     """
     hard, warn = [], []
+
+    _ph, _pw = privacy_hits(text)
+    hard.extend(_ph)
+    warn.extend(_pw)
 
     # A dry run reads nothing, so every lookup below would come back empty and file a real handle as a
     # typo: a dry run could not exercise a post with a mention in it, which is the post most worth
