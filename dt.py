@@ -17,6 +17,9 @@ Usage — reading (public reads never log in, except where marked):
   dt.py follows                 -> who I follow, resolved to handles
   dt.py blocked                 -> who I block, resolved to handles
   dt.py quiet                   -> the private quiet list (see below)
+  dt.py claim                   -> live claims, and the quiz tallies still owed (see below)
+  dt.py claim take <uri> [--ttl MIN] / claim release <uri> / claim owed
+  dt.py claim owe <uri> --due +12h / claim done <uri> <posted-uri>
   dt.py cid <at-uri>            -> the cid that uri's own repo holds
   dt.py check "<text>"          -> pre-flight a composed post (run this BEFORE post/reply)
   dt.py provenance [n]          -> which invocation mode published what (local JSONL log)
@@ -213,6 +216,154 @@ GUARDED_KINDS = ("post", "reply", "delete")
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or os.path.join(
     os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
     "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0])
+
+# Claims and obligations: one run composes an item at a time, and a quiz's tally is owed exactly once.
+# Keyed per account, because the two seats on this machine run the same client and must not read each
+# other's claims. Two collisions produced this on 2026-10-22 (see tests/test_claims.py): a gate wake and
+# a scheduled floor run holding the same addressed item 48 seconds apart, and a tally job that could
+# fire inside a wake window hours after the quiz. A prompt saying "re-read before publishing" narrows
+# the first but cannot close it — both runs can read before either writes, and the appview lags, so a
+# reply published seconds earlier may not be visible at all.
+CLAIMS_FILE = os.environ.get("DT_CLAIMS_FILE") or os.path.join(
+    os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
+    "claims-%s.json" % (HANDLE.split(".")[0] or ACCOUNT))
+
+
+def now_iso(age_s=0.0):
+    """ISO-8601 UTC, optionally shifted into the past by age_s — a claim's start, an obligation's due."""
+    return (datetime.now(timezone.utc) - timedelta(seconds=float(age_s))).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def claims_data(path=None):
+    """{"claims": {uri: {...}}, "obligations": {uri: {...}}}. Unreadable → empty, never a traceback."""
+    try:
+        with open(path or CLAIMS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("claims", {})
+    data.setdefault("obligations", {})
+    return data
+
+
+def save_claims(data, path=None):
+    """Atomic: a wake and a tally job may read this at any moment, and half a file reads as no claims."""
+    path = path or CLAIMS_FILE
+    os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def claim_state(uri, data=None):
+    """('free'|'mine'|'live'|'stale', entry) — `live` means another run is composing this item now."""
+    entry = (data or claims_data())["claims"].get(uri)
+    if not entry:
+        return "free", None
+    age = 0.0
+    try:
+        started = datetime.strptime(str(entry.get("started")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - started).total_seconds()
+    except (TypeError, ValueError):
+        age = 10 ** 9
+    if age > float(entry.get("ttl_s") or 0):
+        return "stale", entry
+    if int(entry.get("pid") or 0) == os.getpid():
+        return "mine", entry
+    if not pid_alive(entry.get("pid")):
+        return "stale", entry
+    return "live", entry
+
+
+def claim_conflict(uri, data=None):
+    """A note when another live run holds `uri`, else None. Called before a reply publishes."""
+    state, entry = claim_state(uri, data)
+    if state == "live":
+        who = entry.get("handle") or entry.get("pid")
+        return ("another run (%s) holds a claim on this item, taken %s — two runs composing the same "
+                "thread is the collision the claim exists to stop" % (who, entry.get("started")))
+    return None
+
+
+def claim_take(uri, ttl_min=20, kind="arrival"):
+    data = claims_data()
+    state, entry = claim_state(uri, data)
+    if state == "live":
+        return None, ("held by %s since %s (ttl %ss)" % (entry.get("handle") or entry.get("pid"),
+                                                         entry.get("started"), entry.get("ttl_s")))
+    note = ""
+    if state == "stale":
+        note = "took over an expired claim (pid %s, started %s)" % (entry.get("pid"), entry.get("started"))
+    data["claims"][uri] = {"pid": os.getpid(), "handle": HANDLE, "started": now_iso(),
+                           "ttl_s": int(float(ttl_min) * 60), "kind": kind}
+    save_claims(data)
+    return {"claimed": uri, "ttl_s": int(float(ttl_min) * 60), "kind": kind, "note": note or None}, None
+
+
+def claim_release(uri):
+    data = claims_data()
+    entry = data["claims"].get(uri)
+    if not entry:
+        return {"note": "no claim on %s" % uri, "released": None}
+    if int(entry.get("pid") or 0) != os.getpid() and "--force" not in sys.argv:
+        return {"refused": "%s is held by pid %s, not this run (--force releases it anyway)" % (uri, entry.get("pid"))}
+    del data["claims"][uri]
+    save_claims(data)
+    return {"released": uri}
+
+
+def parse_due(spec):
+    """'--due +12h' / '+90m' / an ISO stamp → an ISO stamp in Z."""
+    spec = (spec or "").strip()
+    m = re.match(r"^\+?(\d+(?:\.\d+)?)([smhd])$", spec)
+    if m:
+        mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+        return now_iso(-float(m.group(1)) * mult)
+    return spec or now_iso(-12 * 3600)
+
+
+def owe(uri, due, kind="tally"):
+    data = claims_data()
+    row = data["obligations"].setdefault(uri, {})
+    row.update({"kind": kind, "due": due, "created": row.get("created") or now_iso()})
+    save_claims(data)
+    return {"owed": uri, "due": row["due"], "kind": kind}
+
+
+def owed(include_done=False):
+    data = claims_data()
+    rows = []
+    for uri, row in data["obligations"].items():
+        if row.get("done_uri") and not include_done:
+            continue
+        rows.append(dict(row, uri=uri))
+    rows.sort(key=lambda r: r.get("due") or "")
+    return rows
+
+
+def discharge(uri, posted_uri):
+    data = claims_data()
+    row = data["obligations"].get(uri)
+    if not row:
+        return {"refused": "no obligation recorded for %s" % uri}, 1
+    if row.get("done_uri"):
+        return {"refused": "already discharged by %s" % row["done_uri"]}, 1
+    row["done_uri"] = posted_uri
+    row["done_at"] = now_iso()
+    data["claims"].pop(uri, None)
+    save_claims(data)
+    return {"done": uri, "posted": posted_uri}, None
 
 
 def write_pressure(entries=None, now=None):
@@ -2159,6 +2310,7 @@ USAGE = {
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
     "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
+    "claim": 'claim [list] | claim take <uri> [--ttl MIN] | claim release <uri> | claim owe <uri> --due +12h | claim owed | claim done <uri> <posted-uri>   (one run per item; a quiz owes one tally)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
@@ -2166,7 +2318,7 @@ WRITE_CMDS = {"post", "reply", "delete", "like", "follow", "block", "unblock", "
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
-NO_ARGS_OK = {"draw", "blocked", "named", "quiet"}
+NO_ARGS_OK = {"draw", "blocked", "named", "quiet", "claim"}
 
 
 def blocked_subjects():
@@ -2329,6 +2481,14 @@ def main():
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
         par_uri, par_cid = sys.argv[2], sys.argv[3]
+        # A second run answering the same item is the collision claims exist for: refuse rather than
+        # race, and say which run holds it. Prompt-level re-reads cannot close this (both can read
+        # before either writes, and the appview lags a fresh reply), so the check is mechanical here.
+        _claim_note = claim_conflict(par_uri)
+        if _claim_note:
+            print(json.dumps({"status": 0, "refused": _claim_note, "parent": par_uri,
+                              "hint": "the run that holds it publishes; release with dt.py claim release <uri>"}, indent=2))
+            sys.exit(1)
         _blocked_note = blocked_refusal(par_uri, "--force" in sys.argv)
         if _blocked_note:
             print(json.dumps({"status": 0, "refused": _blocked_note, "parent": par_uri}, indent=2))
@@ -2581,6 +2741,67 @@ def main():
             out.append({"subject": subj, "handle": handle, "uri": rec["uri"],
                         "createdAt": (rec.get("value") or {}).get("createdAt")})
         print(json.dumps({"count": len(out), "blocks": out}, indent=2))
+
+    elif cmd == "claim":
+        # One run composes an item at a time; a quiz owes exactly one tally, however late.
+        args = sys.argv[2:]
+
+        def _opt(name, default=None):
+            if name in args and args.index(name) + 1 < len(args):
+                return args[args.index(name) + 1]
+            return default
+
+        sub = args[0] if args else "list"
+        if sub == "list":
+            data = claims_data()
+            rows = []
+            for uri, entry in data["claims"].items():
+                state, _ = claim_state(uri, data)
+                if state == "stale":
+                    continue
+                try:
+                    started = datetime.strptime(str(entry.get("started")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    age = int((datetime.now(timezone.utc) - started).total_seconds())
+                except (TypeError, ValueError):
+                    age = None
+                rows.append(dict(entry, uri=uri, state=state, age_s=age))
+            print(json.dumps({"file": CLAIMS_FILE, "count": len(rows), "claims": rows}, indent=2))
+        elif sub == "take":
+            if len(args) < 2:
+                print(json.dumps({"status": 0, "refused": "claim take needs a uri"}, indent=2))
+                sys.exit(1)
+            out, err = claim_take(args[1], _opt("--ttl", 20), _opt("--kind", "arrival"))
+            print(json.dumps(out if out else {"status": 0, "refused": err}, indent=2))
+            if err:
+                sys.exit(1)
+        elif sub == "release":
+            if len(args) < 2:
+                print(json.dumps({"status": 0, "refused": "claim release needs a uri"}, indent=2))
+                sys.exit(1)
+            out = claim_release(args[1])
+            print(json.dumps(out, indent=2))
+            if out.get("refused"):
+                sys.exit(1)
+        elif sub == "owe":
+            if len(args) < 2:
+                print(json.dumps({"status": 0, "refused": "claim owe needs a uri"}, indent=2))
+                sys.exit(1)
+            print(json.dumps(owe(args[1], parse_due(_opt("--due", "+12h")), _opt("--kind", "tally")), indent=2))
+        elif sub == "owed":
+            rows = owed(include_done="--all" in args)
+            print(json.dumps({"count": len(rows), "obligations": rows}, indent=2))
+        elif sub == "done":
+            if len(args) < 3:
+                print(json.dumps({"status": 0, "refused": "claim done needs <uri> <posted-uri>"}, indent=2))
+                sys.exit(1)
+            out, code = discharge(args[1], args[2])
+            print(json.dumps(out, indent=2))
+            if code:
+                sys.exit(code)
+        else:
+            print(json.dumps({"status": 0, "refused": "claim %s is not a subcommand (list, take, release, owe, owed, done)" % sub,
+                              "hint": "dt.py claim"}, indent=2))
+            sys.exit(1)
 
     elif cmd == "quiet":
         # dt.py quiet [list] | add <handle|did> ["why"] | remove <handle|did>

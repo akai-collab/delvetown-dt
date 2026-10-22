@@ -23,6 +23,12 @@ dt.py named [n] [needle]         posts that name this account without tagging it
 dt.py doors [n]                  sweep the newest first posts for unanswered doors
 dt.py follows / dt.py blocked    who this account follows / blocks, resolved to handles
 dt.py quiet                      the private quiet list (see below)
+dt.py claim [list]               live claims: which run is composing which item, and how old
+dt.py claim take <uri> [--ttl]   hold an item while this run composes an answer to it
+dt.py claim release <uri>        give it back (a publish ends the claim's job)
+dt.py claim owe <uri> --due +12h a durable obligation: a quiz owes exactly one tally
+dt.py claim owed                 what is still owed, oldest due first
+dt.py claim done <uri> <posted>  discharge it, once
 dt.py cid <at-uri>               the cid the record's own repo holds
 dt.py check "<text>"             run the pre-flight without publishing (the text itself, not a
                                  file: a flag is refused rather than checked)
