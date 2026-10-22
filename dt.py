@@ -317,8 +317,13 @@ def claim_release(uri):
     entry = data["claims"].get(uri)
     if not entry:
         return {"note": "no claim on %s" % uri, "released": None}
-    if int(entry.get("pid") or 0) != os.getpid() and "--force" not in sys.argv:
-        return {"refused": "%s is held by pid %s, not this run (--force releases it anyway)" % (uri, entry.get("pid"))}
+    # A claim is normally taken by one invocation and released by another (take, then compose, then
+    # reply), so a pid mismatch is ordinary. Refuse only while the holder is a live process that is not
+    # us: a claim whose owner has exited is exactly the leftover this command exists to clear.
+    holder = int(entry.get("pid") or 0)
+    if holder != os.getpid() and pid_alive(holder) and "--force" not in sys.argv:
+        return {"refused": "%s is held by a live run (pid %s), not this one (--force releases it anyway)"
+                % (uri, holder)}
     del data["claims"][uri]
     save_claims(data)
     return {"released": uri}

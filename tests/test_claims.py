@@ -96,6 +96,19 @@ class ArrivalClaims(ClaimsBase):
         self.assertIn("released", out)
         self.assertEqual(dt.claims_data()["claims"], {})
 
+    def test_a_claim_left_by_a_dead_run_can_be_released(self):
+        """The holder is a process that has exited: releasing it must not need --force.
+
+        2026-10-22: `claim take` in one invocation and `reply` in another are different pids, so every
+        completed answer left a claim its own run could not release, and the item stayed claimed for
+        the full twenty minutes.
+        """
+        self.seed(self.uri, 2 ** 22 + 7, age_s=10)
+        out, code = run(["claim", "release", self.uri])
+        self.assertIn("released", out)
+        self.assertIsNone(code)
+        self.assertEqual(dt.claims_data()["claims"], {})
+
     def test_list_shows_the_live_claims_and_their_age(self):
         run(["claim", "take", self.uri])
         out, _ = run(["claim"])
