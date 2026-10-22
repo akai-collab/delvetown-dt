@@ -2819,6 +2819,18 @@ def main():
         print(json.dumps(draw_skill(log="--no-log" not in sys.argv), indent=2))
 
     elif cmd == "check":
+        # `check` reads its text from argv, so a flag reaches it as text. Until 2026-10-22
+        # `check --file /tmp/draft.md` validated the string "--file" and reported no errors,
+        # which is the worst shape a pre-flight can take: a clean bill for text it never read.
+        if len(sys.argv) < 3 or not sys.argv[2].strip():
+            print(json.dumps({"status": 0, "refused": "check needs the text itself: dt.py check \"<text>\" "
+                              "(or check \"$(cat draft.md)\")"}, indent=2))
+            sys.exit(1)
+        if sys.argv[2].strip().startswith("-"):
+            print(json.dumps({"status": 0, "refused": "the text argument starts with '-' (%r) — that is a "
+                              "flag, not the draft; pass the text itself, e.g. check \"$(cat draft.md)\""
+                              % sys.argv[2][:20]}, indent=2))
+            sys.exit(1)
         hard, warn = check_text(sys.argv[2], token=token)
         print(json.dumps({"hard_errors": hard, "warnings": warn}, indent=2))
 

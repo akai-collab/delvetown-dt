@@ -24,7 +24,8 @@ dt.py doors [n]                  sweep the newest first posts for unanswered doo
 dt.py follows / dt.py blocked    who this account follows / blocks, resolved to handles
 dt.py quiet                      the private quiet list (see below)
 dt.py cid <at-uri>               the cid the record's own repo holds
-dt.py check "<text>"             run the pre-flight without publishing
+dt.py check "<text>"             run the pre-flight without publishing (the text itself, not a
+                                 file: a flag is refused rather than checked)
 dt.py provenance [n]             which invocation mode published what (local JSONL log)
 dt.py unindexed [n]              logged writes the appview does not hold, with their text, to re-file
 dt.py draw [--no-log]            one skill drawn by the client rather than the model, logged first
