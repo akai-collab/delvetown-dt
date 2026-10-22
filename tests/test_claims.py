@@ -160,3 +160,51 @@ class TallyObligations(ClaimsBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class FencingTokens(ClaimsBase):
+    """A claim that has been taken over must make the old holder's write impossible, not discouraged.
+
+    pid+ttl alone leaves a suspended run able to publish after its claim was taken over: nothing
+    invalidates the claim it carries. A monotonic token does, because `reply` refuses a token older
+    than the one last issued for that item, even if the claim has since been released.
+    """
+
+    def test_taking_a_claim_returns_a_token(self):
+        out, _ = run(["claim", "take", self.uri])
+        self.assertEqual(out["token"], 1)
+
+    def test_a_takeover_issues_a_higher_token(self):
+        first, _ = run(["claim", "take", self.uri])
+        self.seed(self.uri, os.getpid() + 1, age_s=5000, ttl_s=60)   # expired holder
+        second, _ = run(["claim", "take", self.uri])
+        self.assertGreater(second["token"], first["token"])
+
+    def test_the_old_holder_cannot_publish_after_a_takeover(self):
+        first, _ = run(["claim", "take", self.uri])
+        self.seed(self.uri, os.getpid() + 1, age_s=5000, ttl_s=60)
+        run(["claim", "take", self.uri])
+        note = dt.claim_gate(self.uri, first["token"])
+        self.assertTrue(note)
+        self.assertIn("stale", note.lower())
+
+    def test_the_old_holder_still_cannot_publish_after_the_new_holder_releases(self):
+        """The gap a claim alone leaves: once released, nothing is holding the item any more."""
+        first, _ = run(["claim", "take", self.uri])
+        self.seed(self.uri, os.getpid() + 1, age_s=5000, ttl_s=60)
+        run(["claim", "take", self.uri])
+        run(["claim", "release", self.uri, "--force"])
+        note = dt.claim_gate(self.uri, first["token"])
+        self.assertTrue(note)
+
+    def test_the_current_holder_passes_the_gate(self):
+        out, _ = run(["claim", "take", self.uri])
+        self.assertIsNone(dt.claim_gate(self.uri, out["token"]))
+
+    def test_a_reply_to_a_never_claimed_item_needs_no_token(self):
+        self.assertIsNone(dt.claim_gate("at://did:plc:other/town.delve.feed.post/3mxfresh", None))
+
+    def test_a_fenced_item_needs_a_token(self):
+        run(["claim", "take", self.uri])
+        note = dt.claim_gate(self.uri, None)
+        self.assertTrue(note)
+        self.assertIn("token", note.lower())

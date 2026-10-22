@@ -24,7 +24,7 @@ dt.py doors [n]                  sweep the newest first posts for unanswered doo
 dt.py follows / dt.py blocked    who this account follows / blocks, resolved to handles
 dt.py quiet                      the private quiet list (see below)
 dt.py claim [list]               live claims: which run is composing which item, and how old
-dt.py claim take <uri> [--ttl]   hold an item while this run composes an answer to it
+dt.py claim take <uri> [--ttl]   hold an item; prints the token a reply must carry (--claim-token)
 dt.py claim release <uri>        give it back (a publish ends the claim's job)
 dt.py claim owe <uri> --due +12h a durable obligation: a quiz owes exactly one tally
 dt.py claim owed                 what is still owed, oldest due first

@@ -18,7 +18,8 @@ Usage — reading (public reads never log in, except where marked):
   dt.py blocked                 -> who I block, resolved to handles
   dt.py quiet                   -> the private quiet list (see below)
   dt.py claim                   -> live claims, and the quiz tallies still owed (see below)
-  dt.py claim take <uri> [--ttl MIN] / claim release <uri> / claim owed
+  dt.py claim take <uri> [--ttl MIN]   -> the token a reply must carry (--claim-token)
+  dt.py claim release <uri> / claim owed
   dt.py claim owe <uri> --due +12h / claim done <uri> <posted-uri>
   dt.py cid <at-uri>            -> the cid that uri's own repo holds
   dt.py check "<text>"          -> pre-flight a composed post (run this BEFORE post/reply)
@@ -246,6 +247,8 @@ def claims_data(path=None):
         data = {}
     data.setdefault("claims", {})
     data.setdefault("obligations", {})
+    data.setdefault("fenced", {})
+    data.setdefault("counter", 0)
     return data
 
 
@@ -297,6 +300,31 @@ def claim_conflict(uri, data=None):
     return None
 
 
+def claim_gate(uri, token=None, data=None):
+    """The publish-side check: None to go ahead, else a refusal.
+
+    Three refusals, in order: another live run holds it; the item was fenced and no token was given;
+    the token is older than the last one issued for this item (a takeover happened, whether or not the
+    new holder is still claiming it).
+    """
+    data = data or claims_data()
+    conflict = claim_conflict(uri, data)
+    if conflict:
+        return conflict
+    fenced = data.get("fenced", {}).get(uri)
+    if fenced:
+        if token in (None, ""):
+            return ("this item was claimed (fence %s) — take the claim and pass --claim-token %s; "
+                    "a reply without one cannot prove it is the current holder" % (fenced, fenced))
+        try:
+            if int(token) < int(fenced):
+                return ("stale claim token %s (fence is %s): this item was taken over, so the older "
+                        "holder's write is refused" % (token, fenced))
+        except (TypeError, ValueError):
+            return "claim token %r is not a number (fence %s)" % (token, fenced)
+    return None
+
+
 def claim_take(uri, ttl_min=20, kind="arrival"):
     data = claims_data()
     state, entry = claim_state(uri, data)
@@ -306,10 +334,17 @@ def claim_take(uri, ttl_min=20, kind="arrival"):
     note = ""
     if state == "stale":
         note = "took over an expired claim (pid %s, started %s)" % (entry.get("pid"), entry.get("started"))
+    data["counter"] = int(data.get("counter") or 0) + 1
+    token = data["counter"]
     data["claims"][uri] = {"pid": os.getpid(), "handle": HANDLE, "started": now_iso(),
-                           "ttl_s": int(float(ttl_min) * 60), "kind": kind}
+                           "ttl_s": int(float(ttl_min) * 60), "kind": kind, "token": token}
+    # The fence outlives the claim: a takeover bumps it, so the old holder's token is refused even
+    # after the new holder has published and released. That is the difference between discouraged
+    # and impossible, and it is what a suspended run cannot talk its way around.
+    data["fenced"][uri] = token
     save_claims(data)
-    return {"claimed": uri, "ttl_s": int(float(ttl_min) * 60), "kind": kind, "note": note or None}, None
+    return {"claimed": uri, "ttl_s": int(float(ttl_min) * 60), "kind": kind, "token": token,
+            "note": note or None}, None
 
 
 def claim_release(uri):
@@ -2385,7 +2420,7 @@ USAGE = {
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
     "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
-    "claim": 'claim [list] | claim take <uri> [--ttl MIN] | claim release <uri> | claim owe <uri> --due +12h | claim owed | claim done <uri> <posted-uri>   (one run per item; a quiz owes one tally)',
+    "claim": 'claim [list] | claim take <uri> [--ttl MIN] -> token | claim release <uri> | claim owe <uri> --due +12h | claim owed | claim done <uri> <posted-uri>   (one run per item: pass the token to reply as --claim-token)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
@@ -2559,10 +2594,15 @@ def main():
         # A second run answering the same item is the collision claims exist for: refuse rather than
         # race, and say which run holds it. Prompt-level re-reads cannot close this (both can read
         # before either writes, and the appview lags a fresh reply), so the check is mechanical here.
-        _claim_note = claim_conflict(par_uri)
+        _tok = None
+        if "--claim-token" in sys.argv:
+            _i = sys.argv.index("--claim-token")
+            _tok = sys.argv[_i + 1] if _i + 1 < len(sys.argv) else None
+        _claim_note = claim_gate(par_uri, _tok)
         if _claim_note:
             print(json.dumps({"status": 0, "refused": _claim_note, "parent": par_uri,
-                              "hint": "the run that holds it publishes; release with dt.py claim release <uri>"}, indent=2))
+                              "hint": "dt.py claim take <parent-uri> returns the token to pass"},
+                             indent=2))
             sys.exit(1)
         _blocked_note = blocked_refusal(par_uri, "--force" in sys.argv)
         if _blocked_note:
