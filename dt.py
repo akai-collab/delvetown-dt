@@ -2477,6 +2477,28 @@ def canonical_ref(uri, resolve=None):
 CID_RE = re.compile(r"^(?:baf[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$")
 
 
+# A flag that does not exist is not a hint, it is a silent no-op — and a silent no-op on a write path
+# publishes. Measured 2026-10-24: `reply <uri> <cid> "test" --dry-run` sent the reply, because the dry run
+# is DT_DRY_RUN=1 and there is no `--dry-run` flag; the stray argument was ignored and the post went out.
+ALLOWED_FLAGS = {
+    "post": {"--image", "--alt", "--no-sign", "--force"},
+    "reply": {"--image", "--alt", "--no-sign", "--force", "--again", "--claim-token", "--root", "--root-cid"},
+}
+
+
+def unknown_flag(cmd, argv):
+    """The first argument to `cmd` that looks like a flag and is not one, or None."""
+    allowed = ALLOWED_FLAGS.get(cmd)
+    if not allowed:
+        return None
+    for a in argv:
+        if not isinstance(a, str) or not a.startswith("--") or a in ("--help",):
+            continue
+        if a.split("=")[0] not in allowed:
+            return a
+    return None
+
+
 def cid_shaped(value):
     """True when `value` looks like a cid. A cheap shape check, not a verification: it catches the
     argument that arrived in the wrong slot (2026-10-23: a fencing token, published as a post whose
@@ -2703,6 +2725,14 @@ def main():
         _usage(USAGE[cmd])
     if cmd == "reply" and len(sys.argv) < 5:
         _usage(USAGE["reply"])
+    # Refuse a flag that is not a flag BEFORE any login: the check has to sit above `session()`, because a
+    # write that reaches login has already left the argument parsing that would have caught it.
+    _bad = unknown_flag(cmd, sys.argv[2:])
+    if _bad:
+        print(json.dumps({"status": 0, "refused": "no such flag: %r. Nothing was written. A dry run is "
+                          "DT_DRY_RUN=1, not a flag; --again answers a post twice on purpose." % _bad},
+                         indent=2))
+        sys.exit(1)
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
     # one session per process: this used to call session() twice for every write, two logins each
     _s = session() if needs else None
