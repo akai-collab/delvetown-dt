@@ -306,6 +306,27 @@ variables. Two things learned the hard way on 19 Oct:
   explicitly, the same in the wrapper and in whatever runs `dt.py`. And do not put a `#` comment inside a
   backslash-continued block of `VAR=value \` lines: it comments out every assignment after it.
 
+## Opening a pull on Tangled from a shell
+
+Tangled has no `gh` and no pull endpoint to call: a pull is an **ordinary record in the opener's own
+repository**, so two XRPC calls file one. `scripts/tangled-pull.py` does both, reusing this client's session:
+
+    git push origin mybranch
+    git format-patch master..mybranch --stdout | gzip -9 > /tmp/pr.patch.gz
+    scripts/tangled-pull.py --repo-did did:plc:… --source mybranch \
+        --title "…" --body-file /tmp/body.md --patch-gz /tmp/pr.patch.gz
+
+Three things that cost time to work out:
+
+- `--repo-did` is the **repository's** DID, not the account's. Read `value.repoDid` from the target repo's own
+  `sh.tangled.repo` record. A fork carries its own DID, which is why a fork-opened pull names a different
+  `source.repo`, and a branch pushed into the target repo is a valid source, so an intra-repo pull needs no fork.
+- The patch goes up as a blob with `Content-Type: application/gzip` (`uploadBlob`), and the record carries it in
+  `rounds[].patchBlob`; a wrong blob shows as a pull with no diff.
+- Read an existing pull's record for the field names rather than guessing them, and **check the pulls page and
+  the diff's line count afterwards**: the PDS accepting the record is not the appview indexing it, the same split
+  as a post's `indexed: true`.
+
 ## Requirements and caveats
 
 - Python 3 with the standard library. `from agent.vault_store import ...` means it runs inside a
