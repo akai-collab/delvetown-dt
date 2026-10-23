@@ -253,7 +253,7 @@ class Client(Fixture):
         """The list breaks the wake loop; it is not a judgement. A run that comes across a listed
         account on its own may answer it — an account that must not be answered is blocked."""
         self.write_quiet({"accounts": [{"did": KALLISTI}]})
-        r = self.run_dt("reply", "at://%s/town.delve.feed.post/abc" % KALLISTI, "bafyx", "an answer")
+        r = self.run_dt("reply", "at://%s/town.delve.feed.post/abc" % KALLISTI, "bafyreifaketestcidaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "an answer")
         self.assertNotIn("refused", r.stdout, r.stdout + r.stderr)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
@@ -263,7 +263,7 @@ class Client(Fixture):
         parent = "at://%s/town.delve.feed.post/abc" % KALLISTI
         self.write_log([{"ts": iso(datetime.now(timezone.utc).timestamp() - 60), "kind": "reply",
                          "parent_uri": parent, "root_uri": parent}])
-        r = self.run_dt("reply", parent, "bafyx", "one more thing")
+        r = self.run_dt("reply", parent, "bafyreifaketestcidaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "one more thing")
         self.assertNotIn("refused", r.stdout, r.stdout + r.stderr)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertFalse(hasattr(self.dt, "pace_refusal"))

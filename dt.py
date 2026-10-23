@@ -2357,6 +2357,19 @@ def canonical_ref(uri, resolve=None):
     return uri.replace("at://%s/" % auth, "at://%s/" % did, 1) if did else uri
 
 
+# A cid has a shape. CIDv1 in base32 starts `baf` and continues in the base32 alphabet; the legacy
+# CIDv0 form is `Qm` plus 44 base58 characters. Anything else in a reply's cid slot is a slot error.
+CID_RE = re.compile(r"^(?:baf[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$")
+
+
+def cid_shaped(value):
+    """True when `value` looks like a cid. A cheap shape check, not a verification: it catches the
+    argument that arrived in the wrong slot (2026-10-23: a fencing token, published as a post whose
+    whole body was `31`), and it deliberately says nothing about whether a well-shaped cid is real.
+    """
+    return bool(isinstance(value, str) and CID_RE.match(value))
+
+
 def _cid_verdict(given, fetched):
     """(cid, note) for a reply's parent reference. A cid is a claim about what the parent *is*.
 
@@ -2658,6 +2671,13 @@ def main():
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
         par_uri, par_cid = sys.argv[2], sys.argv[3]
+        if not cid_shaped(par_cid):
+            print(json.dumps({"status": 0, "refused":
+                              "the second argument is the parent's cid and %r is not one. A reply reads "
+                              "<parent-uri> <parent-cid> \"<text>\", so a flag or the claim token in that "
+                              "slot shifts everything one place and publishes the token as the post. "
+                              "Nothing was written." % (par_cid[:40],)}, indent=2))
+            sys.exit(1)
         # A second run answering the same item is the collision claims exist for: refuse rather than
         # race, and say which run holds it. Prompt-level re-reads cannot close this (both can read
         # before either writes, and the appview lags a fresh reply), so the check is mechanical here.
