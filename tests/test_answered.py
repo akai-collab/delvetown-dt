@@ -164,6 +164,22 @@ class Reply(Fixture):
         self.dt.DID = ME          # the fixture's account is skillissue; the log's "us" is ME
         self.assertIsNone(self.dt.answered_refusal(mine("3myownpost"), repo={}))
 
+    def test_the_boundary_is_the_parents_repo_not_a_substring(self):
+        """A post of ours is one in our repo, whoever quoted it; a post elsewhere that merely names our DID
+        in its rkey slot or path is not."""
+        self.dt.DID = ME
+        self.write_log([reply("r1", parent="at://%s/town.delve.feed.post/%s" % (SELENE, ME.split(":")[-1]))])
+        self.assertIn("already answered", self.dt.answered_refusal(
+            "at://%s/town.delve.feed.post/%s" % (SELENE, ME.split(":")[-1]), repo={}))
+
+    def test_follow_ups_under_our_own_post_are_not_doubles_anywhere(self):
+        """Five of the twelve same-parent pairs in the live log were the picture, the street list and the
+        correction under one post of ours. audit and the gate must agree with reply that this is a thread."""
+        own = mine("3myownpost")
+        self.write_log([reply("list", parent=own), reply("fix", parent=own, t=1), reply("a"), reply("b", t=2)])
+        self.assertEqual([d["ask"] for d in self.dt.double_answers()], [ASK])
+        self.assertEqual([d["ask"] for d in self.m.double_answers(self.log)], [ASK])
+
     def test_an_ask_from_someone_else_is_still_refused(self):
         self.write_log([reply("r1")])
         self.assertIn("already answered", self.dt.answered_refusal(ASK, repo={}))

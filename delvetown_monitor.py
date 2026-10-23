@@ -869,13 +869,15 @@ def answered_asks(publish_log=None, entries=None):
 
 def double_answers(publish_log=None, entries=None):
     """Asks answered twice: neither reply deleted, neither adopted from the repo, the second not sent with
-    --again. The same rule as dt.py's `double_answers`."""
+    --again, the parent not a post of our own. The same rule as dt.py's `double_answers`."""
     entries = _log_entries(publish_log) if entries is None else entries
     deleted = {e.get("uri") for e in entries if e.get("kind") == "delete"}
     first, out = {}, []
     for e in entries:
         if e.get("kind") != "reply" or not e.get("parent_uri") or e.get("adopted") or e.get("uri") in deleted:
             continue
+        if _did_of(e["parent_uri"]) == _did_of(e.get("uri")):
+            continue        # a follow-up under a post of our own: a thread being written, not an ask
         p = e["parent_uri"]
         if p in first and not e.get("again"):
             out.append({"ask": p, "first": first[p], "second": e.get("uri"), "at": e.get("ts")})

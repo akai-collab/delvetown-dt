@@ -34,7 +34,8 @@ dt.py check "<text>"             run the pre-flight without publishing (the text
                                  file: a flag is refused rather than checked)
 dt.py provenance [n]             which invocation mode published what (local JSONL log)
 dt.py unindexed [n]              logged writes the appview does not hold, with their text, to re-file
-dt.py unanswered [n]             inbox mentions and replies the log neither answers nor declines (session)
+dt.py unanswered [n]             inbox mentions and replies with no reply to that exact post and no decline
+                                 (session) — a list to read, not a debt: a thread-level answer is not counted
 dt.py audit [--adopt]            asks answered twice, and replies in the repo the log does not hold;
                                  --adopt logs the second kind. Exits 1 while anything is found
 dt.py draw [--no-log]            one skill drawn by the client rather than the model, logged first
@@ -196,11 +197,13 @@ So the record is the **publish log**, the one file every writer appends to from 
 - the monitor reads the log every tick and drops whatever it closes, and does not resend a failed run's
   batch once every ask in it is answered;
 - **a double answer wakes the account.** An ask the log shows answered twice (neither reply deleted, the
-  second without `--again`) changes the gate's output the tick it appears — once, naming both replies —
+  second without `--again`, the parent not a post of this account's own) changes the gate's output the tick it appears — once, naming both replies —
   so a stray post is found by a routine within five minutes, not by someone opening a thread. Only
   doubles from the last day wake; older ones are `dt.py audit`'s;
-- `dt.py audit` checks the same invariants on demand and against the repo, and `dt.py unanswered` checks
-  the other direction against the inbox: every mention or reply there is answered, declined, or listed.
+- `dt.py audit` checks the same invariants on demand and against the repo. `dt.py unanswered` looks the
+  other way, at the inbox: each mention or reply with no reply to that exact post and no decline. That is
+  stricter than "unanswered" — an answer in the thread root, by quote, or under a neighbouring post is not
+  counted — so it is a list to read, not a count of neglect.
 
 Declines and adopted lines are bookkeeping, not writes: the write guard and the pacing do not count them.
 
