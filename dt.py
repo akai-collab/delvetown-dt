@@ -271,21 +271,25 @@ def pid_alive(pid):
 
 
 def claim_state(uri, data=None):
-    """('free'|'mine'|'live'|'stale', entry) — `live` means another run is composing this item now."""
+    """('free'|'live'|'stale', entry) — liveness is the age against the ttl, and nothing else.
+
+    2026-10-23, from the field: this used to trust the recorded pid, and `os.getpid()` here is the
+    pid of the one-shot dt.py process, which exits a second later. Every fresh claim therefore read
+    as "stale", a second run took it over immediately, and its fence bump could refuse the publish
+    the first run was still composing — the guard manufactured the collision it was built to stop.
+    A run is not a process here: take, compose and reply are three invocations with three pids. The
+    only honest signal is elapsed time, so a claim lives until its ttl and the holder proves itself
+    by carrying its token.
+    """
     entry = (data or claims_data())["claims"].get(uri)
     if not entry:
         return "free", None
-    age = 0.0
     try:
         started = datetime.strptime(str(entry.get("started")), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         age = (datetime.now(timezone.utc) - started).total_seconds()
     except (TypeError, ValueError):
         age = 10 ** 9
     if age > float(entry.get("ttl_s") or 0):
-        return "stale", entry
-    if int(entry.get("pid") or 0) == os.getpid():
-        return "mine", entry
-    if not pid_alive(entry.get("pid")):
         return "stale", entry
     return "live", entry
 
@@ -308,9 +312,14 @@ def claim_gate(uri, token=None, data=None):
     new holder is still claiming it).
     """
     data = data or claims_data()
-    conflict = claim_conflict(uri, data)
-    if conflict:
-        return conflict
+    entry = data["claims"].get(uri)
+    if entry and claim_state(uri, data)[0] == "live":
+        # A live claim is only an obstacle to *other* holders: the run that took it proves itself
+        # with the token, which is the only identity available when take and reply are separate
+        # processes.
+        if token is not None and str(token) == str(entry.get("token")):
+            return None
+        return claim_conflict(uri, data) or "this item is claimed by another run"
     fenced = data.get("fenced", {}).get(uri)
     if fenced:
         if token in (None, ""):
@@ -352,13 +361,17 @@ def claim_release(uri):
     entry = data["claims"].get(uri)
     if not entry:
         return {"note": "no claim on %s" % uri, "released": None}
-    # A claim is normally taken by one invocation and released by another (take, then compose, then
-    # reply), so a pid mismatch is ordinary. Refuse only while the holder is a live process that is not
-    # us: a claim whose owner has exited is exactly the leftover this command exists to clear.
-    holder = int(entry.get("pid") or 0)
-    if holder != os.getpid() and pid_alive(holder) and "--force" not in sys.argv:
-        return {"refused": "%s is held by a live run (pid %s), not this one (--force releases it anyway)"
-                % (uri, holder)}
+    # Take and release are different processes, so pid proves nothing; the token does. Release
+    # requires the fence the holder was given, or --force for a claim whose run died.
+    tok = None
+    if "--claim-token" in sys.argv:
+        i = sys.argv.index("--claim-token")
+        tok = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+    if tok is not None and str(tok) == str(entry.get("token")):
+        pass
+    elif "--force" not in sys.argv:
+        return {"refused": "%s is held (token %s); pass --claim-token <n> to release your own, or --force"
+                % (uri, entry.get("token"))}
     del data["claims"][uri]
     save_claims(data)
     return {"released": uri}
@@ -2420,7 +2433,7 @@ USAGE = {
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
     "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
-    "claim": 'claim [list] | claim take <uri> [--ttl MIN] -> token | claim release <uri> | claim owe <uri> --due +12h | claim owed | claim done <uri> <posted-uri>   (one run per item: pass the token to reply as --claim-token)',
+    "claim": 'claim [list] | claim take <uri> [--ttl MIN] -> token | claim release <uri> --claim-token <n> | claim owe <uri> --due +12h | claim owed | claim done <uri> <posted-uri>   (one run per item: the token goes to reply and to release)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
