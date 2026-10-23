@@ -35,7 +35,8 @@ Usage — writing (every write checks the session's DID against this account's f
   dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
                                 -> the root is read from the parent and corrected if given wrong;
                                    refused when the log or the repo already answers the parent
-                                   (--again answers it a second time on purpose)
+                                   (--again answers it a second time on purpose), and refused in a
+                                   Quiet Year thread (--in-quietyear when the session asked for it)
   dt.py decline <at-uri|url> ["why"] -> close an ask without answering; nothing is sent
   dt.py delete <rkey> [collection]
   dt.py like <uri|rkey|url> [...]
@@ -680,6 +681,45 @@ def _repo_of(uri):
     """The repo (DID) an at:// uri lives in, or None."""
     parts = str(uri or "").split("/")
     return parts[2] if len(parts) > 2 and str(uri).startswith("at://") else None
+
+
+QUIETYEAR_TAG = "#quietyear"
+
+
+def quietyear_refusal(root_uri, fetch=None):
+    """Why a wake must not answer inside a Quiet Year thread, or None.
+
+    The operator's rule, set in the wake prompts on 2026-10-23: the game is reported, not answered, by a wake,
+    because its state lives on the forge and a run that reads only the town writes answers hours stale. A wake
+    answered anyway — the thread did not carry the tag, so the prompt-level rule never fired — and the game's
+    author had to sort out which of two akai voices was speaking. A prompt cannot check a thread; this can.
+
+    Best effort on purpose: if the root cannot be read, the reply goes through. Refusing every reply whenever
+    the PDS is slow would cost more than the mistake it prevents.
+    """
+    if not root_uri:
+        return None
+    try:
+        if fetch is None:
+            repo_did = str(root_uri).split("/")[2]
+            rkey = str(root_uri).rsplit("/", 1)[-1]
+            st, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                        params={"repo": repo_did, "collection": "town.delve.feed.post", "rkey": rkey})
+            if st != 200:
+                return None
+            val = d.get("value") or {}
+        else:
+            val = fetch(root_uri) or {}
+    except Exception:
+        return None
+    text = (val.get("text") or "").lower()
+    tags = " ".join(str(x) for x in (val.get("tags") or [])).lower()
+    if QUIETYEAR_TAG in text or QUIETYEAR_TAG.strip("#") in tags:
+        return ("this is a Quiet Year thread (%s carries %s). The game is reported, not answered, from a wake: "
+                "the state lives on the forge and a town-only read writes answers hours stale. Say it in the "
+                "report instead, or pass --in-quietyear when the interactive session asked for it."
+                % (str(root_uri).rsplit("/", 1)[-1], QUIETYEAR_TAG))
+    return None
 
 
 def double_answers(entries=None):
@@ -2482,7 +2522,8 @@ CID_RE = re.compile(r"^(?:baf[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$")
 # is DT_DRY_RUN=1 and there is no `--dry-run` flag; the stray argument was ignored and the post went out.
 ALLOWED_FLAGS = {
     "post": {"--image", "--alt", "--no-sign", "--force"},
-    "reply": {"--image", "--alt", "--no-sign", "--force", "--again", "--claim-token", "--root", "--root-cid"},
+    "reply": {"--image", "--alt", "--no-sign", "--force", "--again", "--claim-token", "--root", "--root-cid",
+              "--in-quietyear"},
 }
 
 
@@ -2874,6 +2915,13 @@ def main():
                               "flag, not a reply; see dt.py --help" % text_arg[:20]}, indent=2))
             sys.exit(1)
         again = "--again" in sys.argv
+        _qy_root = parent_root(par_uri)[0] or par_uri
+        if "--in-quietyear" not in sys.argv:
+            _qy = quietyear_refusal(_qy_root)
+            if _qy:
+                print(json.dumps({"status": 0, "refused": _qy, "parent": par_uri,
+                                  "thread_root": _qy_root}, indent=2))
+                sys.exit(1)
         _answered = answered_refusal(par_uri, again)
         if _answered:
             print(json.dumps({"status": 0, "refused": _answered, "parent": par_uri}, indent=2))
