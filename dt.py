@@ -277,14 +277,15 @@ def wake_state_path():
         "wake-%s.json" % (HANDLE.split(".")[0] or ACCOUNT))
 
 
-def prune_pending(uri, path=None):
-    """Drop an answered item from the gate's pending queue. Returns True when it was there.
+def mark_handled(uri, path=None):
+    """Record, in the gate's state, that an answer to this item has been published. True if written.
 
-    The gate holds items in `pending` until it answers them; an answer published from a session or a
-    clock wake leaves the entry behind, so the queue keeps naming items that are already answered.
-    Nothing marks notifications seen, so this is the only place the queue learns it is done: called
-    from `reply` after a successful write. The `fired` map stays untouched — it is the de-duplication
-    guard, and pruning it would let the same item wake the gate twice.
+    The gate tracks work by URI: `pending` is what it is holding before answering, and `fired` is what
+    it will never answer twice. An answer published from a session or a clock wake wrote neither, so a
+    2026-10-23 answer to selene left the item pending, and the next gate wake treated it as fresh and
+    answered it again. Dropping `pending` alone is not enough either: the item is still in the
+    notification list and absent from `fired`, so the next tick re-adds it and the same double answer
+    comes back one settle window later. Both halves move together — that is the whole lesson.
     """
     path = path or wake_state_path()
     try:
@@ -295,10 +296,15 @@ def prune_pending(uri, path=None):
     if not isinstance(st, dict):
         return False
     pending = st.get("pending")
-    if not isinstance(pending, dict) or uri not in pending:
+    fired = st.get("fired")
+    if not isinstance(pending, dict) or not isinstance(fired, dict):
         return False
+    if uri not in pending and uri in fired:
+        return False          # already handled: do not restamp a newer first-seen time
     pending.pop(uri, None)
+    fired[uri] = time.time()
     st["pending"] = pending
+    st["fired"] = fired
     try:
         os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
         tmp = path + ".tmp"
@@ -2727,8 +2733,8 @@ def main():
                       text=text, indexed=idx)
             # answered outside the gate: the gate's queue must stop naming this item as waiting
             try:
-                if prune_pending(par_uri):
-                    print(json.dumps({"note": "monitor queue pruned", "parent": par_uri}), file=sys.stderr)
+                if mark_handled(par_uri):
+                    print(json.dumps({"note": "gate marked this ask handled", "parent": par_uri}), file=sys.stderr)
             except (OSError, ValueError) as exc:   # queue bookkeeping must never fail a published reply
                 print(json.dumps({"note": "monitor queue not pruned: %s" % exc}), file=sys.stderr)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
