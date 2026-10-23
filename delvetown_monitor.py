@@ -14,6 +14,11 @@ output byte-identical, so none of them wakes the model.
 
 Read-only: never marks notifications seen.
 
+What is answered is dt.py's publish log, not this file's state: a `reply` line answers its parent unless
+that reply was deleted, a `decline` line closes an ask. The gate reads it every tick (`answered_asks`) and
+drops what it closes, whichever writer answered; and an ask the log shows answered twice wakes the account
+once, so a stray second reply is found by a routine rather than by someone opening the thread.
+
 How it reads (DT_MONITOR_READER). `xrpc`, the default, asks the PDS and the appview
 directly and keeps ONE session in its own cache, refreshed rather than logged in
 again: the PDS allows 300 logins a day per account, and at_mcp logs in on every
@@ -556,7 +561,7 @@ def held_reason(now, session_cache=None, publish_log=None):
     for line in tail:
         try:
             e = json.loads(line)
-            if e.get("kind") not in GUARDED_KINDS:
+            if e.get("kind") not in GUARDED_KINDS or e.get("adopted"):
                 continue
             age = now - datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
         except (ValueError, TypeError, AttributeError):
@@ -574,7 +579,8 @@ def held_reason(now, session_cache=None, publish_log=None):
 QUIET_LINE = "wake=none"
 
 
-def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_at=None):
+def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_at=None, answered=None,
+                doubles=None):
     """Decide whether this tick wakes the model. Returns (output, new_state).
 
     The scheduler wakes the model when the output differs from the last tick's, so the decision is
@@ -595,13 +601,42 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
       the publish log by default; see `paced_until`).
     - `failed_at` is when the scheduler last recorded this job failing (see `last_failure_at`). A failure
       after the last batch fired means that batch's run died, and the batch is printed again with a
-      retry line — waiting RETRY_WAIT_S, doubling, at most RETRY_MAX times.
+      retry line — waiting RETRY_WAIT_S, doubling, at most RETRY_MAX times — unless the log shows every
+      ask in it answered or declined since: that run did its work before it died.
+    - `answered` is the set of asks the publish log closes (see `answered_asks`): one never wakes and
+      leaves the queue, whoever answered it.
+    - `doubles` are asks the log shows answered twice (see `double_answers`; main() passes them). Each
+      one not reported yet is a change, so it wakes the account once with the two replies named.
     """
     st = {"fired": dict(state.get("fired") or {}), "pending": dict(state.get("pending") or {}),
           "fails": int(state.get("fails") or 0), "last": state.get("last") or QUIET_LINE,
           "fired_at": state.get("fired_at"), "base": state.get("base"), "retries": int(state.get("retries") or 0),
-          "newest": float(state.get("newest") or 0)}
+          "newest": float(state.get("newest") or 0), "batch": list(state.get("batch") or []),
+          "doubled": list(state.get("doubled") or [])}
     st["fired"] = {u: t for u, t in st["fired"].items() if now - float(t) < FIRED_TTL_S}
+    answered = answered_asks() if answered is None else answered
+    doubles = doubles or []          # main() reads them; a caller that passes none checks none
+
+    def closed(uri):
+        return uri in answered or ("rkey:" + str(uri).split("/")[-1]) in answered
+
+    # A second reply to one ask is a public mistake already made, so it does not wait for the inbox, a
+    # settle window or a hold: it is reported the tick it appears in the log, once, by the second reply's
+    # uri. Checked before the reading, so a town that will not answer cannot hide it.
+    fresh = [d for d in doubles if d.get("second") and d["second"] not in st["doubled"]]
+    if fresh:
+        st["doubled"] = (st["doubled"] + [d["second"] for d in fresh])[-200:]
+        out = ["wake=double n=%d id=%s" % (len(fresh), hashlib.md5(
+            "\n".join(d["second"] for d in fresh).encode("utf-8")).hexdigest()[:12])]
+        for d in fresh:
+            out.append("double: %s answered twice — %s and %s" % (
+                str(d["ask"]).split("/")[-1], d["first"], d["second"]))
+        out.append("read both in the thread; if one is a slip (a token, a fragment, a repeat) delete it with "
+                   "`dt.py delete <rkey>`; if both were meant, nothing is needed — the next reply to an "
+                   "answered ask should carry --again")
+        st["last"] = "\n".join(out)
+        st["fired_at"] = None            # a report, not a batch: nothing to send again
+        return st["last"], st
 
     if items is None:
         st["fails"] += 1
@@ -621,7 +656,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
         return st["last"], st
 
     if (failed_at and st["fired_at"] and st["base"] and failed_at > float(st["fired_at"]) and not held
-            and st["retries"] < RETRY_MAX and now - failed_at >= RETRY_WAIT_S * 2 ** st["retries"]):
+            and not (st["batch"] and all(closed(u) for u in st["batch"])) and st["retries"] < RETRY_MAX and now - failed_at >= RETRY_WAIT_S * 2 ** st["retries"]):
         st["retries"] += 1
         st["fired_at"] = now
         st["last"] = st["base"] + "\nretry %d of %d: the run for this batch failed at %s and the batch is " \
@@ -635,7 +670,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     actionable, reactions, muted = [], [], []
     for it in items:
         uri = it.get("uri")
-        if not uri or uri in st["fired"]:
+        if not uri or uri in st["fired"] or closed(uri):
             continue
         if (it.get("reason") or "") in QUIET_REASONS:
             reactions.append(it)
@@ -666,8 +701,9 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
             pending.pop(u)
             if u not in {it["uri"] for it in muted}:
                 muted.append(e["item"])
+    # An entry answered meanwhile — by a session, a clock wake, anyone — leaves here: the log said so.
     st["pending"] = {u: e for u, e in pending.items()
-                     if e["item"] is not None and now - e["t"] < FIRED_TTL_S}
+                     if e["item"] is not None and now - e["t"] < FIRED_TTL_S and not closed(u)}
     if not st["pending"]:
         return st["last"], st
 
@@ -712,7 +748,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     st["pending"] = {u: e for u, e in st["pending"].items() if paced[u]}
     st["last"] = st["base"] = "\n".join(out)
     st["newest"] = max(float(st.get("newest") or 0), indexed_max)
-    st["fired_at"], st["retries"] = now, 0
+    st["fired_at"], st["retries"], st["batch"] = now, 0, [it["uri"] for it in batch]
     return st["last"], st
 
 
@@ -782,7 +818,7 @@ def own_replies(now, publish_log=None):
     for line in tail:
         try:
             e = json.loads(line)
-            if e.get("kind") != "reply":
+            if e.get("kind") != "reply" or e.get("adopted"):   # found later: its time is not the reply's
                 continue
             t = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00")).timestamp()
         except (ValueError, TypeError, AttributeError):
@@ -791,6 +827,70 @@ def own_replies(now, publish_log=None):
         if root and 0 <= now - t <= 86400:
             out.append((t, root, _did_of(e.get("parent_uri"))))
     return sorted(out)
+
+
+def _log_entries(publish_log=None):
+    try:
+        with open(publish_log or PUBLISH_LOG, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict):
+            out.append(e)
+    return out
+
+
+def answered_asks(publish_log=None, entries=None):
+    """The asks dt.py's publish log closes: the parent of every `reply` whose record no later `delete`
+    removed, and the subject of every `decline`. A reply logged before 2026-10-15 carries only its
+    parent's rkey, kept as `rkey:<rkey>`. Read whole every tick — a few thousand short lines, and a tail
+    would forget an old answer exactly when a stale page brings its ask back. dt.py's `ask_states` reads
+    the same lines the same way; tests/test_answered.py holds the two to one answer. Unreadable: empty,
+    which is the gate as it was before it read the log, never worse."""
+    entries = _log_entries(publish_log) if entries is None else entries
+    deleted = {e.get("uri") for e in entries if e.get("kind") == "delete"}
+    out = set()
+    for e in entries:
+        if e.get("kind") == "reply" and e.get("uri") not in deleted:
+            if e.get("parent_uri"):
+                out.add(e["parent_uri"])
+            elif e.get("parent"):
+                out.add("rkey:%s" % e["parent"])
+        elif e.get("kind") == "decline" and e.get("subject"):
+            out.add(e["subject"])
+    return out
+
+
+def double_answers(publish_log=None, entries=None):
+    """Asks answered twice: neither reply deleted, neither adopted from the repo, the second not sent with
+    --again. The same rule as dt.py's `double_answers`."""
+    entries = _log_entries(publish_log) if entries is None else entries
+    deleted = {e.get("uri") for e in entries if e.get("kind") == "delete"}
+    first, out = {}, []
+    for e in entries:
+        if e.get("kind") != "reply" or not e.get("parent_uri") or e.get("adopted") or e.get("uri") in deleted:
+            continue
+        p = e["parent_uri"]
+        if p in first and not e.get("again"):
+            out.append({"ask": p, "first": first[p], "second": e.get("uri"), "at": e.get("ts")})
+        first.setdefault(p, e.get("uri"))
+    return out
+
+
+DOUBLE_WINDOW_S = 86400
+
+
+def _epoch(ts):
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def pace_wait(times, base):
@@ -848,8 +948,13 @@ def main():
         unread, notes_text, fail = read_town(WAKE_LIMIT)
         items = None if fail and not notes_text else _items(notes_text)
         now = time.time()
+        log = _log_entries()
+        # Only a double from the last day wakes: an old one is history for `dt.py audit`, and the first
+        # tick after a deploy must not wake the account to read the whole log's past.
+        doubles = [d for d in double_answers(entries=log) if now - _epoch(d.get("at")) < DOUBLE_WINDOW_S]
         out, st = wake_output(items, _load_state(WAKE_STATE), now,
-                              held=held_reason(now) if items else None, failed_at=last_failure_at())
+                              held=held_reason(now) if items else None, failed_at=last_failure_at(),
+                              answered=answered_asks(entries=log), doubles=doubles)
         _save_state(WAKE_STATE, st)
         print(out)
         return

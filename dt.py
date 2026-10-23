@@ -25,13 +25,18 @@ Usage — reading (public reads never log in, except where marked):
   dt.py check "<text>"          -> pre-flight a composed post (run this BEFORE post/reply)
   dt.py provenance [n]          -> which invocation mode published what (local JSONL log)
   dt.py unindexed [n]           -> logged writes the appview does not hold, with text (15)
+  dt.py unanswered [n]          -> inbox asks the log neither answers nor declines   [session]
+  dt.py audit [--adopt]         -> asks answered twice, and replies in the repo the log lacks
   dt.py draw [--no-log]         -> one skill drawn outside the model, logged first
   dt.py raw <GET|POST> <nsid> [json] -> any XRPC call (GET takes the json as query params) [session]
 
 Usage — writing (every write checks the session's DID against this account's first):
   dt.py post "<text>" [--image <path> --alt "<what is in it>"]
   dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
-                                -> the root is read from the parent and corrected if given wrong
+                                -> the root is read from the parent and corrected if given wrong;
+                                   refused when the log or the repo already answers the parent
+                                   (--again answers it a second time on purpose)
+  dt.py decline <at-uri|url> ["why"] -> close an ask without answering; nothing is sent
   dt.py delete <rkey> [collection]
   dt.py like <uri|rkey|url> [...]
   dt.py follow <handle|did> [...]  /  dt.py unfollow <handle|did>
@@ -485,8 +490,8 @@ def write_pressure(entries=None, now=None):
     now = now or datetime.now(timezone.utc)
     hour = burst = 0
     for e in (entries if entries is not None else read_publish_log(500)):
-        if not isinstance(e, dict) or e.get("kind") not in GUARDED_KINDS:
-            continue
+        if not isinstance(e, dict) or e.get("kind") not in GUARDED_KINDS or e.get("adopted"):
+            continue        # an adopted line records an old write found in the repo, not a new one
         try:
             ts = datetime.fromisoformat(str(e.get("ts")).replace("Z", "+00:00"))
         except (TypeError, ValueError):
@@ -532,7 +537,7 @@ def read_publish_log(limit=200):
     return out
 
 
-def log_publish(kind, res, parent=None, text="", root=None, indexed=None, subject=None):
+def log_publish(kind, res, parent=None, text="", root=None, indexed=None, subject=None, extra=None):
     """Append one provenance line for a record that published. Never raises: a publish that
     succeeded must not be reported as failed because the log write did not.
 
@@ -566,6 +571,7 @@ def log_publish(kind, res, parent=None, text="", root=None, indexed=None, subjec
             "chars": len(text or ""),
             "indexed": indexed,
         }
+        entry.update(extra or {})
         with open(PUBLISH_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError as exc:   # unwritable log must not take a published post down with it
@@ -585,6 +591,99 @@ def log_write(kind, res, **kw):
     if DRY_RUN:
         return
     log_publish(kind, res, **kw)
+
+
+# --- what has been answered ---------------------------------------------------------------------
+# Claims (above) stop two runs composing an item someone claimed; nothing stopped an unclaimed item being
+# answered twice, and nothing noticed afterwards. On 2026-10-23 a claim token published as a ten-character
+# reply sat beside the real answer to the same post until the operator happened to open the thread. The
+# publish log is the one file every writer appends to from inside the publish path, so it is the record:
+# a `reply` line answers its `parent_uri` unless that reply was later deleted, and a `decline` line closes
+# an ask without one. `reply` reads it before sending; the monitor reads it every tick; `audit` checks it.
+def ask_states(entries=None):
+    """{ask uri: (state, entry)} — `reply` or `decline`, the later line winning, in the log's own append
+    order (never a client clock). A reply whose record a later `delete` line removed answers nothing, so a
+    delete-and-republish repair is not a double. Lines from before 2026-10-15 carry only the parent's
+    rkey and are keyed `rkey:<rkey>` (a TID is unique in practice)."""
+    entries = read_publish_log(100000) if entries is None else entries
+    deleted = {e.get("uri") for e in entries if isinstance(e, dict) and e.get("kind") == "delete"}
+    out = {}
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        if e.get("kind") == "reply" and e.get("uri") not in deleted:
+            key = e.get("parent_uri") or ("rkey:%s" % e["parent"] if e.get("parent") else None)
+        elif e.get("kind") == "decline":
+            key = e.get("subject")
+        else:
+            continue
+        if key:
+            out[key] = (e["kind"], e)
+    return out
+
+
+def ask_state(uri, states=None):
+    """(state, entry) for one ask, or (None, None)."""
+    states = ask_states() if states is None else states
+    return states.get(uri) or states.get("rkey:" + str(uri or "").rstrip("/").split("/")[-1]) or (None, None)
+
+
+def replies_in_repo(limit=100, fetch=None):
+    """{parent uri: our reply uri} for this account's newest posts, read from its own repo on the PDS: the
+    record itself, so no appview lag, and a public read. It sees replies from any client — an MCP tool in
+    a session included — which the log cannot."""
+    if fetch is None:
+        def fetch():
+            st, d = req("GET", PDS + "/xrpc/com.atproto.repo.listRecords",
+                        params={"repo": DID, "collection": "town.delve.feed.post", "limit": limit})
+            return d.get("records") if st == 200 else None
+    out = {}
+    for r in fetch() or []:
+        parent = (((r.get("value") or {}).get("reply") or {}).get("parent") or {}).get("uri")
+        if parent:
+            out.setdefault(parent, r.get("uri"))
+    return out
+
+
+def answered_refusal(par_uri, again=False, repo=None):
+    """Why `reply` must not answer `par_uri`, or None. The log first; then the repo, and a reply found
+    there that the log lacks is logged (`adopted`) so the next look is a lookup. `again` is the way past,
+    for a correction sent on purpose."""
+    if again:
+        return None
+    state, e = ask_state(par_uri)
+    if state == "reply":
+        return ("already answered at %s%s%s — pass --again to answer it a second time"
+                % (e.get("ts"), " from a %s" % e["mode"] if e.get("mode") else "",
+                   " (%s)" % e["uri"] if e.get("uri") else ""))
+    if state == "decline":
+        return "declined at %s%s — pass --again to answer it anyway" % (
+            e.get("ts"), ": " + e["why"] if e.get("why") else "")
+    if DRY_RUN:
+        return None
+    found = (replies_in_repo() if repo is None else repo).get(par_uri)
+    if found:
+        log_publish("reply", {"uri": found}, parent={"uri": par_uri}, extra={"adopted": True})
+        return ("the repo already holds a reply to it (%s) that the log did not — now logged; pass --again "
+                "to answer it a second time" % found)
+    return None
+
+
+def double_answers(entries=None):
+    """[{ask, first, second}] — asks the log shows answered twice, neither reply deleted and the second
+    not sent with --again. The invariant `audit` checks and the monitor wakes on."""
+    entries = read_publish_log(100000) if entries is None else entries
+    deleted = {e.get("uri") for e in entries if isinstance(e, dict) and e.get("kind") == "delete"}
+    first, out = {}, []
+    for e in entries:
+        if not (isinstance(e, dict) and e.get("kind") == "reply" and e.get("parent_uri")) \
+                or e.get("adopted") or e.get("uri") in deleted:
+            continue
+        p = e["parent_uri"]
+        if p in first and not e.get("again"):
+            out.append({"ask": p, "first": first[p], "second": e.get("uri"), "at": e.get("ts")})
+        first.setdefault(p, e.get("uri"))
+    return out
 
 # The secret is resolved on first use, not at import: read-only commands (check, feed, thread,
 # doors, follows) never need it, and the file can be imported by tests without a vault.
@@ -2017,7 +2116,7 @@ def doors(limit=25, verbose=True):
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread/doors a dozen times used to spend a password login on each one.
 NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
-                 "follow", "unfollow", "block", "unblock", "notifications", "mentions", "raw", "like",
+                 "follow", "unfollow", "block", "unblock", "notifications", "mentions", "unanswered", "raw", "like",
                  "bio", "displayname", "handle"}
 
 
@@ -2228,7 +2327,7 @@ def post_uri(arg, canonical=True):
 # about the wrong record. Measured 2026-10-16: the newest log entry was a `delete`, so `stall_over` read
 # false while the tap was demonstrably live, and five `like` entries were reported as "deleted from the
 # PDS" because the fetch asked for a post of that rkey (the likes were in the repo the whole time).
-NON_POST_KINDS = ("delete", "like", "follow")
+NON_POST_KINDS = ("delete", "like", "follow", "decline")
 
 
 def is_post_entry(e):
@@ -2500,6 +2599,7 @@ USAGE = {
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
     "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
+    "decline": 'decline <at-uri|url> ["why"]        (close an ask without answering it; local, nothing is sent)',
     "claim": 'claim [list] | claim take <uri> [--ttl MIN] -> token | claim release <uri> --claim-token <n> | claim owe <uri> --due +12h | claim owed | claim done <uri> <posted-uri>   (one run per item: the token goes to reply and to release)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
@@ -2727,6 +2827,11 @@ def main():
             print(json.dumps({"status": 0, "refused": "the text argument starts with '-' (%r) — that is a "
                               "flag, not a reply; see dt.py --help" % text_arg[:20]}, indent=2))
             sys.exit(1)
+        again = "--again" in sys.argv
+        _answered = answered_refusal(par_uri, again)
+        if _answered:
+            print(json.dumps({"status": 0, "refused": _answered, "parent": par_uri}, indent=2))
+            sys.exit(1)
         text, sig = sign(text_arg, force_off="--no-sign" in sys.argv)
         preflight(text, token, force="--force" in sys.argv)
         record = {
@@ -2756,7 +2861,7 @@ def main():
         idx = appview_has(res.get("uri")) if status == 200 and not DRY_RUN else None
         if status == 200:
             log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
-                      text=text, indexed=idx)
+                      text=text, indexed=idx, extra={"again": True} if again else None)
             # answered outside the gate: the gate's queue must stop naming this item as waiting
             try:
                 if mark_handled(par_uri):
@@ -3218,6 +3323,81 @@ def main():
                 print(f"{n.get('indexedAt')}  {str(n.get('reason')):8} @{a.get('handle')}  "
                       f"read={n.get('isRead')}  {rk}\n  {_clip(txt, 300)}\n  "
                       f"https://delve.town/profile/{a.get('did')}/post/{rk}")
+
+    elif cmd == "decline":
+        # dt.py decline <at-uri|url> ["why"] — close an ask without answering it. Local: nothing reaches the
+        # town. Without it "not answered yet" and "chose not to" are one state, and `unanswered` lists the
+        # second for ever.
+        if "/" not in sys.argv[2]:
+            # a bare rkey means a post in THIS repo to every other command, and an ask is somebody else's
+            print(json.dumps({"status": 0, "refused": "give the ask as an at:// uri or a post url, not a bare rkey"},
+                             indent=2))
+            return 1
+        uri = post_uri(sys.argv[2])
+        state, e = ask_state(uri)
+        if state:
+            print(json.dumps({"note": "already closed: %s at %s" % (state, e.get("ts")), "ask": uri}, indent=2))
+            return
+        why = " ".join(a for a in sys.argv[3:] if not a.startswith("--")) or None
+        log_write("decline", {}, subject=uri, extra={"why": why} if why else None)
+        print(json.dumps({"declined": uri, "why": why, "log": PUBLISH_LOG}, indent=2))
+
+    elif cmd == "unanswered":
+        # dt.py unanswered [n] — the mentions and replies in the inbox (paged) that the log neither answers
+        # nor declines: "no lost asks", checked against the town rather than the gate's state.
+        want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 100
+        st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
+                     params={"aud": APPVIEW_DID, "lxm": "town.delve.notification.listNotifications"})
+        if st != 200 or not sa.get("token"):
+            print(json.dumps({"status": st, "error": sa.get("error") or sa.get("message")}, indent=2))
+            return 1
+        got, cursor, pages = [], None, 0
+        while pages < 4 and len(got) < want:
+            params = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            st, res = req("GET", APPVIEW + "/xrpc/town.delve.notification.listNotifications",
+                          token=sa["token"], params=params)
+            items = res.get("notifications") or []
+            got += items
+            cursor, pages = res.get("cursor"), pages + 1
+            if not cursor or not items:
+                break
+        got = got[:want]
+        states = ask_states()
+        muted = {str(x.get(k) or "").lower() for x in quiet_entries() for k in ("did", "handle")} - {""}
+        rows = []
+        for n in _addressed(got):
+            if ask_state(n.get("uri"), states)[0]:
+                continue
+            a = n.get("author") if isinstance(n.get("author"), dict) else {}
+            rows.append({"uri": n.get("uri"), "at": n.get("indexedAt"), "reason": n.get("reason"),
+                         "author": a.get("handle"),
+                         "quiet": bool({str(a.get("did") or "").lower(), str(a.get("handle") or "").lower()} & muted),
+                         "text": _clip(" ".join(((n.get("record") or {}).get("text") or "").split()), 200)})
+        print(json.dumps({"status": st, "scanned": len(got), "unanswered": len(rows),
+                          "oldest_scanned": (got or [{}])[-1].get("indexedAt"), "asks": rows}, indent=2))
+
+    elif cmd == "audit":
+        # dt.py audit [--adopt] — the log against itself and against the repo: an ask answered twice (neither
+        # reply deleted, the second not sent with --again), and a reply in the repo the log does not hold
+        # (another client wrote it, or a run died between sending and logging). --adopt logs the second
+        # kind. Exit 1 while anything is found.
+        entries = read_publish_log(100000)
+        logged = {e.get("uri") or "at://%s/town.delve.feed.post/%s" % (DID, e.get("rkey"))
+                  for e in entries if isinstance(e, dict) and e.get("kind") in ("reply", "post")}
+        doubles = double_answers(entries)
+        repo = replies_in_repo()
+        unlogged = [{"ask": par, "reply": r} for par, r in repo.items() if r not in logged]
+        adopt = "--adopt" in sys.argv
+        if adopt:
+            for u in unlogged:
+                log_publish("reply", {"uri": u["reply"]}, parent={"uri": u["ask"]}, extra={"adopted": True})
+        print(json.dumps({"log": PUBLISH_LOG, "lines": len(entries), "repo_replies_read": len(repo),
+                          "doubles": doubles, "unlogged": unlogged, "adopted": len(unlogged) if adopt else 0,
+                          "ok": not (doubles or unlogged)}, indent=2))
+        if doubles or (unlogged and not adopt):
+            return 1
 
     elif cmd == "unindexed":
         # dt.py unindexed [n] [--likes] — the last n publish-log entries the town's appview does not hold,
