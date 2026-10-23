@@ -187,6 +187,20 @@ def _line(it):
     return f"{when}Z {reason} @{author} {rkey}: {body}"
 
 
+def _newest_epoch(items):
+    """The newest indexed_at in a tick's items, as epoch seconds (0 when nothing parses)."""
+    best = 0.0
+    for it in items or []:
+        raw = it.get("indexed_at")
+        if not raw:
+            continue
+        try:
+            best = max(best, datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp())
+        except (TypeError, ValueError):
+            continue
+    return best
+
+
 def brief(text):
     """Distilled one-liners for the notification reading, or None if it is not readable.
 
@@ -585,7 +599,8 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     """
     st = {"fired": dict(state.get("fired") or {}), "pending": dict(state.get("pending") or {}),
           "fails": int(state.get("fails") or 0), "last": state.get("last") or QUIET_LINE,
-          "fired_at": state.get("fired_at"), "base": state.get("base"), "retries": int(state.get("retries") or 0)}
+          "fired_at": state.get("fired_at"), "base": state.get("base"), "retries": int(state.get("retries") or 0),
+          "newest": float(state.get("newest") or 0)}
     st["fired"] = {u: t for u, t in st["fired"].items() if now - float(t) < FIRED_TTL_S}
 
     if items is None:
@@ -596,6 +611,14 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
             st["fired_at"] = None        # an outage report is not a batch: nothing to send again
         return st["last"], st
     st["fails"] = 0
+
+    # A reading that goes backwards is not a new batch. The appview can answer with a stale page (a
+    # refreshed session cache, a lagging index), and publishing that as `last` rewinds the gate: the
+    # brief it prints is older than the one it printed an hour ago, so the scheduler sees a change and
+    # wakes the model to answer what it already answered. Hold the newer brief and ignore the rewind.
+    indexed_max = _newest_epoch(items)
+    if indexed_max and st.get("newest") and indexed_max < st["newest"] - 1:
+        return st["last"], st
 
     if (failed_at and st["fired_at"] and st["base"] and failed_at > float(st["fired_at"]) and not held
             and st["retries"] < RETRY_MAX and now - failed_at >= RETRY_WAIT_S * 2 ** st["retries"]):
@@ -688,6 +711,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
         st["fired"][it["uri"]] = now
     st["pending"] = {u: e for u, e in st["pending"].items() if paced[u]}
     st["last"] = st["base"] = "\n".join(out)
+    st["newest"] = max(float(st.get("newest") or 0), indexed_max)
     st["fired_at"], st["retries"] = now, 0
     return st["last"], st
 
