@@ -262,6 +262,54 @@ def save_claims(data, path=None):
     os.replace(tmp, path)
 
 
+def wake_state_path():
+    """The gate's state file for this account, resolved at call time so tests can move it.
+
+    `AT_MCP_WAKE_STATE` wins when the wrapper sets it (that is how the live gate and the dry run are
+    kept apart); otherwise the default names the account, not the profile, because one install serves
+    several seats whose states must never be shared.
+    """
+    explicit = os.environ.get("AT_MCP_WAKE_STATE")
+    if explicit:
+        return explicit
+    return os.path.join(
+        os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
+        "wake-%s.json" % (HANDLE.split(".")[0] or ACCOUNT))
+
+
+def prune_pending(uri, path=None):
+    """Drop an answered item from the gate's pending queue. Returns True when it was there.
+
+    The gate holds items in `pending` until it answers them; an answer published from a session or a
+    clock wake leaves the entry behind, so the queue keeps naming items that are already answered.
+    Nothing marks notifications seen, so this is the only place the queue learns it is done: called
+    from `reply` after a successful write. The `fired` map stays untouched — it is the de-duplication
+    guard, and pruning it would let the same item wake the gate twice.
+    """
+    path = path or wake_state_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(st, dict):
+        return False
+    pending = st.get("pending")
+    if not isinstance(pending, dict) or uri not in pending:
+        return False
+    pending.pop(uri, None)
+    st["pending"] = pending
+    try:
+        os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
 def pid_alive(pid):
     try:
         os.kill(int(pid), 0)
@@ -2677,6 +2725,12 @@ def main():
         if status == 200:
             log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
                       text=text, indexed=idx)
+            # answered outside the gate: the gate's queue must stop naming this item as waiting
+            try:
+                if prune_pending(par_uri):
+                    print(json.dumps({"note": "monitor queue pruned", "parent": par_uri}), file=sys.stderr)
+            except (OSError, ValueError) as exc:   # queue bookkeeping must never fail a published reply
+                print(json.dumps({"note": "monitor queue not pruned: %s" % exc}), file=sys.stderr)
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "indexed": idx,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
