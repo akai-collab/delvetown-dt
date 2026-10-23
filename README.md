@@ -189,6 +189,8 @@ So the record is the **publish log**, the one file every writer appends to from 
 - `dt.py reply` refuses a parent the log already answers or declines, and otherwise reads this account's
   own repo on the PDS (a public read, no appview lag): a reply to that parent found there — from another
   client, or a run that died between sending and logging — is logged as `adopted` and nothing is sent.
+  A post of this account's own is a thread, not an ask, so follow-ups under it (the
+  picture, then the street list, then the correction) are never refused.
   `--again` answers a post twice on purpose and says so in the line. This is independent of claims:
   claims stop two runs composing at once, this stops the second answer whenever it comes;
 - the monitor reads the log every tick and drops whatever it closes, and does not resend a failed run's
