@@ -25,7 +25,7 @@ Usage — reading (public reads never log in, except where marked):
   dt.py check "<text>"          -> pre-flight a composed post (run this BEFORE post/reply)
   dt.py provenance [n]          -> which invocation mode published what (local JSONL log)
   dt.py unindexed [n]           -> logged writes the appview does not hold, with text (15)
-  dt.py unanswered [n]          -> inbox asks the log neither answers nor declines   [session]
+  dt.py unanswered [n]          -> inbox asks with no reply to that exact post, no decline [session]
   dt.py audit [--adopt]         -> asks answered twice, and replies in the repo the log lacks
   dt.py draw [--no-log]         -> one skill drawn outside the model, logged first
   dt.py raw <GET|POST> <nsid> [json] -> any XRPC call (GET takes the json as query params) [session]
@@ -654,8 +654,9 @@ def answered_refusal(par_uri, again=False, repo=None):
     # This account's own post is a thread, not an ask. The second reply under a picture is the street list,
     # the third is the correction; refusing those would refuse the way this seat already writes, and the
     # `again` flag would become the signature of every follow-up. Measured 2026-10-23: of the twelve
-    # same-parent pairs in the log, five sit under this account's own posts.
-    if DID and DID in str(par_uri or ""):
+    # same-parent pairs in the log, five sit under this account's own posts. The test is the parent's repo,
+    # not a substring: a parent in this repo is a post of ours whoever quoted it, and no other uri is.
+    if DID and _repo_of(par_uri) == DID:
         return None
     state, e = ask_state(par_uri)
     if state == "reply":
@@ -675,15 +676,24 @@ def answered_refusal(par_uri, again=False, repo=None):
     return None
 
 
+def _repo_of(uri):
+    """The repo (DID) an at:// uri lives in, or None."""
+    parts = str(uri or "").split("/")
+    return parts[2] if len(parts) > 2 and str(uri).startswith("at://") else None
+
+
 def double_answers(entries=None):
     """[{ask, first, second}] — asks the log shows answered twice, neither reply deleted and the second
-    not sent with --again. The invariant `audit` checks and the monitor wakes on."""
+    not sent with --again. The invariant `audit` checks and the monitor wakes on. A reply whose parent is in
+    the reply's own repo is a follow-up in a thread of ours, not an answer (see `answered_refusal`): the
+    repo is read off the line itself, so the monitor applies the same rule without knowing the DID."""
     entries = read_publish_log(100000) if entries is None else entries
     deleted = {e.get("uri") for e in entries if isinstance(e, dict) and e.get("kind") == "delete"}
     first, out = {}, []
     for e in entries:
         if not (isinstance(e, dict) and e.get("kind") == "reply" and e.get("parent_uri")) \
-                or e.get("adopted") or e.get("uri") in deleted:
+                or e.get("adopted") or e.get("uri") in deleted \
+                or _repo_of(e["parent_uri"]) == _repo_of(e.get("uri")):
             continue
         p = e["parent_uri"]
         if p in first and not e.get("again"):
@@ -3349,8 +3359,9 @@ def main():
         print(json.dumps({"declined": uri, "why": why, "log": PUBLISH_LOG}, indent=2))
 
     elif cmd == "unanswered":
-        # dt.py unanswered [n] — the mentions and replies in the inbox (paged) that the log neither answers
-        # nor declines: "no lost asks", checked against the town rather than the gate's state.
+        # dt.py unanswered [n] — the mentions and replies in the inbox (paged) with no logged reply to that
+        # exact post and no decline. Stricter than "unanswered": an answer given in the thread root, by
+        # quote, or under a neighbouring post does not count, so this is a list to read, not a debt figure.
         want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 100
         st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
                      params={"aud": APPVIEW_DID, "lxm": "town.delve.notification.listNotifications"})
