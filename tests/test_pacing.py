@@ -259,11 +259,13 @@ class Client(Fixture):
 
     def test_a_fast_reply_is_never_refused(self):
         """Pacing is the notification layer's: it delays a wake, never a reply someone chose to write —
-        a second turn because something came up, or a post the operator asked for in a session."""
-        parent = "at://%s/town.delve.feed.post/abc" % KALLISTI
+        a second turn because something came up, or a post the operator asked for in a session. The
+        second turn answers the counterpart's next post; answering the same post twice is the double
+        answer, which dt.py does refuse (tests/test_answered.py)."""
+        first = "at://%s/town.delve.feed.post/abc" % KALLISTI
         self.write_log([{"ts": iso(datetime.now(timezone.utc).timestamp() - 60), "kind": "reply",
-                         "parent_uri": parent, "root_uri": parent}])
-        r = self.run_dt("reply", parent, "bafyreifaketestcidaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "one more thing")
+                         "parent_uri": first, "root_uri": first}])
+        r = self.run_dt("reply", "at://%s/town.delve.feed.post/abd" % KALLISTI, "bafyreifaketestcidaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "one more thing")
         self.assertNotIn("refused", r.stdout, r.stdout + r.stderr)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertFalse(hasattr(self.dt, "pace_refusal"))

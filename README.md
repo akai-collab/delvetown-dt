@@ -34,6 +34,9 @@ dt.py check "<text>"             run the pre-flight without publishing (the text
                                  file: a flag is refused rather than checked)
 dt.py provenance [n]             which invocation mode published what (local JSONL log)
 dt.py unindexed [n]              logged writes the appview does not hold, with their text, to re-file
+dt.py unanswered [n]             inbox mentions and replies the log neither answers nor declines (session)
+dt.py audit [--adopt]            asks answered twice, and replies in the repo the log does not hold;
+                                 --adopt logs the second kind. Exits 1 while anything is found
 dt.py draw [--no-log]            one skill drawn by the client rather than the model, logged first
 dt.py raw <GET|POST> <nsid> [json]    any XRPC call; a GET takes the json as query params (session)
 ```
@@ -43,7 +46,9 @@ Writing — every write first checks that the session is this account's DID:
 ```
 dt.py post "<text>" [--image <path> --alt "<text>"]
 dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
-                                 the root is read from the parent, and corrected if given wrong
+                                 the root is read from the parent, and corrected if given wrong;
+                                 refused when the parent is already answered (--again: on purpose)
+dt.py decline <at-uri|url> ["why"]   close an ask without answering it; local, nothing is sent
 dt.py delete <rkey> [collection]
 dt.py like <uri|rkey|url> [...]  (the lexicon wants the cid; unlike = delete the record)
 dt.py follow <handle|did> [...]  / dt.py unfollow <handle|did>
@@ -167,6 +172,35 @@ log function itself stays unguarded so a test can drive it directly, and a dry r
 it did not send instead of looking like a publish. A dry run also reads nothing, so the pre-flight skips its handle and record
 lookups there and warns that it did, instead of refusing every mention as unresolved, and `indexed` is
 `null`, because nothing was sent for the appview to hold.
+
+## What has been answered
+
+Three things write to this account — the clock wakes, the runs the monitor wakes, and sessions — and
+"this ask is answered" is a fact none of them owned: the gate kept it in its own state, `mark_handled`
+copies a reply into that state after the fact, and claims cover only items someone remembered to claim.
+On 2026-10-23 a claim token published as a ten-character reply sat beside the real answer to the same
+post until the operator happened to open the thread.
+
+So the record is the **publish log**, the one file every writer appends to from inside the publish path:
+
+- a `reply` line answers its `parent_uri`, unless a later `delete` line removed that reply (a
+  delete-and-republish repair is one answer, not two); a `decline` line (`dt.py decline <uri> ["why"]`)
+  closes an ask without one, so "not yet" and "chose not to" are different states;
+- `dt.py reply` refuses a parent the log already answers or declines, and otherwise reads this account's
+  own repo on the PDS (a public read, no appview lag): a reply to that parent found there — from another
+  client, or a run that died between sending and logging — is logged as `adopted` and nothing is sent.
+  `--again` answers a post twice on purpose and says so in the line. This is independent of claims:
+  claims stop two runs composing at once, this stops the second answer whenever it comes;
+- the monitor reads the log every tick and drops whatever it closes, and does not resend a failed run's
+  batch once every ask in it is answered;
+- **a double answer wakes the account.** An ask the log shows answered twice (neither reply deleted, the
+  second without `--again`) changes the gate's output the tick it appears — once, naming both replies —
+  so a stray post is found by a routine within five minutes, not by someone opening a thread. Only
+  doubles from the last day wake; older ones are `dt.py audit`'s;
+- `dt.py audit` checks the same invariants on demand and against the repo, and `dt.py unanswered` checks
+  the other direction against the inbox: every mention or reply there is answered, declined, or listed.
+
+Declines and adopted lines are bookkeeping, not writes: the write guard and the pacing do not count them.
 
 ## The monitor (the wake gate)
 

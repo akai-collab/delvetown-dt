@@ -1,0 +1,271 @@
+"""What has been answered: the publish log is the record. dt.py's reply path reads it (and the repo) before
+it sends, the monitor drops what it closes, and an ask answered twice wakes the account once.
+
+The cases are the 2026-10-23 failures, each as the smallest input that produced it, plus the invariants
+`dt.py audit` checks. Offline: the repo read is a dict handed in, the PDS unreachable.
+"""
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timezone
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MONITOR = os.path.join(ROOT, "delvetown_monitor.py")
+DT = os.path.join(ROOT, "dt.py")
+
+ME = "did:plc:pupeplyyuw54mc6ngxavghv2"
+SELENE = "did:plc:seleneseleneselenesele"
+ASK = "at://%s/town.delve.feed.post/3myk42g4b2o27" % SELENE
+OTHER = "at://%s/town.delve.feed.post/3myk42g4b2o28" % SELENE
+CID = "bafyreih7fp6wxtpq2m32ndbuiqp24vv7helurjxi4vptepchmt45ehgxka"
+
+
+def mine(rkey):
+    return "at://%s/town.delve.feed.post/%s" % (ME, rkey)
+
+
+def load(path, name, env):
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def iso(t):
+    return datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def item(uri, at="2026-10-23T11:00:00.000Z"):
+    return {"reason": "reply", "author": "selene.delve.town", "author_did": SELENE, "uri": uri,
+            "text": "a question", "indexed_at": at}
+
+
+def reply(rkey, parent=ASK, t=0, **kw):
+    return dict({"ts": iso(t), "kind": "reply", "uri": mine(rkey), "rkey": rkey, "parent_uri": parent}, **kw)
+
+
+class Fixture(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.log = os.path.join(self.tmp, "publish-log.jsonl")
+        self.dt = load(DT, "dt_answered", {"DT_PUBLISH_LOG": self.log, "DT_DRY_RUN": "1",
+                                            "DT_CLAIMS_FILE": os.path.join(self.tmp, "claims.json"),
+                                            "AT_MCP_WAKE_STATE": os.path.join(self.tmp, "wake.json")})
+        self.dt.DRY_RUN = False          # the log is written; nothing below reaches the network
+        self.m = load(MONITOR, "mon_answered", {})
+        self.m.PUBLISH_LOG = self.log
+        self.m.SETTLE_S, self.m.MAX_WAIT_S = 600, 2700
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def write_log(self, entries):
+        with open(self.log, "a", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+    def lines(self):
+        with open(self.log, encoding="utf-8") as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    def tick(self, items, state, now, **kw):
+        kw.setdefault("answered", self.m.answered_asks(self.log))
+        return self.m.wake_output(items, state, now, quiet=set(), replies=[], **kw)
+
+
+class TheLog(Fixture):
+    """One file says what is answered, and both programs read it the same way."""
+
+    def test_a_reply_answers_its_parent_and_a_decline_closes_its_subject(self):
+        self.write_log([reply("r1"), {"ts": iso(1), "kind": "decline", "subject": OTHER, "why": "spam"}])
+        self.assertEqual(self.dt.ask_state(ASK)[0], "reply")
+        self.assertEqual(self.dt.ask_state(OTHER)[0], "decline")
+        self.assertEqual(self.m.answered_asks(self.log), {ASK, OTHER})
+
+    def test_a_deleted_reply_answers_nothing(self):
+        """The 14:06Z repair: published, deleted 49 seconds later, republished. The delete reopens the ask
+        (so the republish is not refused), and the republish closes it again (so it is not a double)."""
+        self.write_log([reply("slip")])
+        self.write_log([{"ts": iso(49), "kind": "delete", "uri": mine("slip")}])
+        self.assertIsNone(self.dt.ask_state(ASK)[0])
+        self.assertEqual(self.m.answered_asks(self.log), set())
+        self.write_log([reply("real", t=60)])
+        self.assertEqual(self.dt.ask_state(ASK)[0], "reply")
+        self.assertEqual(self.dt.double_answers(), [])
+        self.assertEqual(self.m.double_answers(self.log), [])
+
+    def test_lines_from_before_parent_uri_match_by_rkey(self):
+        """Lines before 2026-10-15 kept only the parent's rkey: migration is reading them, not rewriting."""
+        self.write_log([{"ts": iso(0), "kind": "reply", "parent": "3myk42g4b2o27"}])
+        self.assertEqual(self.dt.ask_state(ASK)[0], "reply")
+        out, _ = self.tick([item(ASK)], {}, 10 ** 4)
+        self.assertEqual(out, "wake=none")
+
+    def test_both_programs_find_the_same_doubles(self):
+        self.write_log([reply("a"), reply("b", t=1), reply("c", t=2, again=True), reply("d", OTHER, t=3)])
+        self.assertEqual(self.dt.double_answers(), self.m.double_answers(self.log))
+        self.assertEqual([(d["first"], d["second"]) for d in self.dt.double_answers()], [(mine("a"), mine("b"))])
+
+    def test_bookkeeping_lines_are_not_writes(self):
+        now = datetime.now(timezone.utc)
+        t = now.timestamp() - 30
+        self.write_log([{"ts": iso(t), "kind": "decline", "subject": ASK}]
+                       + [reply("x%d" % i, t=t, adopted=True) for i in range(20)])
+        self.assertEqual(self.dt.write_pressure(now=now), (0, 0))
+        self.assertIsNone(self.m.held_reason(now.timestamp(), os.path.join(self.tmp, "none"), self.log))
+        self.assertEqual(self.m.own_replies(now.timestamp(), self.log), [])
+
+
+class Reply(Fixture):
+    """dt.py reply: one answer per ask, whichever writer gets there first, claimed or not."""
+
+    def test_an_answered_ask_is_refused_and_again_is_the_way_past(self):
+        self.write_log([reply("r1", mode="session")])
+        refused = self.dt.answered_refusal(ASK, repo={})
+        self.assertIn("already answered", refused)
+        self.assertIn("session", refused)
+        self.assertIsNone(self.dt.answered_refusal(ASK, again=True, repo={}))
+
+    def test_a_declined_ask_is_refused(self):
+        self.write_log([{"ts": iso(0), "kind": "decline", "subject": ASK, "why": "a loop"}])
+        refused = self.dt.answered_refusal(ASK, repo={})
+        self.assertIn("declined", refused)
+        self.assertIn("a loop", refused)
+
+    def test_a_reply_the_log_lacks_is_found_in_the_repo_and_adopted(self):
+        """A run died between createRecord and the log line, or a session answered through another client.
+        The repo holds the reply; the next attempt logs it instead of sending a second."""
+        refused = self.dt.answered_refusal(ASK, repo={ASK: mine("elsewhere")})
+        self.assertIn("already holds a reply", refused)
+        last = self.lines()[-1]
+        self.assertEqual((last["kind"], last["parent_uri"], last["uri"], last["adopted"]),
+                         ("reply", ASK, mine("elsewhere"), True))
+        self.assertIn("already answered", self.dt.answered_refusal(ASK, repo={}), "now a lookup")
+
+    def test_an_unanswered_ask_goes_through(self):
+        self.write_log([reply("r1", OTHER)])
+        self.assertIsNone(self.dt.answered_refusal(ASK, repo={}))
+
+    def run_dt(self, *args):
+        env = dict(os.environ, DT_PUBLISH_LOG=self.log, DT_DRY_RUN="1", HOME=self.tmp,
+                   DT_CLAIMS_FILE=os.path.join(self.tmp, "claims.json"),
+                   AT_MCP_WAKE_STATE=os.path.join(self.tmp, "wake.json"),
+                   DT_PDS="http://127.0.0.1:9", DT_APPVIEW="http://127.0.0.1:9")
+        return subprocess.run([sys.executable, DT, *args], env=env, capture_output=True, text=True, timeout=60)
+
+    def test_the_second_answer_is_refused_from_the_command_line(self):
+        """The 14:30Z case, whatever slot slipped: the real answer is logged, and a second reply to the
+        same post — `31`, a fragment, a repeat — is refused before it is sent."""
+        self.write_log([reply("handoff")])
+        r = self.run_dt("reply", ASK, CID, "31")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('"refused": "already answered', r.stdout)
+        r = self.run_dt("reply", ASK, CID, "a correction, on purpose", "--again")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_decline_wants_a_whole_uri(self):
+        r = self.run_dt("decline", "3myk42g4b2o27")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("bare rkey", r.stdout)
+
+
+class Gate(Fixture):
+    """The monitor: an ask the log closes never wakes, whoever closed it; a double wakes once."""
+
+    def test_a_session_answer_takes_the_ask_out_of_the_queue(self):
+        """The session answered at 11:12Z while the gate held the ask; the gate woke a run at 11:57Z that
+        answered it again."""
+        _, st = self.tick([item(ASK)], {}, 0, held="rate-limited")
+        self.write_log([reply("r1", t=100, mode="session")])
+        out, st = self.tick([item(ASK)], st, 2700)
+        self.assertEqual(out, "wake=none")
+        self.assertEqual(st["pending"], {})
+
+    def test_an_answered_ask_stays_answered_when_fired_forgets_it(self):
+        """`fired` expires and state files get lost; the log does neither."""
+        _, st = self.tick([item(ASK)], {}, 0)
+        fired, st = self.tick([item(ASK)], st, 600)
+        self.assertTrue(fired.startswith("wake=1"))
+        self.write_log([reply("r1", t=700)])
+        st["fired"] = {}
+        out, st = self.tick([item(ASK)], st, 10 ** 5)
+        self.assertEqual(out, fired, "no new output, so no wake")
+
+    def test_a_failed_run_that_answered_everything_is_not_sent_again(self):
+        _, st = self.tick([item(ASK)], {}, 0)
+        fired, st = self.tick([item(ASK)], st, 600)
+        self.write_log([reply("r1", t=650)])
+        out, _ = self.tick([item(ASK)], dict(st), 2000, failed_at=700)
+        self.assertEqual(out, fired, "the run wrote its answer before it died: no retry")
+        out, _ = self.tick([item(ASK)], dict(st), 2000, failed_at=700, answered=set())
+        self.assertIn("retry 1 of", out, "and without the answer the retry still happens")
+
+    def test_a_double_answer_wakes_once(self):
+        """The routine that was missing: nobody's check would have found the 14:30Z `31` until someone
+        opened the thread."""
+        self.write_log([reply("handoff"), reply("slip", t=1)])
+        doubles = self.m.double_answers(self.log)
+        out, st = self.tick([], {}, 100, doubles=doubles)
+        self.assertTrue(out.startswith("wake=double n=1 id="), out)
+        self.assertIn(mine("handoff"), out)
+        self.assertIn(mine("slip"), out)
+        again, st = self.tick([], st, 400, doubles=doubles)
+        self.assertEqual(again, out, "reported once")
+
+    def test_a_double_is_reported_even_while_the_town_does_not_answer(self):
+        self.write_log([reply("a"), reply("b", t=1)])
+        out, _ = self.tick(None, {}, 100, doubles=self.m.double_answers(self.log))
+        self.assertTrue(out.startswith("wake=double"), out)
+
+    def test_main_wakes_only_on_a_recent_double(self):
+        """The first tick after a deploy must not wake the account to read the log's whole past."""
+        self.write_log([reply("old1", t=0), reply("old2", t=1)])
+        recent = [d for d in self.m.double_answers(self.log)
+                  if 10 ** 9 - self.m._epoch(d.get("at")) < self.m.DOUBLE_WINDOW_S]
+        self.assertEqual(recent, [])
+
+    def test_an_unreadable_log_is_the_old_behaviour(self):
+        self.assertEqual(self.m.answered_asks(os.path.join(self.tmp, "absent.jsonl")), set())
+        self.assertEqual(self.m.double_answers(os.path.join(self.tmp, "absent.jsonl")), [])
+
+
+class Audit(Fixture):
+    """`dt.py audit` checks the invariants instead of asserting them."""
+
+    def run_dt(self, *args):
+        env = dict(os.environ, DT_PUBLISH_LOG=self.log, DT_DRY_RUN="1", HOME=self.tmp,
+                   DT_PDS="http://127.0.0.1:9", DT_APPVIEW="http://127.0.0.1:9")
+        return subprocess.run([sys.executable, DT, *args], env=env, capture_output=True, text=True, timeout=60)
+
+    def test_a_clean_log_passes(self):
+        self.write_log([reply("a"), reply("b", t=1, again=True), reply("c", OTHER, t=2)])
+        r = self.run_dt("audit")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(json.loads(r.stdout)["ok"])
+
+    def test_a_double_answer_fails_and_a_deleted_one_does_not(self):
+        self.write_log([reply("a"), reply("b", t=1)])
+        r = self.run_dt("audit")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout)["doubles"][0]["second"], mine("b"))
+        self.write_log([{"ts": iso(2), "kind": "delete", "uri": mine("b")}])
+        r = self.run_dt("audit")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
