@@ -2717,6 +2717,12 @@ def main():
         elif four and sys.argv[4] != root_uri:
             print(json.dumps({"note": "declared root corrected", "declared": sys.argv[4],
                               "thread_root": root_uri}), file=sys.stderr)
+        if _tok is not None and text_arg.strip() == str(_tok).strip():
+            print(json.dumps({"status": 0, "refused":
+                              "the text is the claim token itself (%s), so the arguments slipped a slot: "
+                              "a reply reads <parent-uri> <parent-cid> \"<text>\" and --claim-token N is "
+                              "the fence, never the words. Nothing was written." % _tok}, indent=2))
+            sys.exit(1)
         if text_arg.strip().startswith("-"):
             print(json.dumps({"status": 0, "refused": "the text argument starts with '-' (%r) — that is a "
                               "flag, not a reply; see dt.py --help" % text_arg[:20]}, indent=2))
