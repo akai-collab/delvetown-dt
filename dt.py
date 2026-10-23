@@ -651,6 +651,12 @@ def answered_refusal(par_uri, again=False, repo=None):
     for a correction sent on purpose."""
     if again:
         return None
+    # This account's own post is a thread, not an ask. The second reply under a picture is the street list,
+    # the third is the correction; refusing those would refuse the way this seat already writes, and the
+    # `again` flag would become the signature of every follow-up. Measured 2026-10-23: of the twelve
+    # same-parent pairs in the log, five sit under this account's own posts.
+    if DID and DID in str(par_uri or ""):
+        return None
     state, e = ask_state(par_uri)
     if state == "reply":
         return ("already answered at %s%s%s — pass --again to answer it a second time"

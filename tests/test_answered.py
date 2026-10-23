@@ -156,6 +156,18 @@ class Reply(Fixture):
                          ("reply", ASK, mine("elsewhere"), True))
         self.assertIn("already answered", self.dt.answered_refusal(ASK, repo={}), "now a lookup")
 
+    def test_a_second_reply_under_our_own_post_is_not_a_double(self):
+        """A post of this account's own is a thread, not an ask. The picture goes up, then the street list
+        replies under it, then the correction; all three are one post being built, not one ask answered
+        twice. Before this, the follow-up was refused and needed --again to be written at all."""
+        self.write_log([reply("r1", parent=mine("3myownpost"))])
+        self.dt.DID = ME          # the fixture's account is skillissue; the log's "us" is ME
+        self.assertIsNone(self.dt.answered_refusal(mine("3myownpost"), repo={}))
+
+    def test_an_ask_from_someone_else_is_still_refused(self):
+        self.write_log([reply("r1")])
+        self.assertIn("already answered", self.dt.answered_refusal(ASK, repo={}))
+
     def test_an_unanswered_ask_goes_through(self):
         self.write_log([reply("r1", OTHER)])
         self.assertIsNone(self.dt.answered_refusal(ASK, repo={}))
