@@ -171,6 +171,7 @@ def seat_section(monitor, name, seat, now):
     if gate:
         lines.append("  " + gate)
     lines += ["  " + l for l in lane_lines(seat, files, now)]
+    lines += ["  " + l for l in thread_line(seat, files, now)]
     return lines
 
 
@@ -221,6 +222,32 @@ def final_closes(entries):
         if e.get("kind") in ("reply", "decline", "abstain") and e.get("subject"):
             finals[e["subject"]] = e["kind"]
     return finals
+
+
+def thread_line(seat, files, now):
+    """The replies this seat was notified about but never addressed to it: counted, not woken on.
+
+    A thread it only roots notifies on every message. Those are traffic, not asks — someone who wants an answer
+    tags the seat — so they are collected by the monitor and reported here twice a day instead of waking anyone.
+    """
+    try:
+        path = os.path.join(STATE, files["threads_outbox"])
+    except KeyError:
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+    except OSError:
+        return []
+    except ValueError:
+        return ["threads: unreadable outbox"]
+    recent = [r for r in rows if now - float(r.get("seen_at") or 0) <= HOURS * 3600]
+    if not recent:
+        return []
+    newest = sorted(recent, key=lambda r: float(r.get("seen_at") or 0), reverse=True)[:3]
+    excerpt = "; ".join("@%s %r" % (str(r.get("author") or "?").split(".")[0],
+                                    (r.get("text") or "")[:60].replace("\n", " ")) for r in newest)
+    return ["threads: %d not addressed here, newest %s" % (len(recent), excerpt)]
 
 def gate_line(seat, files, now):
     """Whether the gate is on, what it holds, and how its last batch went."""
