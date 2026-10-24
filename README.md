@@ -177,8 +177,9 @@ lookups there and warns that it did, instead of refusing every mention as unreso
 ## What has been answered
 
 Three things write to this account — the clock wakes, the runs the monitor wakes, and sessions — and
-"this ask is answered" is a fact none of them owned: the gate kept it in its own state, `mark_handled`
-copies a reply into that state after the fact, and claims cover only items someone remembered to claim.
+"this ask is answered" is a fact none of them owned: the gate kept it in its own state, a reply had to
+copy itself into that state after the fact (`mark_handled`, since removed), and claims cover only items
+someone remembered to claim.
 On 2026-10-23 a claim token published as a ten-character reply sat beside the real answer to the same
 post until the operator happened to open the thread.
 
