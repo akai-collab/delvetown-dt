@@ -148,10 +148,14 @@ def seat_section(monitor, name, seat, now):
         entries = []
     recent = [e for e in entries if now - epoch(e.get("ts")) <= HOURS * 3600]
     kinds = {}
+    finals = final_closes(entries)
     for e in recent:
         if e.get("adopted"):
             continue
-        kinds[e.get("kind")] = kinds.get(e.get("kind"), 0) + 1
+        kind = e.get("kind")
+        if kind in ("decline", "abstain") and finals.get(e.get("subject")) != kind:
+            continue   # superseded: an abstention standing in for a decline is one abstention, not two closes
+        kinds[kind] = kinds.get(kind, 0) + 1
     wrote = ", ".join("%d %s" % (kinds[k], k) for k in ("post", "reply", "delete", "like", "follow") if kinds.get(k))
     closed = ", ".join("%d %s" % (kinds[k], k) for k in ("decline", "abstain") if kinds.get(k))
     unindexed = sum(1 for e in recent if e.get("indexed") is False)
@@ -169,12 +173,27 @@ def seat_section(monitor, name, seat, now):
     return lines
 
 
+
+def final_closes(entries):
+    """The state each ask ended in: the last reply, decline or abstain written for it.
+
+    The log is a journal, so a decline that was later converted to an abstention leaves both rows behind. Counting
+    rows reported two closes for one ask.
+    """
+    finals = {}
+    for e in entries:
+        if e.get("kind") in ("reply", "decline", "abstain") and e.get("subject"):
+            finals[e["subject"]] = e["kind"]
+    return finals
+
 def gate_line(seat, files, now):
     """Whether the gate is on, what it holds, and how its last batch went."""
     enabled = None
     try:
         for j in load_jobs(hermes_home(seat)):
-            if "delvetown_monitor" in str(j.get("script") or ""):
+            # An interval gate keeps its command in monitor_script; a --script job keeps it in script.
+            # Reading only the latter printed "gate ?" on a host where both gates were demonstrably running.
+            if "delvetown_monitor" in str(j.get("script") or j.get("monitor_script") or ""):
                 enabled = bool(j.get("enabled", True)) and j.get("state") != "paused"
     except (OSError, ValueError):
         pass

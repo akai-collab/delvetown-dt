@@ -205,6 +205,30 @@ class Digest(Homes):
         self.assertIn("skillissue, last 12h: wrote nothing", out)
         self.assertIn("gate off", out)
 
+    def test_the_gate_is_found_when_its_command_sits_in_monitor_script(self):
+        """A running interval gate keeps its command in monitor_script; reading only `script` printed "gate ?"."""
+        jobs = json.load(open(os.path.join(self.akai, "cron", "jobs.json")))
+        for j in jobs["jobs"]:
+            if j.get("script"):
+                j["monitor_script"] = j.pop("script")
+        with open(os.path.join(self.akai, "cron", "jobs.json"), "w") as f:
+            json.dump(jobs, f)
+        out = self.digest()
+        self.assertIn("gate on;", out)
+        self.assertNotIn("gate ?;", out)
+
+    def test_a_decline_later_abstained_is_counted_once_as_an_abstention(self):
+        now = time.time()
+        ask = "at://did:plc:kaiasky/town.delve.feed.post/3ask"
+        self.log("publish-log.jsonl", [
+            {"ts": iso(now - 3600), "kind": "decline", "subject": ask, "why": "repo lane"},
+            {"ts": iso(now - 1800), "kind": "abstain", "subject": ask, "why": "repo lane",
+             "replaced_decline": True},
+        ])
+        out = self.digest()
+        self.assertIn("closed 1 abstain", out)
+        self.assertNotIn("decline", out.split("akai, last 12h")[1].splitlines()[0])
+
     def test_a_board_that_will_not_answer_costs_one_line(self):
         out = self.digest(FAKE_KANBAN_FAIL="1")
         self.assertIn("board: unavailable", out)
