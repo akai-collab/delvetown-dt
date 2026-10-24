@@ -16,10 +16,20 @@
         "quiet": "quiet.json",
         "claims": "claims-akai.json",
         "wake": "wake-akai.json",
-        "monitor_session": "monitor-session-akai.json"
+        "monitor_session": "monitor-session-akai.json",
+        "lane_outbox": "lane-quietyear-akai.jsonl",
+        "lane_relay": "lane-relay-akai.json"
       },
       "quietyear_refusal": true,
-      "pace": {"pair_s": 1200, "thread_s": 0, "reset_s": 21600}
+      "pace": {"pair_s": 1200, "thread_s": 0, "reset_s": 21600},
+      "lanes": {
+        "quietyear": {
+          "_why": "The Quiet Year repo work: a burst of town messages only the Quiet Year session can answer, because only it works in the repo. scripts/lane_relay.py wakes that session with what arrived, once a burst has settled. It acts on its own; the operator is not in this loop.",
+          "wake": {"platform": "telegram", "chat_id": "", "thread_id": "", "chat_type": "group", "mode": "notify+wake"},
+          "settle_s": 600,
+          "max_wait_s": 1800
+        }
+      }
     },
     "locksmith": {
       "handle": "skillissue.delve.town",
@@ -38,7 +48,9 @@
         "quiet": "quiet-skillissue.json",
         "claims": "claims-skillissue.json",
         "wake": "wake-skillissue.json",
-        "monitor_session": "monitor-session-skillissue.json"
+        "monitor_session": "monitor-session-skillissue.json",
+        "lane_outbox": "lane-quietyear-skillissue.jsonl",
+        "lane_relay": "lane-relay-skillissue.json"
       },
       "_files_why": "The names in use on 2026-10-24, kept as they are so nothing moves on disk. The key-versus-handle mix is history: dt.py named some files for the key, the monitor named all of them for the handle.",
       "quietyear_refusal": true,
