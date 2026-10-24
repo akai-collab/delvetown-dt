@@ -32,7 +32,7 @@
      "wake": {
       "platform": "telegram",
       "chat_id": "207357032",
-      "thread_id": "70816",
+      "thread_id": "81313",
       "chat_type": "dm",
       "mode": "notify+wake"
      },
