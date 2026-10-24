@@ -544,6 +544,54 @@ def _item(n):
             "text": record.get("text") or ""}
 
 
+
+# --- the live session's lane ---------------------------------------------------------------------
+# A wake that finds an item the session owns cannot answer it (the client refuses a #quietyear reply, and the
+# prompts say pull state is the session's lane), so it writes nothing, nothing is closed, and the gate offers
+# the batch again: one wasted waking per item, measured three times on 2026-10-24. The right place to stop that
+# is before the item is ever queued, so the lane is filtered here rather than declined downstream.
+SESSION_LANE_TAG = "#quietyear"
+# The tag is written three ways in the wild: the correct one, kaiasky's "#quieryear" typo on the setup root, and
+# plain prose in a top-level ask about the game. Any of them marks the lane.
+SESSION_LANE_MARKS = ("#quietyear", "#quieryear", "quiet year")
+_SESSION_LANE_CACHE = {}
+
+
+def in_session_lane(it, token=None, fetch=None):
+    """True when this item belongs to a thread the live session owns (today: a #quietyear root).
+
+    The notification carries its thread root, so this costs one read per new root, cached for the process.
+    Best effort: if the root cannot be read, the item is kept — the client still refuses the reply, which is a
+    wasted waking rather than a lost one.
+    """
+    text = (it.get("text") or "").lower()
+    if any(m in text for m in SESSION_LANE_MARKS):
+        return True
+    root = it.get("root")
+    if not root:
+        return False
+    if root in _SESSION_LANE_CACHE:
+        return _SESSION_LANE_CACHE[root]
+    verdict = False
+    try:
+        if fetch is not None:
+            verdict = bool(fetch(root))
+        else:
+            st, d = _appview(token, "town.delve.feed.getPostThread", {"uri": root, "depth": 0})
+            if st == 200:
+                post = ((d or {}).get("thread") or {}).get("post") or {}
+                roottext = (((post.get("record") or {}).get("text") or "").lower())
+                verdict = any(mk in roottext for mk in SESSION_LANE_MARKS)
+    except Exception:
+        verdict = False
+    _SESSION_LANE_CACHE[root] = verdict
+    return verdict
+
+
+def drop_session_lane(items, token=None):
+    """The items a wake may act on: everything except the session's lane."""
+    return [it for it in items if not in_session_lane(it, token=token)]
+
 def read_xrpc(limit):
     """The unread count and the newest `limit` notifications, read directly. Same contract as
     `read_at_mcp`: (unread, notes_text, fail), where `fail` is a short fixed phrase — never a server
@@ -562,6 +610,7 @@ def read_xrpc(limit):
     if st != 200 or not isinstance(res.get("notifications"), list):
         return "?", "", "rate-limited" if st == 429 else "no answer" if st == 0 else "http %d" % st
     items = [_item(n) for n in res["notifications"] if isinstance(n, dict)]
+    items = drop_session_lane(items, token=token)   # the session's lane never becomes a batch
     st, cnt = _appview(token, "town.delve.notification.getUnreadCount", None)
     unread = cnt.get("count", "?") if st == 200 else "?"
     return unread, json.dumps({"count": len(items), "items": items}, sort_keys=True), None
