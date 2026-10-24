@@ -137,8 +137,11 @@ def briefing_section(seats, today):
     return lines
 
 
-def seat_section(monitor, name, seat, now):
-    """One seat's window: what it wrote, how asks were closed, any double answer, and the gate's queue."""
+def seat_section(monitor, name, seat, now, once=None):
+    """One seat's window: what it wrote, how asks were closed, any double answer, and the gate's queue.
+
+    `once` is shared across seats: the forge is not a seat's, so its line is printed with the first one."""
+    once = {} if once is None else once
     files = seat.get("files") or {}
     label = seat.get("name") or name
     lines = []
@@ -172,6 +175,9 @@ def seat_section(monitor, name, seat, now):
         lines.append("  " + gate)
     lines += ["  " + l for l in lane_lines(seat, files, now)]
     lines += ["  " + l for l in thread_line(seat, files, now)]
+    if not once.get("forge"):
+        once["forge"] = True
+        lines += [("  " + l if not l.startswith("!") else l) for l in forge_line(now)]
     return lines
 
 
@@ -223,6 +229,62 @@ def final_closes(entries):
             finals[e["subject"]] = e["kind"]
     return finals
 
+
+
+FORGE_QUEUE = os.environ.get("TANGLED_QUEUE") or os.path.join(STATE, "tangled-events.jsonl")
+FORGE_KINDS = {"sh.tangled.feed.comment": "comment", "sh.tangled.repo.pull": "pull",
+               "sh.tangled.repo.pull.status": "pull status", "sh.tangled.repo.issue": "issue",
+               "sh.tangled.repo.issue.state": "issue state", "sh.tangled.graph.follow": "follow",
+               "sh.tangled.repo": "repo"}
+
+
+def forge_line(now):
+    """What happened on the forge, from the local firehose queue.
+
+    The town's appview indexes `town.delve.*` only, so a pull, a review comment or an issue on a repo reaches no
+    gate at all. `tangled-firehose.py --follow` writes them to this queue; until 2026-10-24 nothing read it, which
+    is why the same conversations had to be carried by hand from a browser.
+    """
+    try:
+        with open(FORGE_QUEUE, encoding="utf-8") as f:
+            rows = [json.loads(l) for l in f if l.strip()]
+    except OSError:
+        return []                       # no consumer, no queue: silence is honest here, the unit is separate
+    except ValueError:
+        return ["! forge: queue unreadable"]
+    # two sources capture the same record (the town's firehose and Jetstream), so count each uri once
+    seen, unique = set(), []
+    for r in rows:
+        key = r.get("uri") or (r.get("collection"), r.get("rkey"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(r)
+    recent = [r for r in unique if now - epoch(r.get("at") or r.get("event_time")) <= HOURS * 3600]
+    counts = {}
+    for r in recent:
+        kind = FORGE_KINDS.get(r.get("collection") or "", (r.get("collection") or "?").split(".")[-1])
+        counts[kind] = counts.get(kind, 0) + 1
+    tail = sorted(recent, key=lambda r: epoch(r.get("at") or r.get("event_time")), reverse=True)[:3]
+    bits = ["%d %s" % (n, k) for k, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+    newest = "; ".join("%s %r" % (FORGE_KINDS.get(r.get("collection") or "", "event"),
+                                 (r.get("title") or r.get("text") or "")[:50].replace("\n", " "))
+                       for r in tail)
+    lines = []
+    if recent:
+        lines.append("forge, last %dh: %d events — %s" % (HOURS, len(recent), ", ".join(bits)))
+        if newest:
+            lines.append("  newest: " + newest)
+    else:
+        lines.append("forge, last %dh: quiet" % HOURS)
+    # the failure that looks like calm: the consumer dies and the queue simply stops growing
+    try:
+        idle = now - os.path.getmtime(FORGE_QUEUE)
+        if idle > 3 * 3600:
+            lines.insert(0, "! forge: queue untouched for %s — is tangled-firehose running?" % age(idle))
+    except OSError:
+        pass
+    return lines
 
 def thread_line(seat, files, now):
     """The replies this seat was notified about but never addressed to it: counted, not woken on.
@@ -294,8 +356,9 @@ def main():
     except Exception as exc:     # a broken copy must not hide the rest of the digest
         out += ["", "seats: monitor unavailable (%s)" % type(exc).__name__]
     else:
+        once = {}
         for name, seat in seats.items():
-            out += [""] + seat_section(monitor, name, seat, now)
+            out += [""] + seat_section(monitor, name, seat, now, once)
     print("\n".join(out))
 
 

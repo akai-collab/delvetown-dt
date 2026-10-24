@@ -244,6 +244,33 @@ class Digest(Homes):
     def test_no_thread_traffic_means_no_line(self):
         self.assertNotIn("threads:", self.digest())
 
+    def test_the_forge_line_counts_the_queue_and_names_the_newest(self):
+        now = time.time()
+        rows = [
+            {"at": iso(now - 600), "uri": "at://d/sh.tangled.feed.comment/1", "collection": "sh.tangled.feed.comment",
+             "text": "Applied the branch, 28 pass"},
+            {"at": iso(now - 900), "uri": "at://d/sh.tangled.repo.pull/2", "collection": "sh.tangled.repo.pull",
+             "title": "Store the deck source repo-relative"},
+            {"at": iso(now - 900), "uri": "at://d/sh.tangled.repo.pull/2", "collection": "sh.tangled.repo.pull",
+             "title": "Store the deck source repo-relative"},
+        ]
+        with open(os.path.join(self.state, "tangled-events.jsonl"), "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        out = self.digest()
+        self.assertIn("forge, last 12h: 2 events — 1 comment, 1 pull", out)
+        self.assertIn("comment 'Applied the branch, 28 pass'", out)
+        self.assertEqual(out.count("forge, last 12h"), 1, "the forge is not a seat's: one line per digest")
+
+    def test_a_dead_consumer_is_loud_rather_than_quiet(self):
+        path = os.path.join(self.state, "tangled-events.jsonl")
+        with open(path, "w") as f:
+            f.write("")
+        os.utime(path, (time.time() - 6 * 3600, time.time() - 6 * 3600))
+        out = self.digest()
+        self.assertIn("! forge: queue untouched for", out)
+        self.assertIn("is tangled-firehose running?", out)
+
     def test_a_board_that_will_not_answer_costs_one_line(self):
         out = self.digest(FAKE_KANBAN_FAIL="1")
         self.assertIn("board: unavailable", out)
