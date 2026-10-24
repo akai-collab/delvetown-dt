@@ -59,15 +59,55 @@ BIN = os.environ.get("AT_MCP_BIN", _home("at_mcp", "current", "bin", "at_mcp-std
 BIN_ARGS = shlex.split(os.environ.get("AT_MCP_BIN_ARGS", ""))  # so a test can stand in for the binary
 MONITOR_STATE = os.environ.get("AT_MCP_MONITOR_STATE", _home(".local", "state", "at_mcp-monitor"))
 HANDLE = os.environ.get("AT_MCP_HANDLE", "akai.delve.town")
-ACCOUNT = HANDLE.split(".")[0]      # akai, skillissue, ... — what names every path below
+ACCOUNT = HANDLE.split(".")[0]      # akai, skillissue, ... — names a seat that has no entry in seats.json
+
+
+# The seat table, shared with dt.py: identity, the state files each seat reads and writes, and its switches.
+# It is a file because this copy cannot import the repo, and the two programs used to disagree about a
+# seat's files (2026-10-24: for skillissue, dt.py wrote session-locksmith.json and this read
+# session-skillissue.json, so it never saw that seat's lockouts). install-monitor.sh puts it in the state
+# directory beside the files it names. Missing is a broken deploy: main() says so in one line rather than
+# guess a seat. A handle with no entry keeps the names this file always derived from the handle.
+def _seats_path():
+    for p in (os.environ.get("DT_SEATS_FILE"), _home(".local", "state", "delvetown-dt", "seats.json"),
+              os.path.join(os.path.dirname(os.path.abspath(__file__)), "seats.json")):
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def _load_seats(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            seats = json.load(f).get("seats")
+        return seats if isinstance(seats, dict) else None
+    except (OSError, TypeError, ValueError, AttributeError):
+        return None
+
+
+SEATS_FILE = _seats_path()
+SEATS = _load_seats(SEATS_FILE) if SEATS_FILE else None
+SEAT = next((e for e in (SEATS or {}).values()
+             if isinstance(e, dict) and str(e.get("handle") or "").lower() == HANDLE.lower()), {})
+_SEAT_FILES = SEAT.get("files") or {}
+_SEAT_PACE = SEAT.get("pace") or {}
+
+
+def _state(kind, legacy):
+    """A seat's state file: the name seats.json gives it, else the one derived from the handle."""
+    return _home(".local", "state", "delvetown-dt", _SEAT_FILES.get(kind) or legacy)
 
 # The env file is where the app password is read from, and its default is akai's own ~/.hermes/.env.
 # That is the same wrong-seat failure as the paths below, except this one hands over a credential
 # rather than a reading, so a second account must name its own file: with none given the monitor
 # reads nothing and reports "no password" rather than logging in as somebody else.
 _ENV_FILE_GIVEN = os.environ.get("DELVETOWN_ENV_FILE")
-ENV_FILE = _ENV_FILE_GIVEN if _ENV_FILE_GIVEN is not None else (
-    _home(".hermes", ".env") if ACCOUNT == "akai" else "")
+if _ENV_FILE_GIVEN is not None:
+    ENV_FILE = _ENV_FILE_GIVEN
+elif SEAT:
+    ENV_FILE = _home(SEAT["env_file"]) if SEAT.get("env_file") else ""
+else:
+    ENV_FILE = _home(".hermes", ".env") if ACCOUNT == "akai" else ""
 GATE = (os.environ.get("AT_MCP_MONITOR_GATE") or "digest").strip().lower()
 
 # --- the wake gate's knobs. The defaults are guesses until a live account has been watched with them;
@@ -88,14 +128,11 @@ WAKE_LIMIT = 25    # notifications read per tick in wake mode: ten could scroll 
 # the bare name is akai's, any other account gets its own. One machine can run two accounts, and a
 # monitor that read akai's lockout or write guard while watching a second account would hold that
 # account's wake for a reason that was never its own — and never see its own lockout at all.
-WAKE_STATE = os.environ.get("AT_MCP_WAKE_STATE") or _home(
-    ".local", "state", "delvetown-dt", "wake-%s.json" % ACCOUNT)
-SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _home(
-    ".local", "state", "delvetown-dt",
-    "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT)
-PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _home(
-    ".local", "state", "delvetown-dt",
-    "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT)
+WAKE_STATE = os.environ.get("AT_MCP_WAKE_STATE") or _state("wake", "wake-%s.json" % ACCOUNT)
+SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _state(
+    "session", "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT)
+PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _state(
+    "publish_log", "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT)
 WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # dt.py's write guard
 # The quiet list: accounts whose notifications never wake this account. It is for the loop two bots fall
 # into when each one's reply is the other's wake, not a judgement on the account: a listed account can
@@ -103,8 +140,8 @@ WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # 
 # should not be answered at all is blocked instead (a block is public). `dt.py quiet` edits it; it is re-read every tick, so a change applies on the next one without a redeploy. Entries are
 # matched by DID first: a handle is not stable (octavius became octavia on 19 Oct), and a list keyed by
 # handle stops matching through a rename without saying so.
-QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _home(
-    ".local", "state", "delvetown-dt", "quiet.json" if ACCOUNT == "akai" else "quiet-%s.json" % ACCOUNT)
+QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state(
+    "quiet", "quiet.json" if ACCOUNT == "akai" else "quiet-%s.json" % ACCOUNT)
 # Thread pacing, in the notification layer only: a notification in a thread where this account has just
 # been answering one counterpart waits longer before it may wake the account, and the wait doubles with
 # each turn — PACE_PAIR_S after the first reply to that account there, twice that after the second, and
@@ -116,9 +153,11 @@ QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _home(
 # several people, one answer must not delay the wake for the next person's ask.
 #   The case it is built from: seven replies to one other bot in one thread between 04:38Z and 10:35Z on
 # 19 Oct, the last of them to this account's own post. 0 turns a clock off.
-PACE_PAIR_S = int(os.environ.get("DT_PACE_PAIR_S") or 1200)
-PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or 0)
-PACE_RESET_S = int(os.environ.get("DT_PACE_RESET_S") or 6 * 3600)
+#   Each seat's numbers are in seats.json ("pace"); the environment still wins, and these are the defaults
+# for a seat that sets none.
+PACE_PAIR_S = int(os.environ.get("DT_PACE_PAIR_S") or _SEAT_PACE.get("pair_s", 1200))
+PACE_THREAD_S = int(os.environ.get("DT_PACE_THREAD_S") or _SEAT_PACE.get("thread_s", 0))
+PACE_RESET_S = int(os.environ.get("DT_PACE_RESET_S") or _SEAT_PACE.get("reset_s", 6 * 3600))
 # A batch whose run failed is sent again. The scheduler marks a monitor's output as seen when it CHECKS,
 # before the model runs (Hermes cron/monitor.py, on purpose: "so a failed agent run doesn't re-alert on
 # the same content forever"), so a run that dies — a 429 from the model provider, say — leaves its batch
@@ -151,8 +190,8 @@ READER = (os.environ.get("DT_MONITOR_READER") or "xrpc").strip().lower()
 PDS = (os.environ.get("DT_PDS") or "https://pds.delve.town").rstrip("/")
 APPVIEW = (os.environ.get("DT_APPVIEW") or "https://api.delve.town").rstrip("/")
 APPVIEW_DID = os.environ.get("DT_APPVIEW_DID") or "did:web:api.delve.town"
-MONITOR_SESSION = os.environ.get("DT_MONITOR_SESSION") or _home(
-    ".local", "state", "delvetown-dt", "monitor-session-%s.json" % ACCOUNT)
+MONITOR_SESSION = os.environ.get("DT_MONITOR_SESSION") or _state(
+    "monitor_session", "monitor-session-%s.json" % ACCOUNT)
 SESSION_MARGIN = 120        # seconds of life a cached token must still have to be used
 LOGIN_REFUSED_WAIT = 3600   # after a wrong password, do not try again for this long
 HTTP_TIMEOUT = 30
@@ -989,6 +1028,12 @@ def _save_state(path, st):
 
 
 def main():
+    if SEATS is None:
+        # One fixed line: it differs from a working tick's, so the account wakes once and reads why, and it
+        # stays identical after that, so a broken deploy is reported rather than read every five minutes.
+        print("seats: unavailable — no readable seats.json (DT_SEATS_FILE or ~/.local/state/delvetown-dt/); "
+              "run install-monitor.sh")
+        return
     if GATE == "wake":
         unread, notes_text, fail = read_town(WAKE_LIMIT)
         items = None if fail and not notes_text else _items(notes_text)

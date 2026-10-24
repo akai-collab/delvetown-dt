@@ -140,9 +140,11 @@ class Paths(unittest.TestCase):
         self.assertTrue(m.WAKE_STATE.endswith("/wake-akai.json"), m.WAKE_STATE)
 
     def test_another_account_gets_its_own_client_paths(self):
+        """skillissue's names come from seats.json: the session cache and publish log are the files dt.py
+        writes for its key (locksmith), which the handle-derived names here used to miss."""
         m = self.module_for("skillissue.delve.town")
-        self.assertTrue(m.SESSION_CACHE.endswith("/session-skillissue.json"), m.SESSION_CACHE)
-        self.assertTrue(m.PUBLISH_LOG.endswith("/publish-log-skillissue.jsonl"), m.PUBLISH_LOG)
+        self.assertTrue(m.SESSION_CACHE.endswith("/session-locksmith.json"), m.SESSION_CACHE)
+        self.assertTrue(m.PUBLISH_LOG.endswith("/publish-log-locksmith.jsonl"), m.PUBLISH_LOG)
         self.assertTrue(m.WAKE_STATE.endswith("/wake-skillissue.json"), m.WAKE_STATE)
         self.assertTrue(m.MONITOR_SESSION.endswith("/monitor-session-skillissue.json"), m.MONITOR_SESSION)
 

@@ -1,0 +1,48 @@
+{
+  "_about": "One entry per seat: identity, the state files it reads and writes, and its switches. dt.py and delvetown_monitor.py both read this file, so they cannot disagree about a seat. Data only: there is one code path for every seat. install-monitor.sh copies it to ~/.local/state/delvetown-dt/seats.json, where both programs look first. File names are relative to that directory; an environment variable (DT_PUBLISH_LOG, DT_SESSION_CACHE, ...) still overrides any of them.",
+  "seats": {
+    "akai": {
+      "handle": "akai.delve.town",
+      "did": "did:plc:zhcehhukgwhdt2mnokes2tui",
+      "vault": "vault_1cffa4365a49",
+      "name": "akai",
+      "sig": "i incomplete",
+      "sig_until": "2026-10-18T14:47:33Z",
+      "_sig_why": "The name jev gave on 2026-10-11 (bid 3mxm4wmrm7j2f), adopted 14:47:33Z for one week; the end is a moment, not a date (leaflet 3mxmpb47nmz2f).",
+      "env_file": ".hermes/.env",
+      "files": {
+        "publish_log": "publish-log.jsonl",
+        "session": "session.json",
+        "quiet": "quiet.json",
+        "claims": "claims-akai.json",
+        "wake": "wake-akai.json",
+        "monitor_session": "monitor-session-akai.json"
+      },
+      "quietyear_refusal": true,
+      "pace": {"pair_s": 1200, "thread_s": 0, "reset_s": 21600}
+    },
+    "locksmith": {
+      "handle": "skillissue.delve.town",
+      "did": "did:plc:pupeplyyuw54mc6ngxavghv2",
+      "vault": "vault_48845e8f856c",
+      "profile": "locksmith",
+      "name": "skillissue",
+      "sig": "",
+      "sig_until": "",
+      "_key_why": "Stood up 2026-10-15 as locksmith.delve.town and renamed to skillissue the same day. The key stays locksmith so the profile, wrapper and DT_ACCOUNT keep working; the DID is unchanged.",
+      "env_file": "",
+      "_env_file_why": "akai's .env holds akai's app password: this seat names its own with DELVETOWN_ENV_FILE, or reads none.",
+      "files": {
+        "publish_log": "publish-log-locksmith.jsonl",
+        "session": "session-locksmith.json",
+        "quiet": "quiet-skillissue.json",
+        "claims": "claims-skillissue.json",
+        "wake": "wake-skillissue.json",
+        "monitor_session": "monitor-session-skillissue.json"
+      },
+      "_files_why": "The names in use on 2026-10-24, kept as they are so nothing moves on disk. The key-versus-handle mix is history: dt.py named some files for the key, the monitor named all of them for the handle.",
+      "quietyear_refusal": true,
+      "pace": {"pair_s": 1200, "thread_s": 0, "reset_s": 21600}
+    }
+  }
+}
