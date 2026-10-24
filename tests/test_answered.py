@@ -222,6 +222,10 @@ class Gate(Fixture):
         out, st = self.tick([item(ASK)], st, 2700)
         self.assertEqual(out, "wake=none")
         self.assertEqual(st["pending"], {})
+        # and the ask, still in the notification list, is not re-queued a tick later: the failure the
+        # removed mark_handled existed for (skillissue, 11:12 answered in a session, 11:57 again)
+        out, st = self.tick([item(ASK)], st, 3000)
+        self.assertEqual((out, st["pending"]), ("wake=none", {}))
 
     def test_an_answered_ask_stays_answered_when_fired_forgets_it(self):
         """`fired` expires and state files get lost; the log does neither."""

@@ -268,60 +268,6 @@ def save_claims(data, path=None):
     os.replace(tmp, path)
 
 
-def wake_state_path():
-    """The gate's state file for this account, resolved at call time so tests can move it.
-
-    `AT_MCP_WAKE_STATE` wins when the wrapper sets it (that is how the live gate and the dry run are
-    kept apart); otherwise the default names the account, not the profile, because one install serves
-    several seats whose states must never be shared.
-    """
-    explicit = os.environ.get("AT_MCP_WAKE_STATE")
-    if explicit:
-        return explicit
-    return os.path.join(
-        os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
-        "wake-%s.json" % (HANDLE.split(".")[0] or ACCOUNT))
-
-
-def mark_handled(uri, path=None):
-    """Record, in the gate's state, that an answer to this item has been published. True if written.
-
-    The gate tracks work by URI: `pending` is what it is holding before answering, and `fired` is what
-    it will never answer twice. An answer published from a session or a clock wake wrote neither, so a
-    2026-10-23 answer to selene left the item pending, and the next gate wake treated it as fresh and
-    answered it again. Dropping `pending` alone is not enough either: the item is still in the
-    notification list and absent from `fired`, so the next tick re-adds it and the same double answer
-    comes back one settle window later. Both halves move together — that is the whole lesson.
-    """
-    path = path or wake_state_path()
-    try:
-        with open(path, encoding="utf-8") as f:
-            st = json.load(f)
-    except (OSError, ValueError):
-        return False
-    if not isinstance(st, dict):
-        return False
-    pending = st.get("pending")
-    fired = st.get("fired")
-    if not isinstance(pending, dict) or not isinstance(fired, dict):
-        return False
-    if uri not in pending and uri in fired:
-        return False          # already handled: do not restamp a newer first-seen time
-    pending.pop(uri, None)
-    fired[uri] = time.time()
-    st["pending"] = pending
-    st["fired"] = fired
-    try:
-        os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(st, f)
-        os.replace(tmp, path)
-    except OSError:
-        return False
-    return True
-
-
 def pid_alive(pid):
     try:
         os.kill(int(pid), 0)
@@ -2956,12 +2902,7 @@ def main():
         if status == 200:
             log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
                       text=text, indexed=idx, extra={"again": True} if again else None)
-            # answered outside the gate: the gate's queue must stop naming this item as waiting
-            try:
-                if mark_handled(par_uri):
-                    print(json.dumps({"note": "gate marked this ask handled", "parent": par_uri}), file=sys.stderr)
-            except (OSError, ValueError) as exc:   # queue bookkeeping must never fail a published reply
-                print(json.dumps({"note": "monitor queue not pruned: %s" % exc}), file=sys.stderr)
+            # Nothing to tell the gate: it reads this log line on its next tick and drops the ask.
         print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                           "indexed": idx,
                           "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
