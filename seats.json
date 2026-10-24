@@ -65,7 +65,7 @@
     "threads_outbox": "threads-skillissue.jsonl"
    },
    "_files_why": "The names in use on 2026-10-24, kept as they are so nothing moves on disk. The key-versus-handle mix is history: dt.py named some files for the key, the monitor named all of them for the handle.",
-   "quietyear_refusal": true,
+   "quietyear_refusal": false,
    "pace": {
     "pair_s": 1200,
     "thread_s": 0,

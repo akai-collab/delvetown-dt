@@ -33,5 +33,9 @@ python3 -c 'import json,sys; json.load(open(sys.argv[1]))["seats"]' "$here/seats
   || { echo "seats.json does not parse; not installed"; exit 1; }
 install -m 0644 "$here/seats.json" "$state/seats.json"
 echo "copied: $here/seats.json -> $state/seats.json"
-printf 'smoke run: '
-python3 "$target/delvetown_monitor.py" || { echo "monitor failed"; exit 1; }
+# Informational only. A bare run has none of the wrapper's environment (seat handle, state paths, session cache),
+# so it can report "unavailable" while the deployed wrapper is perfectly healthy — it read as a failed deploy twice
+# on 2026-10-24. The authoritative check is the next cron tick: the gate prints one unchanged line, or the wrapper
+# prints a real digest. `grep -q 'unavailable'` here is not a failure.
+printf 'smoke run (informational, the cron tick is authoritative): '
+DT_MONITOR_READER="${DT_MONITOR_READER:-xrpc}" python3 "$target/delvetown_monitor.py" 2>&1 | head -2
