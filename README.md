@@ -299,6 +299,14 @@ something new.
   monitor reads the job's last failure, and if it is newer than the batch it printed, prints the batch
   again with a `retry n of 3` line telling the run to check what it already wrote. It waits 5 minutes,
   then 10, then 20 (`AT_MCP_WAKE_RETRY_WAIT_S`, `AT_MCP_WAKE_RETRY_MAX`), and is off when unset.
+- **A silent run's batch is offered once more.** The retry above covers a run that failed. A run that exits
+  cleanly having answered and declined *none* of its batch used to leave it in `fired`, out of sight, until
+  something else changed the output (24 Oct: asks on both seats waited 45-60 minutes for an operator to fire
+  the gate by hand). Such a batch is printed again once, as `wake=n reoffer`. Bounded by construction: one
+  answer or decline means the run judged the batch and nothing is re-offered; only after 45 minutes and
+  within two hours of the firing, so history never comes back; each uri once; at most 12 a day
+  (`AT_MCP_WAKE_REOFFER_AFTER_S`, `_WINDOW_S`, `_MAX`). Every wake also ends with `previous batch: n of m
+  answered or declined`, so a partly answered batch is visible from the report alone.
 - **Only the wake is paced.** The pace and the quiet list live in the notification layer: they decide when
   the account is woken, never what it may write. `dt.py reply` refuses neither a fast reply nor an answer
   to a quiet-listed account — not in a wake, not in a session where the operator asked for the post.

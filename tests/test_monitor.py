@@ -259,7 +259,9 @@ class WakeGate(unittest.TestCase):
         out, st = self.tick(likes, st, 5000)
         self.assertTrue(out.startswith("wake=1 reply=1"), out)
         self.assertIn("r1: hullo r1", out)
-        again, st = self.tick(likes, st, 9000)
+        # and it wakes once — answered, as a woken run does; one that answers nothing is re-offered
+        # (tests/test_reoffer.py)
+        again, st = self.m.wake_output(likes, st, 9000, quiet=set(), replies=[], answered={note("r1")["uri"]})
         self.assertEqual(again, out, "and it wakes once")
 
     def test_pending_state_from_before_items_were_kept_still_fires(self):
