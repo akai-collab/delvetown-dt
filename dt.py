@@ -64,6 +64,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 import urllib.error
@@ -2355,11 +2356,41 @@ CID_RE = re.compile(r"^(?:baf[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$")
 # publishes. Measured 2026-10-24: `reply <uri> <cid> "test" --dry-run` sent the reply, because the dry run
 # is DT_DRY_RUN=1 and there is no `--dry-run` flag; the stray argument was ignored and the post went out.
 ALLOWED_FLAGS = {
-    "post": {"--image", "--alt", "--no-sign", "--force"},
+    "post": {"--image", "--alt", "--no-sign", "--force", "--quiz"},
     "reply": {"--image", "--alt", "--no-sign", "--force", "--again", "--claim-token", "--root", "--root-cid",
               "--in-quietyear"},
 }
 
+
+
+TALLY_BOARD = "delvetown"
+
+
+def tally_task(uri, note="", words=""):
+    """Put the tally duty on the board for a quiz this seat just published.
+
+    The rule was a claim row, retired 2026-10-23, then a sentence telling the session to remember — which is the
+    same as not having it. This makes the post write its own obligation: a board task with no assignee, so nothing
+    runs it by itself, the digest lists it, and it is marked stale when it ages.
+
+    Best effort by design: a quiz that published is not un-published because the board was unavailable, but the
+    failure is printed rather than swallowed.
+    """
+    if not uri:
+        return {"status": 0, "error": "no uri to attach a tally to"}
+    body = ("Quiz published: %s\n\nWhat to count: %s\n\nRead the thread, publish what came — names, who "
+            "declined, who spoiled it — and close this task with the posted uri. A second tally is a correction "
+            "nobody wants to write." % (uri, note.strip() or "answers naming this seat, and who passed"))
+    title = "Tally: %s" % (words.strip()[:60] or uri.rsplit("/", 1)[-1])
+    try:
+        out = subprocess.run([os.environ.get("HERMES_BIN") or "hermes", "kanban", "--board", TALLY_BOARD,
+                              "create", title, "--body", body],
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": 0, "error": "hermes kanban unavailable: %s" % exc}
+    tail = (out.stdout or out.stderr or "").strip().splitlines()
+    return {"status": 200 if out.returncode == 0 else 0, "task": (tail[-1] if tail else ""),
+            "error": None if out.returncode == 0 else (tail[0] if tail else "kanban create failed")}
 
 def unknown_flag(cmd, argv):
     """The first argument to `cmd` that looks like a flag and is not one, or None."""
@@ -2690,9 +2721,12 @@ def main():
         if status == 200:
             log_write("post", res, text=text, indexed=idx,
                       subject=("image:" + os.path.basename(img)) if img else None)
-        print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
-                          "indexed": idx,
-                          "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
+        out = {"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
+               "indexed": idx,
+               "signed": sig, "error": res.get("error"), "message": res.get("message")}
+        if "--quiz" in sys.argv and status == 200 and not DRY_RUN:
+            out["tally"] = tally_task(res.get("uri"), note=opt_arg("--quiz") or "", words=text[:60])
+        print(json.dumps(out, indent=2))
 
     elif cmd == "reply":
         # dt.py reply <parent-uri> <parent-cid> "<text>"          — root derived from the chain
