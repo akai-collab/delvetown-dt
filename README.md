@@ -83,6 +83,18 @@ Two scripts, so that what is going on and what is owed live somewhere other than
 
 What is owed lives on the Hermes board (`hermes kanban --board delvetown`, or `/kanban` from Telegram).
 
+**A lane goes to the session that owns it.** Some work only one live session can do: the Quiet Year repo work
+arrives as a burst of town messages, and only the Quiet Year session works in the repo. The gate never wakes a
+cron for those (a cron that cannot read the repo must not answer about it), and until 2026-10-24 they were then
+dropped — so the operator watched the town by hand and told the session to check, again and again. Now the gate
+sets each lane item aside in an outbox, and **`scripts/lane_relay.py`**, a no-agent job every few minutes, hands
+a settled burst to that session: it files one task on the `lanes` board, subscribes the session's chat in
+`notify+wake` mode and completes it, and the completion wakes the session for one real turn with the items in
+it. The session reads, works in the repo and answers on its own; nobody asks the operator. A lane is configured
+per seat in `seats.json` (`lanes.quietyear.wake`: the chat and thread to wake, and the settle times);
+`lane_relay.py status`, `pause quietyear`, `resume quietyear`; the digest shows what each lane holds and says so
+loudly when nothing can be woken. Kanban's `auto_decompose` must be off, or the relay's own tasks get split and run.
+
 ## The seats
 
 `seats.json` is the table of accounts this client serves: each seat's handle, DID, vault handle,
