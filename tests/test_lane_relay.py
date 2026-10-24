@@ -61,7 +61,9 @@ class Lane(unittest.TestCase):
         os.makedirs(self.state)
         with open(os.path.join(ROOT, "seats.json")) as f:
             self.seats = json.load(f)
-        self.target(chat_id="-100123", thread_id="77")
+        # every fixture value is set here, not inherited from the live seats.json: chat_type is dm on
+        # this host now, and a test that reads production drifted the moment the real target changed.
+        self.target(chat_id="-100123", thread_id="77", chat_type="group")
         self.calls = os.path.join(self.base, "calls.log")
         self.bin = os.path.join(self.base, "hermes")
         with open(self.bin, "w") as f:

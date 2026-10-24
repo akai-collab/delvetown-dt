@@ -229,6 +229,21 @@ class Digest(Homes):
         self.assertIn("closed 1 abstain", out)
         self.assertNotIn("decline", out.split("akai, last 12h")[1].splitlines()[0])
 
+    def test_thread_traffic_is_reported_with_an_excerpt_and_not_as_an_ask(self):
+        now = time.time()
+        rows = [{"uri": "at://x/y/%d" % i, "author": "sable.delve.town", "text": "hop %d in the chain" % i,
+                 "reason": "reply", "lane": "threads", "seen_at": now - 600 * i} for i in range(4)]
+        with open(os.path.join(self.state, "threads-akai.jsonl"), "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        out = self.digest()
+        self.assertIn("threads: 4 not addressed here", out)
+        self.assertIn("@sable 'hop 0 in the chain'", out, "newest first")
+        self.assertNotIn("! threads", out, "traffic is not an alarm")
+
+    def test_no_thread_traffic_means_no_line(self):
+        self.assertNotIn("threads:", self.digest())
+
     def test_a_board_that_will_not_answer_costs_one_line(self):
         out = self.digest(FAKE_KANBAN_FAIL="1")
         self.assertIn("board: unavailable", out)

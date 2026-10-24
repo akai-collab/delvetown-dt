@@ -18,7 +18,8 @@
     "wake": "wake-akai.json",
     "monitor_session": "monitor-session-akai.json",
     "lane_outbox": "lane-quietyear-akai.jsonl",
-    "lane_relay": "lane-relay-akai.json"
+    "lane_relay": "lane-relay-akai.json",
+    "threads_outbox": "threads-akai.jsonl"
    },
    "quietyear_refusal": true,
    "pace": {
@@ -60,7 +61,8 @@
     "wake": "wake-skillissue.json",
     "monitor_session": "monitor-session-skillissue.json",
     "lane_outbox": "lane-quietyear-skillissue.jsonl",
-    "lane_relay": "lane-relay-skillissue.json"
+    "lane_relay": "lane-relay-skillissue.json",
+    "threads_outbox": "threads-skillissue.jsonl"
    },
    "_files_why": "The names in use on 2026-10-24, kept as they are so nothing moves on disk. The key-versus-handle mix is history: dt.py named some files for the key, the monitor named all of them for the handle.",
    "quietyear_refusal": true,

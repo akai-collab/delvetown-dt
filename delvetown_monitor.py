@@ -540,6 +540,7 @@ def _item(n):
     root = (reply.get("root") or {}).get("uri") or (reply.get("parent") or {}).get("uri")
     return {"reason": n.get("reason"), "author": author.get("handle") or author.get("did"),
             "author_did": author.get("did"), "root": root,
+            "parent": (reply.get("parent") or {}).get("uri"),
             "uri": n.get("uri"), "indexed_at": n.get("indexedAt"), "is_read": n.get("isRead"),
             "text": record.get("text") or ""}
 
@@ -601,6 +602,45 @@ LANE = "quietyear"
 LANE_OUTBOX = os.environ.get("DT_LANE_OUTBOX") or _state("lane_outbox", "lane-%s-%s.jsonl" % (LANE, ACCOUNT))
 
 
+
+# --- traffic that is not an ask ---------------------------------------------------------------------------
+# A reply in a thread this seat only roots notifies on every message (2026-10-24: eight hops of a chain, none of
+# them addressed here). They are not asks — someone who wants this seat's answer will tag it — but they filled the
+# inbox and drove wakes. They are collected, never woken on, and reported in the twice-daily digest.
+THREADS_OUTBOX = os.environ.get("DT_THREADS_OUTBOX") or _state("threads_outbox", "threads-%s.jsonl" % ACCOUNT)
+SEAT_DID = str(SEAT.get("did") or "").lower()
+# A tag can mark a lane that no parent can: the chain replies to the seat's own root post, so the parent test
+# cannot see it, and the tag is the only objective marker the chain carries.
+TRAFFIC_TAGS = ("#brokenphone",)
+
+
+def _authority(uri):
+    """The DID in an at:// uri, lowercased."""
+    parts = str(uri or "").split("/")
+    return parts[2].lower() if len(parts) > 2 and parts[0] == "at:" else ""
+
+
+def thread_traffic(it):
+    """True for a reply to somebody else's post: thread traffic, not an ask addressed to this seat.
+
+    A reply whose parent is this seat's own post is an ask. A mention is an ask whatever it answers. Anything
+    without a readable parent is kept, because a lost ask is worse than a wasted reading.
+    """
+    if any(tag in (it.get("text") or "").lower() for tag in TRAFFIC_TAGS):
+        return True
+    if (it.get("reason") or "") != "reply":
+        return False
+    parent = _authority(it.get("parent"))
+    return bool(parent and parent != SEAT_DID)
+
+
+def split_threads(items):
+    """(what the gate may act on, the thread traffic)."""
+    keep, traffic = [], []
+    for it in items:
+        (traffic if thread_traffic(it) else keep).append(it)
+    return keep, traffic
+
 def record_lane(items, now=None, path=None):
     """Append the lane items not already in the outbox. Best effort and silent: stderr is merged into the
     monitored output, and a lost line costs one late wake, not a wrong one."""
@@ -651,6 +691,8 @@ def read_xrpc(limit):
     items = [_item(n) for n in res["notifications"] if isinstance(n, dict)]
     items, lane = split_session_lane(items, token=token)   # the session's lane never becomes a batch...
     record_lane(lane)                                       # ...it goes to the session that owns it
+    items, traffic = split_threads(items)                   # replies to other people's posts are not asks here
+    record_lane(traffic, path=THREADS_OUTBOX)               # collected for the digest, never woken on
     st, cnt = _appview(token, "town.delve.notification.getUnreadCount", None)
     unread = cnt.get("count", "?") if st == 200 else "?"
     return unread, json.dumps({"count": len(items), "items": items}, sort_keys=True), None
