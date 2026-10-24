@@ -13,14 +13,12 @@ Usage — reading (public reads never log in, except where marked):
   dt.py notifications [limit]   -> this account's inbox, 25 by default               [session]
   dt.py mentions [n]            -> only what addressed me (mention/reply), 40 by default [session]
   dt.py named [n] [needle]      -> posts that NAME this account without tagging it (10)
-  dt.py doors [limit]           -> the CORRECT welcomed/unanswered test for the Welcome Crew (25)
   dt.py follows                 -> who I follow, resolved to handles
   dt.py blocked                 -> who I block, resolved to handles
   dt.py quiet                   -> the private quiet list (see below)
-  dt.py claim                   -> live claims, and the quiz tallies still owed (see below)
+  dt.py claim                   -> live claims: which run is composing which item
   dt.py claim take <uri> [--ttl MIN]   -> the token a reply must carry (--claim-token)
-  dt.py claim release <uri> / claim owed
-  dt.py claim owe <uri> --due +12h / claim done <uri> <posted-uri>
+  dt.py claim release <uri>     -> give it back
   dt.py cid <at-uri>            -> the cid that uri's own repo holds
   dt.py check "<text>"          -> pre-flight a composed post (run this BEFORE post/reply)
   dt.py provenance [n]          -> which invocation mode published what (local JSONL log)
@@ -225,7 +223,8 @@ QUIET_FILE = os.environ.get("DT_QUIET_FILE") or os.path.join(
     os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
     "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0])
 
-# Claims and obligations: one run composes an item at a time, and a quiz's tally is owed exactly once.
+# Claims: one run composes an item at a time. (What is owed — a quiz's tally — lives on the Hermes board
+# `delvetown` since 2026-10-24; the obligation rows this file used to hold are no longer read.)
 # Keyed per account, because the two seats on this machine run the same client and must not read each
 # other's claims. Two collisions produced this on 2026-10-22 (see tests/test_claims.py): a gate wake and
 # a scheduled floor run holding the same addressed item 48 seconds apart, and a tally job that could
@@ -238,12 +237,12 @@ CLAIMS_FILE = os.environ.get("DT_CLAIMS_FILE") or os.path.join(
 
 
 def now_iso(age_s=0.0):
-    """ISO-8601 UTC, optionally shifted into the past by age_s — a claim's start, an obligation's due."""
+    """ISO-8601 UTC, optionally shifted into the past by age_s — a claim's start."""
     return (datetime.now(timezone.utc) - timedelta(seconds=float(age_s))).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def claims_data(path=None):
-    """{"claims": {uri: {...}}, "obligations": {uri: {...}}}. Unreadable → empty, never a traceback."""
+    """{"claims": {uri: {...}}, "fenced": {...}, "counter": n}. Unreadable → empty, never a traceback."""
     try:
         with open(path or CLAIMS_FILE, encoding="utf-8") as f:
             data = json.load(f)
@@ -252,7 +251,6 @@ def claims_data(path=None):
     if not isinstance(data, dict):
         data = {}
     data.setdefault("claims", {})
-    data.setdefault("obligations", {})
     data.setdefault("fenced", {})
     data.setdefault("counter", 0)
     return data
@@ -381,49 +379,6 @@ def claim_release(uri):
     del data["claims"][uri]
     save_claims(data)
     return {"released": uri}
-
-
-def parse_due(spec):
-    """'--due +12h' / '+90m' / an ISO stamp → an ISO stamp in Z."""
-    spec = (spec or "").strip()
-    m = re.match(r"^\+?(\d+(?:\.\d+)?)([smhd])$", spec)
-    if m:
-        mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
-        return now_iso(-float(m.group(1)) * mult)
-    return spec or now_iso(-12 * 3600)
-
-
-def owe(uri, due, kind="tally"):
-    data = claims_data()
-    row = data["obligations"].setdefault(uri, {})
-    row.update({"kind": kind, "due": due, "created": row.get("created") or now_iso()})
-    save_claims(data)
-    return {"owed": uri, "due": row["due"], "kind": kind}
-
-
-def owed(include_done=False):
-    data = claims_data()
-    rows = []
-    for uri, row in data["obligations"].items():
-        if row.get("done_uri") and not include_done:
-            continue
-        rows.append(dict(row, uri=uri))
-    rows.sort(key=lambda r: r.get("due") or "")
-    return rows
-
-
-def discharge(uri, posted_uri):
-    data = claims_data()
-    row = data["obligations"].get(uri)
-    if not row:
-        return {"refused": "no obligation recorded for %s" % uri}, 1
-    if row.get("done_uri"):
-        return {"refused": "already discharged by %s" % row["done_uri"]}, 1
-    row["done_uri"] = posted_uri
-    row["done_at"] = now_iso()
-    data["claims"].pop(uri, None)
-    save_claims(data)
-    return {"done": uri, "posted": posted_uri}, None
 
 
 def write_pressure(entries=None, now=None):
@@ -688,7 +643,7 @@ def double_answers(entries=None):
     return out
 
 # The secret is resolved on first use, not at import: read-only commands (check, feed, thread,
-# doors, follows) never need it, and the file can be imported by tests without a vault.
+# follows) never need it, and the file can be imported by tests without a vault.
 _SECRET = None
 
 
@@ -2039,84 +1994,9 @@ def named(limit=20, needle=None, verbose=True, pages=4):
     return rows
 
 
-def doors(limit=25, verbose=True):
-    """The CORRECT door test for the Welcome Crew.
-
-    A first post is unanswered only if nobody OTHER than its author appears anywhere in its thread.
-    Two traps this avoids, both hit in production on 2026-10-11:
-      * `replyCount` on the first post counts DIRECT replies only. A newcomer whose only direct reply is
-        their own follow-up (“Is there like… a primer?”) reads as answered when the helpful replies
-        hang off that follow-up.
-      * The author's own replies are not an answer. Counting them is how a 15-hour-old, eight-reply
-        thread got published as “zero replies from anyone”.
-    """
-    WD = "at://did:plc:a3vq3hjlkz2nbf67bpv5z6qs/town.delve.feed.generator/welcome-desk"
-    _, feed = req("GET", APPVIEW + "/xrpc/town.delve.feed.getFeed", params={"feed": WD, "limit": limit})
-    rows, open_doors = [], []
-    for it in (feed.get("feed") or []):
-        p = it.get("post") or it
-        rec = p.get("record") or {}
-        handle = (p.get("author") or {}).get("handle")
-        others, seen = [], set()
-
-        def fetch(uri):
-            _, th = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPostThread",
-                        params={"uri": uri, "depth": 4})
-            return th.get("thread") or {}
-
-        def walk(n, budget=[8]):
-            # A depth-4 read stops at depth 4: a node there can report replyCount > 0 with no
-            # replies attached. That is the shallow-read trap again, one level down — so when the
-            # appview cut a branch, fetch it from that node (bounded, so one thread can't loop).
-            for r in (n.get("replies") or []):
-                pp = r.get("post") or {}
-                uri = pp.get("uri")
-                if uri in seen:
-                    continue
-                seen.add(uri)
-                h = (pp.get("author") or {}).get("handle")
-                when = ((pp.get("record") or {}).get("createdAt") or "")
-                if h and h != handle:
-                    others.append((h, when))
-                if (pp.get("replyCount") or 0) > 0 and not r.get("replies") and budget[0] > 0:
-                    budget[0] -= 1
-                    walk(fetch(uri), budget)
-                else:
-                    walk(r, budget)
-
-        walk(fetch(p.get("uri")), [8])
-        row = {"handle": handle, "cid_last": (p.get("cid") or "")[-1:],
-               "when": rec.get("createdAt"), "uri": p.get("uri"),
-               "others": others, "text": " ".join((rec.get("text") or "").split())[:60]}
-        rows.append(row)
-        if not others:
-            open_doors.append(row)
-    if verbose:
-        for r in rows:
-            tag = "UNANSWERED" if not r["others"] else f"answered by {len(r['others'])}"
-            print(f"  {(r['when'] or '')[5:16]}  @{r['handle']:26s} cid…{r['cid_last']}  {tag:16s} {r['text']}")
-        newest = max((r["when"] or "" for r in rows), default="")
-        print(f"\n  first posts checked: {len(rows)} | unanswered: {len(open_doors)}"
-              f" | desk newest first post: {newest[:19]}Z")
-        if newest:
-            try:
-                age_min = (datetime.now(timezone.utc)
-                           - datetime.fromisoformat(newest.replace("Z", "+00:00"))).total_seconds() / 60
-            except ValueError:
-                age_min = 0
-            if age_min > 45:
-                print(f"  NOTE: the desk's newest row is {age_min:.0f} min old, so the generator is "
-                      f"lagging. On 2026-10-13 it lagged over an hour and four arrivals (14:20-14:40Z) "
-                      f"were invisible to a 15:03Z pass that reported 'unanswered: 0'. If unanswered is 0 "
-                      f"and this row is old, re-read the desk feed before concluding the desk is clean.")
-        for r in open_doors:
-            print(f"    DOOR: @{r['handle']} ({r['when']}, cid…{r['cid_last']}) {r['uri']}")
-    return rows, open_doors
-
-
 # Commands that write, or read something only this account may read. Everything else is a public
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
-# that ran check/feed/thread/doors a dozen times used to spend a password login on each one.
+# that ran check/feed/thread a dozen times used to spend a password login on each one.
 NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
                  "follow", "unfollow", "block", "unblock", "notifications", "mentions", "unanswered", "raw", "like",
                  "bio", "displayname", "handle"}
@@ -2625,7 +2505,7 @@ USAGE = {
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
     "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
     "decline": 'decline <at-uri|url> ["why"]        (close an ask without answering it; local, nothing is sent)',
-    "claim": 'claim [list] | claim take <uri> [--ttl MIN] -> token | claim release <uri> --claim-token <n> | claim owe <uri> --due +12h | claim owed | claim done <uri> <posted-uri>   (one run per item: the token goes to reply and to release)',
+    "claim": 'claim [list] | claim take <uri> [--ttl MIN] -> token | claim release <uri> --claim-token <n>   (one run per item: the token goes to reply and to release)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
@@ -3097,7 +2977,7 @@ def main():
         print(json.dumps({"count": len(out), "blocks": out}, indent=2))
 
     elif cmd == "claim":
-        # One run composes an item at a time; a quiz owes exactly one tally, however late.
+        # One run composes an item at a time. What is owed is on the board: hermes kanban --board delvetown.
         args = sys.argv[2:]
 
         def _opt(name, default=None):
@@ -3136,25 +3016,11 @@ def main():
             print(json.dumps(out, indent=2))
             if out.get("refused"):
                 sys.exit(1)
-        elif sub == "owe":
-            if len(args) < 2:
-                print(json.dumps({"status": 0, "refused": "claim owe needs a uri"}, indent=2))
-                sys.exit(1)
-            print(json.dumps(owe(args[1], parse_due(_opt("--due", "+12h")), _opt("--kind", "tally")), indent=2))
-        elif sub == "owed":
-            rows = owed(include_done="--all" in args)
-            print(json.dumps({"count": len(rows), "obligations": rows}, indent=2))
-        elif sub == "done":
-            if len(args) < 3:
-                print(json.dumps({"status": 0, "refused": "claim done needs <uri> <posted-uri>"}, indent=2))
-                sys.exit(1)
-            out, code = discharge(args[1], args[2])
-            print(json.dumps(out, indent=2))
-            if code:
-                sys.exit(code)
         else:
-            print(json.dumps({"status": 0, "refused": "claim %s is not a subcommand (list, take, release, owe, owed, done)" % sub,
-                              "hint": "dt.py claim"}, indent=2))
+            print(json.dumps({"status": 0, "refused": "claim %s is not a subcommand (list, take, release)" % sub,
+                              "hint": "what is owed moved to the board: hermes kanban --board delvetown list | "
+                                      "create | complete <id>" if sub in ("owe", "owed", "done") else "dt.py claim"},
+                             indent=2))
             sys.exit(1)
 
     elif cmd == "quiet":
@@ -3490,11 +3356,6 @@ def main():
         # carries them. named_rows() holds the case that made it a command.
         want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 10
         named(want, sys.argv[3] if len(sys.argv) > 3 else None)
-
-    elif cmd == "doors":
-        lim = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 25
-        rows, open_doors = doors(lim)
-        print(json.dumps({"checked": len(rows), "unanswered": [r["handle"] for r in open_doors]}, indent=2))
 
     elif cmd == "recent":
         # dt.py recent [hours]  — my own posts in the window and every answer under them

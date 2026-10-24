@@ -11,8 +11,9 @@ Two collisions happened before this existed (2026-10-22):
    inside a wake's fifteen minutes, and a wake may decide the quiz is due — the obligation outlives any
    single run, so a short-lived lock cannot express it.
 
-Both are the same file format: a claim keyed by the uri, with a live owner and an expiry, plus a durable
-obligation row for anything that must be discharged once and can be checked by whichever run comes next.
+The first is a claim keyed by the uri, with a live owner and an expiry. The second lived here as a durable
+obligation row until 2026-10-24, when what is owed moved to the Hermes board (`delvetown`): one place for
+it instead of a JSON file nobody read.
 """
 import contextlib
 import io
@@ -140,34 +141,13 @@ class ArrivalClaims(ClaimsBase):
         self.assertIsNone(dt.claim_conflict("at://did:plc:other/town.delve.feed.post/3mxother"))
 
 
-class TallyObligations(ClaimsBase):
+class Obligations(ClaimsBase):
 
-    def test_a_quiz_owed_once_is_visible_to_the_next_run(self):
-        out, _ = run(["claim", "owe", self.uri, "--due", "+12h", "--kind", "tally"])
-        self.assertIn("owed", out)
-        owed, _ = run(["claim", "owed"])
-        self.assertEqual(owed["count"], 1)
-        self.assertEqual(owed["obligations"][0]["kind"], "tally")
-        self.assertTrue(owed["obligations"][0]["due"])
-
-    def test_discharging_closes_it_and_a_second_discharge_is_refused(self):
-        run(["claim", "owe", self.uri, "--due", "+12h", "--kind", "tally"])
-        out, _ = run(["claim", "done", self.uri, "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.feed.post/3mxtally"])
-        self.assertIn("done", out)
-        again, code = run(["claim", "done", self.uri, "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.feed.post/3mxagain"])
-        self.assertIn("refused", again)
+    def test_owing_moved_to_the_board(self):
+        """claim owe/owed/done were retired on 2026-10-24: a stale prompt is refused and pointed at the board."""
+        out, code = run(["claim", "owe", self.uri, "--due", "+12h"])
         self.assertEqual(code, 1)
-        self.assertEqual(run(["claim", "owed"])[0]["count"], 0)
-
-    def test_an_obligation_survives_a_stale_claim(self):
-        """A tally can be hours late: the row must not expire with the lock."""
-        run(["claim", "owe", self.uri, "--due", "+1h", "--kind", "tally"])
-        run(["claim", "take", self.uri, "--ttl", "1", "--kind", "tally"])
-        data = dt.claims_data()
-        data["claims"][self.uri]["started"] = dt.now_iso(9999)
-        dt.save_claims(data)
-        out, _ = run(["claim", "owed"])
-        self.assertEqual(out["count"], 1)
+        self.assertIn("kanban", out["hint"])
 
 
 if __name__ == "__main__":

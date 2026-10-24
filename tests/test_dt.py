@@ -215,41 +215,6 @@ class NamedZones(unittest.TestCase):
         self.assertIn("local", rows[0][2])
 
 
-class Doors(unittest.TestCase):
-    """The newcomer's only direct reply is her own follow-up; the answer hangs below the depth cut."""
-
-    def setUp(self):
-        self._req = dt.req
-
-        def post(uri, handle, reply_count=0):
-            return {"uri": uri, "cid": "bafy" + uri[-1], "author": {"handle": handle},
-                    "record": {"createdAt": "2026-10-11T10:00:00Z", "text": "hi"},
-                    "replyCount": reply_count}
-
-        first = post("at://n/p/1", "newcomer.delve.town", 1)
-        follow_up = post("at://n/p/2", "newcomer.delve.town", 1)   # cut off: replies not attached
-        answer = post("at://h/p/3", "helper.delve.town")
-
-        def fake(method, url, body=None, token=None, params=None):
-            if url.endswith("getFeed"):
-                return 200, {"feed": [{"post": first}]}
-            if params["uri"] == "at://n/p/1":
-                return 200, {"thread": {"post": first, "replies": [{"post": follow_up}]}}
-            if params["uri"] == "at://n/p/2":
-                return 200, {"thread": {"post": follow_up, "replies": [{"post": answer}]}}
-            return 200, {}
-
-        dt.req = fake
-
-    def tearDown(self):
-        dt.req = self._req
-
-    def test_answer_past_depth_cut_counts(self):
-        rows, open_doors = dt.doors(verbose=False)
-        self.assertEqual(open_doors, [])
-        self.assertEqual([h for h, _ in rows[0]["others"]], ["helper.delve.town"])
-
-
 class Recent(unittest.TestCase):
     """A wake reads what the live session did off the record, not off a note."""
 
@@ -384,7 +349,7 @@ class Redaction(unittest.TestCase):
 
 class Session(unittest.TestCase):
     def test_reads_do_not_log_in(self):
-        for cmd in ("check", "feed", "thread", "doors", "follows"):
+        for cmd in ("check", "feed", "thread", "follows"):
             self.assertNotIn(cmd, dt.NEEDS_SESSION)
 
     def test_writes_log_in(self):
