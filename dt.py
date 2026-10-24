@@ -165,9 +165,13 @@ ACCOUNT_NAME = _A.get("name") or ACCOUNT
 QUIETYEAR_REFUSAL = bool(_A.get("quietyear_refusal", True))   # a seat's switch; on unless it says off
 
 
-def _state_file(kind, legacy, base=None):
-    """A seat's state file: the name seats.json gives it, else the name this client always derived."""
-    base = base or os.path.expanduser("~")
+def _state_file(kind, legacy):
+    """A seat's state file: the name seats.json gives it, else the name this client always derived. The
+    directory is resolved as the monitor resolves it — HERMES_REAL_HOME, else ~ — because a profile can run
+    with its own HOME, and two programs reading "the" state directory from two homes would split silently.
+    (Until 2026-10-24 the publish log and the session cache here used ~ alone; the two are equal on the
+    machine this was written for, which is why that never showed.)"""
+    base = os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~")
     return os.path.join(base, ".local", "state", "delvetown-dt", (_A.get("files") or {}).get(kind) or legacy)
 # Only an em dash, an en dash or a double hyphen counts as a signature line. A single "-" is how a
 # bullet list starts, and a post ending in a list used to read as "already signed" and go out bare.
@@ -220,8 +224,7 @@ GUARDED_KINDS = ("post", "reply", "delete")
 # Resolved against HERMES_REAL_HOME as the monitor resolves it: a profile can run with its own HOME, and
 # two programs reading "the" quiet list from two homes would each hold a different one.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state_file(
-    "quiet", "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0],
-    base=os.environ.get("HERMES_REAL_HOME"))
+    "quiet", "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0])
 
 # Claims: one run composes an item at a time. (What is owed — a quiz's tally — lives on the Hermes board
 # `delvetown` since 2026-10-24; the obligation rows this file used to hold are no longer read.)
@@ -232,7 +235,7 @@ QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state_file(
 # the first but cannot close it — both runs can read before either writes, and the appview lags, so a
 # reply published seconds earlier may not be visible at all.
 CLAIMS_FILE = os.environ.get("DT_CLAIMS_FILE") or _state_file(
-    "claims", "claims-%s.json" % (HANDLE.split(".")[0] or ACCOUNT), base=os.environ.get("HERMES_REAL_HOME"))
+    "claims", "claims-%s.json" % (HANDLE.split(".")[0] or ACCOUNT))
 
 
 def now_iso(age_s=0.0):
