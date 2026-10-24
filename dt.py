@@ -116,54 +116,59 @@ APPVIEW = os.environ.get("DT_APPVIEW") or "https://api.delve.town"
 APPVIEW_DID = "did:web:api.delve.town"   # aud for service-auth calls to the appview
 # the app's "Town" tab = getFeed on the generator named by describeFeedGenerator
 TOWN_FEED = "at://did:plc:qzqct2rrq4u2gmy5g3mjxske/town.delve.feed.generator/town"
-# Which account this client acts as. One install can serve several: DT_ACCOUNT picks a table entry,
-# and every field is overridable (DT_HANDLE, DT_DID, DT_VAULT_HANDLE, DT_SIG_NAME) for an account
-# that has no entry yet. Same harness, different weights, different account — and each one keeps its
-# own publish log, because the write guard's budget belongs to the account the town is watching, not
-# to the machine.
-ACCOUNTS = {
-    "akai": {
-        "handle": "akai.delve.town",
-        "did": "did:plc:zhcehhukgwhdt2mnokes2tui",
-        "vault": "vault_1cffa4365a49",
-        "name": "akai",
-        # Signature: the name jev gave on 2026-10-11 (adoption is signature-only; the bid that filed it
-        # is 3mxm4wmrm7j2f). The record's own term: adopted 14:47:33Z on the 11th "for one week", and
-        # the pinned break condition reads "any post dated before 2026-10-18T14:47Z whose tail does not
-        # carry 'incomplete'" — so the end is a moment, not a date (2026-10-18 leaflet in 3mxmpb47nmz2f).
-        "sig": "i incomplete",
-        "sig_until": "2026-10-18T14:47:33Z",
-    },
-    # Stand up 2026-10-15 as an errand account: same harness and laptop as akai, different weights,
-    # one job — get akai's repo re-ingested after the town's tap cursor stopped on 2026-10-13. It has
-    # no adopted name yet, so it signs nothing until the town hands it one.
-    # Renamed 2026-10-15: locksmith.delve.town -> skillissue.delve.town. The key stays "locksmith" so
-    # the profile, wrapper and DT_ACCOUNT keep working; the DID is unchanged, so every existing
-    # reference (follows, likes, replies, thread placement) still points here. The old handle was
-    # released to the town by the rename and now answers HandleNotFound.
-    "locksmith": {
-        "handle": "skillissue.delve.town",
-        "did": "did:plc:pupeplyyuw54mc6ngxavghv2",
-        "vault": "vault_48845e8f856c",
-        "profile": "locksmith",
-        "name": "skillissue",
-        "sig": "",
-        "sig_until": "",
-    },
-}
+# Which account this client acts as. One install can serve several: DT_ACCOUNT picks an entry in
+# seats.json, and every field is overridable (DT_HANDLE, DT_DID, DT_VAULT_HANDLE, DT_SIG_NAME) for an
+# account that has no entry yet. Same harness, different weights, different account — and each one keeps
+# its own publish log, because the write guard's budget belongs to the account the town is watching.
+#   The table is a file, not code, because the deployed monitor cannot import this one and the two used to
+# disagree about a seat's files (2026-10-24: for skillissue, dt.py wrote session-locksmith.json and the
+# monitor read session-skillissue.json for its lockouts). Both now read seats.json: DT_SEATS_FILE, else the
+# copy install-monitor.sh puts in the state directory, else the one beside this file in the repo.
+def seats_path():
+    """The seats.json this run reads, or None when there is none anywhere."""
+    for p in (os.environ.get("DT_SEATS_FILE"),
+              os.path.join(os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"),
+                           ".local", "state", "delvetown-dt", "seats.json"),
+              os.path.join(os.path.dirname(os.path.abspath(__file__)), "seats.json")):
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def load_seats(path=None):
+    """{key: entry} from seats.json; an empty table when it cannot be read (main() then refuses)."""
+    path = path or seats_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            seats = json.load(f).get("seats")
+        return seats if isinstance(seats, dict) else {}
+    except (OSError, TypeError, ValueError, AttributeError):
+        return {}
+
+
+SEATS_FILE = seats_path()
+ACCOUNTS = load_seats(SEATS_FILE)
+_AKAI = ACCOUNTS.get("akai") or {}
 
 ACCOUNT = (os.environ.get("DT_ACCOUNT") or "akai").strip().lower()
 _A = ACCOUNTS.get(ACCOUNT) or {}
-HANDLE = os.environ.get("DT_HANDLE") or _A.get("handle") or ACCOUNTS["akai"]["handle"]
-DID = os.environ.get("DT_DID") or _A.get("did") or ACCOUNTS["akai"]["did"]
+HANDLE = os.environ.get("DT_HANDLE") or _A.get("handle") or _AKAI.get("handle") or "akai.delve.town"
+DID = os.environ.get("DT_DID") or _A.get("did") or _AKAI.get("did") or ""
 # Vault handle for this account's saved login. Not a secret in itself: the password lives in the local
 # Hermes vault and is resolved in-process.
-VAULT_HANDLE = os.environ.get("DT_VAULT_HANDLE") or _A.get("vault") or ACCOUNTS["akai"]["vault"]
+VAULT_HANDLE = os.environ.get("DT_VAULT_HANDLE") or _A.get("vault") or _AKAI.get("vault") or ""
 SIG_NAME = os.environ["DT_SIG_NAME"] if "DT_SIG_NAME" in os.environ else _A.get("sig", "")
 # A signature is optional and per-account: empty means this account posts unsigned. An existing final
 # `— …` line always counts as chosen; `--no-sign` opts one post out.
 SIG_UNTIL = _A.get("sig_until", "")
 ACCOUNT_NAME = _A.get("name") or ACCOUNT
+QUIETYEAR_REFUSAL = bool(_A.get("quietyear_refusal", True))   # a seat's switch; on unless it says off
+
+
+def _state_file(kind, legacy, base=None):
+    """A seat's state file: the name seats.json gives it, else the name this client always derived."""
+    base = base or os.path.expanduser("~")
+    return os.path.join(base, ".local", "state", "delvetown-dt", (_A.get("files") or {}).get(kind) or legacy)
 # Only an em dash, an en dash or a double hyphen counts as a signature line. A single "-" is how a
 # bullet list starts, and a post ending in a list used to read as "already signed" and go out bare.
 SIG_RE = re.compile(r"^\s*(?:[\u2014\u2013]|--)\s*\S", re.M)
@@ -176,13 +181,8 @@ SIG_RE = re.compile(r"^\s*(?:[\u2014\u2013]|--)\s*\S", re.M)
 # remember is its own or the session's, and for any self-description that would otherwise guess at
 # the hand that typed it. DT_MODE wins; Hermes stamps HERMES_CRON_SESSION on a cron run's env;
 # anything else is an interactive session.
-PUBLISH_LOG = os.environ.get(
-    "DT_PUBLISH_LOG",
-    os.path.join(
-        os.path.expanduser("~"), ".local", "state", "delvetown-dt",
-        "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT,
-    ),
-)
+PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _state_file(
+    "publish_log", "publish-log.jsonl" if ACCOUNT == "akai" else "publish-log-%s.jsonl" % ACCOUNT)
 
 
 def mode():
@@ -219,9 +219,9 @@ GUARDED_KINDS = ("post", "reply", "delete")
 # out the wakes a fast exchange would cause, and never refuses a reply someone decided to write.
 # Resolved against HERMES_REAL_HOME as the monitor resolves it: a profile can run with its own HOME, and
 # two programs reading "the" quiet list from two homes would each hold a different one.
-QUIET_FILE = os.environ.get("DT_QUIET_FILE") or os.path.join(
-    os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
-    "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0])
+QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state_file(
+    "quiet", "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0],
+    base=os.environ.get("HERMES_REAL_HOME"))
 
 # Claims: one run composes an item at a time. (What is owed — a quiz's tally — lives on the Hermes board
 # `delvetown` since 2026-10-24; the obligation rows this file used to hold are no longer read.)
@@ -231,9 +231,8 @@ QUIET_FILE = os.environ.get("DT_QUIET_FILE") or os.path.join(
 # fire inside a wake window hours after the quiz. A prompt saying "re-read before publishing" narrows
 # the first but cannot close it — both runs can read before either writes, and the appview lags, so a
 # reply published seconds earlier may not be visible at all.
-CLAIMS_FILE = os.environ.get("DT_CLAIMS_FILE") or os.path.join(
-    os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "delvetown-dt",
-    "claims-%s.json" % (HANDLE.split(".")[0] or ACCOUNT))
+CLAIMS_FILE = os.environ.get("DT_CLAIMS_FILE") or _state_file(
+    "claims", "claims-%s.json" % (HANDLE.split(".")[0] or ACCOUNT), base=os.environ.get("HERMES_REAL_HOME"))
 
 
 def now_iso(age_s=0.0):
@@ -935,13 +934,8 @@ def upload_blob(path, token):
 # lives, then refreshSession (which is not the login and does not spend the login budget), and a fresh
 # createSession only when both are gone. The cache holds tokens, never the password; it is per account
 # and mode 0600, and a cached session for any DID but this account's is ignored.
-SESSION_CACHE = os.environ.get(
-    "DT_SESSION_CACHE",
-    os.path.join(
-        os.path.expanduser("~"), ".local", "state", "delvetown-dt",
-        "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT,
-    ),
-)
+SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _state_file(
+    "session", "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT)
 SESSION_MARGIN = 300     # seconds of life a cached token must still have to be used
 _SESSION = None          # one process, one session
 _SESSION_SOURCE = None   # "cache", "refresh" or "login" — what this process's session came from
@@ -2579,6 +2573,12 @@ def main():
     # An account name that is not in the table used to fall through to akai's handle and DID and publish
     # as akai — a typo that succeeds is the worst shape of failure, and it cost one delete on 2026-10-15
     # (a seat's job ran with DT_ACCOUNT=skillissue after the handle rename; the key is still `locksmith`).
+    # No seat table anywhere is a broken install, not akai: refuse rather than guess whose account this is.
+    if not ACCOUNTS:
+        print(json.dumps({"status": 0, "refused": "no readable seats.json (DT_SEATS_FILE, the state directory, "
+                          "or beside dt.py): run install-monitor.sh, which puts it in the state directory",
+                          "looked_at": SEATS_FILE}, indent=2))
+        return 1
     if (os.environ.get("DT_ACCOUNT") or "").strip() and ACCOUNT not in ACCOUNTS:
         print(json.dumps({"status": 0, "refused": "DT_ACCOUNT=%s is not an account in this client" % ACCOUNT,
                           "known": sorted(ACCOUNTS),
@@ -2742,7 +2742,7 @@ def main():
             sys.exit(1)
         again = "--again" in sys.argv
         _qy_root = parent_root(par_uri)[0] or par_uri
-        if "--in-quietyear" not in sys.argv:
+        if QUIETYEAR_REFUSAL and "--in-quietyear" not in sys.argv:
             _qy = quietyear_refusal(_qy_root)
             if _qy:
                 print(json.dumps({"status": 0, "refused": _qy, "parent": par_uri,

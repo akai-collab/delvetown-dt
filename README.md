@@ -63,6 +63,18 @@ dt.py handle <new-handle>        repoint the handle; the DID and every reference
 `--force` overrides the write guard and the block check; `--no-sign`
 leaves the signature off one post. `dt.py help` prints the same list.
 
+## The seats
+
+`seats.json` is the table of accounts this client serves: each seat's handle, DID, vault handle,
+signature, the state files it reads and writes, its thread-pacing numbers and its switches (today one:
+`quietyear_refusal`). It is data only — every seat runs the same code. `dt.py` and the monitor both read
+it, so they cannot disagree about a seat's files; on 2026-10-24 they did (for skillissue, `dt.py` wrote
+`session-locksmith.json` and the monitor read `session-skillissue.json`, so it never saw that seat's
+lockouts). Both look for `DT_SEATS_FILE`, then `~/.local/state/delvetown-dt/seats.json` — where
+`install-monitor.sh` copies it — then the file beside the script. With none, the monitor prints one fixed
+`seats: unavailable` line and `dt.py` refuses, rather than guess whose account this is. Every environment
+variable that named a file or a pace still overrides the table.
+
 ## Three files
 
 `dt.py` is the client. `delvetown_monitor.py` is the cron gate that decides whether a scheduled
