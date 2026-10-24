@@ -94,7 +94,7 @@ class TheLog(Fixture):
         self.write_log([reply("r1"), {"ts": iso(1), "kind": "decline", "subject": OTHER, "why": "spam"}])
         self.assertEqual(self.dt.ask_state(ASK)[0], "reply")
         self.assertEqual(self.dt.ask_state(OTHER)[0], "decline")
-        self.assertEqual(self.m.answered_asks(self.log), {ASK, OTHER})
+        self.assertEqual(self.m.answered_asks(self.log), {ASK: "reply", OTHER: "decline"})
 
     def test_a_deleted_reply_answers_nothing(self):
         """The 14:06Z repair: published, deleted 49 seconds later, republished. The delete reopens the ask
@@ -102,7 +102,7 @@ class TheLog(Fixture):
         self.write_log([reply("slip")])
         self.write_log([{"ts": iso(49), "kind": "delete", "uri": mine("slip")}])
         self.assertIsNone(self.dt.ask_state(ASK)[0])
-        self.assertEqual(self.m.answered_asks(self.log), set())
+        self.assertEqual(self.m.answered_asks(self.log), {})
         self.write_log([reply("real", t=60)])
         self.assertEqual(self.dt.ask_state(ASK)[0], "reply")
         self.assertEqual(self.dt.double_answers(), [])
@@ -211,6 +211,72 @@ class Reply(Fixture):
         self.assertIn("bare rkey", r.stdout)
 
 
+class Abstain(Fixture):
+    """2026-10-24: four repo-lane items a wake may not answer were re-offered, because a run that looked and
+    correctly wrote nothing closed nothing. `decline` would stop the churn but also refuse the session that
+    should answer them. `abstain` closes an ask for the gate and leaves it answerable."""
+
+    def abstain(self, subject=ASK, t=5, **kw):
+        return dict({"ts": iso(t), "kind": "abstain", "subject": subject}, **kw)
+
+    def test_an_abstained_ask_is_closed_for_the_gate_and_open_to_a_session(self):
+        self.write_log([self.abstain(why="repo lane")])
+        self.assertEqual(self.m.answered_asks(self.log), {ASK: "abstain"})
+        self.assertEqual(self.dt.ask_state(ASK)[0], "abstain")
+        self.assertIsNone(self.dt.answered_refusal(ASK, repo={}), "a session may still answer it")
+        out, st = self.tick([item(ASK)], {}, 0)
+        self.assertEqual((out, st["pending"]), ("wake=none", {}))
+
+    def test_an_abstain_never_reopens_an_answer_or_a_decline(self):
+        self.write_log([reply("r1"), self.abstain(), {"ts": iso(6), "kind": "decline", "subject": OTHER},
+                        self.abstain(OTHER, t=7)])
+        self.assertEqual(self.m.answered_asks(self.log), {ASK: "reply", OTHER: "decline"})
+        self.assertEqual({k: v[0] for k, v in self.dt.ask_states().items()}, {ASK: "reply", OTHER: "decline"})
+
+    def test_abstain_on_purpose_turns_a_decline_back(self):
+        """Today's repo-lane declines refuse the session; `dt.py abstain` on them writes replaces_decline."""
+        self.write_log([{"ts": iso(1), "kind": "decline", "subject": ASK}, self.abstain(replaces_decline=True)])
+        self.assertEqual(self.m.answered_asks(self.log), {ASK: "abstain"})
+        self.assertIsNone(self.dt.answered_refusal(ASK, repo={}))
+
+    def test_a_later_reply_closes_it_for_good(self):
+        self.write_log([self.abstain(), reply("r1", t=9)])
+        self.assertEqual(self.dt.ask_state(ASK)[0], "reply")
+        self.assertIn("already answered", self.dt.answered_refusal(ASK, repo={}))
+
+    def test_an_abstained_batch_is_not_reoffered_and_is_counted_as_such(self):
+        _, st = self.tick([item(ASK), item(OTHER)], {}, 0)
+        first, st = self.tick([item(ASK), item(OTHER)], st, 600)
+        self.write_log([self.abstain(t=700), self.abstain(OTHER, t=701)])
+        out, st = self.tick([], st, 600 + self.m.REOFFER_AFTER_S)
+        self.assertEqual(out, first, "looked and abstained is not a dead run")
+        third = "at://%s/town.delve.feed.post/3myk42g4b2o29" % SELENE
+        _, st = self.tick([item(third)], st, 4000)
+        out, st = self.tick([item(third)], st, 4600)
+        self.assertIn("previous batch of 2: 0 answered, 0 declined, 2 abstained, 0 untouched", out)
+
+    def run_dt(self, *args):
+        env = dict(os.environ, DT_PUBLISH_LOG=self.log, DT_DRY_RUN="0", HOME=self.tmp, HERMES_REAL_HOME=self.tmp,
+                   DT_PDS="http://127.0.0.1:9", DT_APPVIEW="http://127.0.0.1:9")
+        return subprocess.run([sys.executable, DT, *args], env=env, capture_output=True, text=True, timeout=60)
+
+    def test_the_command_downgrades_a_decline_and_refuses_a_bare_rkey(self):
+        self.write_log([{"ts": iso(1), "kind": "decline", "subject": ASK}])
+        r = self.run_dt("abstain", ASK, "repo lane: the session answers these")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(json.loads(r.stdout)["replaced_decline"])
+        self.assertEqual(self.lines()[-1]["kind"], "abstain")
+        self.assertIsNone(self.dt.answered_refusal(ASK, repo={}))
+        self.assertEqual(self.run_dt("abstain", "3myk42g4b2o27").returncode, 1)
+
+    def test_a_decline_may_harden_an_abstention(self):
+        self.write_log([self.abstain()])
+        r = self.run_dt("decline", ASK, "nobody should answer this after all")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.m.answered_asks(self.log), {ASK: "decline"})
+        self.assertIn("declined", self.dt.answered_refusal(ASK, repo={}))
+
+
 class Gate(Fixture):
     """The monitor: an ask the log closes never wakes, whoever closed it; a double wakes once."""
 
@@ -271,7 +337,7 @@ class Gate(Fixture):
         self.assertEqual(recent, [])
 
     def test_an_unreadable_log_is_the_old_behaviour(self):
-        self.assertEqual(self.m.answered_asks(os.path.join(self.tmp, "absent.jsonl")), set())
+        self.assertEqual(self.m.answered_asks(os.path.join(self.tmp, "absent.jsonl")), {})
         self.assertEqual(self.m.double_answers(os.path.join(self.tmp, "absent.jsonl")), [])
 
 

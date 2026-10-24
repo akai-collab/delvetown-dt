@@ -866,8 +866,12 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
         out.append("also: " + ", ".join(f"{v} {k}" for k, v in sorted(also.items())))
     if st["batch"]:
         # How the previous batch went, so a run that answered part of it is visible from the report alone.
+        # Abstained is its own count: a run that looked and correctly wrote nothing is not a dead run.
         prev = [u for u in st["batch"] if u]
-        out.append("previous batch: %d of %d answered or declined" % (sum(closed(u) for u in prev), len(prev)))
+        how = [answered.get(u) or answered.get("rkey:" + str(u).split("/")[-1]) if isinstance(answered, dict)
+               else ("reply" if closed(u) else None) for u in prev]
+        out.append("previous batch of %d: %d answered, %d declined, %d abstained, %d untouched" % (
+            len(prev), how.count("reply"), how.count("decline"), how.count("abstain"), how.count(None)))
     waiting = [paced[u] for u in st["pending"] if paced[u]]
     if waiting:
         # Said so that a run does not go looking for the thread itself: it is being answered later.
@@ -978,23 +982,31 @@ def _log_entries(publish_log=None):
 
 
 def answered_asks(publish_log=None, entries=None):
-    """The asks dt.py's publish log closes: the parent of every `reply` whose record no later `delete`
-    removed, and the subject of every `decline`. A reply logged before 2026-10-15 carries only its
+    """{ask: how it was closed} from dt.py's publish log: `reply` for the parent of every reply whose record
+    no later `delete` removed, `decline`, and `abstain` — a run looked and chose not to act, which closes the
+    ask here (no wake, no re-offer) though a session may still answer it. An abstain never overrides a reply
+    or a decline unless it says `replaces_decline`, the rule dt.py's `ask_states` applies. A reply logged before 2026-10-15 carries only its
     parent's rkey, kept as `rkey:<rkey>`. Read whole every tick — a few thousand short lines, and a tail
     would forget an old answer exactly when a stale page brings its ask back. dt.py's `ask_states` reads
     the same lines the same way; tests/test_answered.py holds the two to one answer. Unreadable: empty,
     which is the gate as it was before it read the log, never worse."""
     entries = _log_entries(publish_log) if entries is None else entries
     deleted = {e.get("uri") for e in entries if e.get("kind") == "delete"}
-    out = set()
+    out = {}
     for e in entries:
-        if e.get("kind") == "reply" and e.get("uri") not in deleted:
-            if e.get("parent_uri"):
-                out.add(e["parent_uri"])
-            elif e.get("parent"):
-                out.add("rkey:%s" % e["parent"])
-        elif e.get("kind") == "decline" and e.get("subject"):
-            out.add(e["subject"])
+        kind = e.get("kind")
+        if kind == "reply" and e.get("uri") not in deleted:
+            key = e.get("parent_uri") or ("rkey:%s" % e["parent"] if e.get("parent") else None)
+        elif kind in ("decline", "abstain"):
+            key = e.get("subject")
+        else:
+            continue
+        if not key:
+            continue
+        held = out.get(key)
+        if kind == "abstain" and (held == "reply" or (held == "decline" and not e.get("replaces_decline"))):
+            continue
+        out[key] = kind
     return out
 
 
