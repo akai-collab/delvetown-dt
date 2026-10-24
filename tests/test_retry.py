@@ -56,7 +56,9 @@ class Retry(unittest.TestCase):
     def test_a_run_that_worked_is_not_retried(self):
         first, st = self.fired()
         old_failure = T0 - 3600                           # a failure from before this batch
-        out, _ = self.tick(st, T0 + 5000, failed_at=old_failure)
+        # "worked" is an answer in the log: a run that wrote nothing is re-offered (tests/test_reoffer.py)
+        out, _ = self.m.wake_output([note("a")], st, T0 + 5000, quiet=set(), replies=[],
+                                    failed_at=old_failure, answered={note("a")["uri"]})
         self.assertEqual(out, first)
 
     def test_retries_back_off_and_stop(self):

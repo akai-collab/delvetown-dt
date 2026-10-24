@@ -133,6 +133,16 @@ RETRY_JOB_ID = (os.environ.get("AT_MCP_WAKE_JOB_ID") or "").strip()
 RETRY_JOBS_FILE = (os.environ.get("AT_MCP_WAKE_JOBS_FILE") or "").strip()
 RETRY_WAIT_S = int(os.environ.get("AT_MCP_WAKE_RETRY_WAIT_S") or 300)
 RETRY_MAX = int(os.environ.get("AT_MCP_WAKE_RETRY_MAX") or 3)
+# A batch whose run answered none of it is offered once more. The retry above covers a run that FAILED; a run
+# that exits zero having written nothing left its batch in `fired` for FIRED_TTL_S, out of sight, until
+# something else changed the output (2026-10-24: asks on both seats waited 45-60 minutes for an operator to
+# fire the gate by hand). Bounded by construction rather than by restraint: only a batch with no answer and
+# no decline at all — one answer means the run read the batch and judged the rest; only after REOFFER_AFTER_S
+# (longer than a settle window and a slow run) and before REOFFER_WINDOW_S, so history is never re-offered;
+# each uri at most once; and at most REOFFER_MAX re-offers in any 24 hours.
+REOFFER_AFTER_S = int(os.environ.get("AT_MCP_WAKE_REOFFER_AFTER_S") or 2700)
+REOFFER_WINDOW_S = int(os.environ.get("AT_MCP_WAKE_REOFFER_WINDOW_S") or 7200)
+REOFFER_MAX = int(os.environ.get("AT_MCP_WAKE_REOFFER_MAX") or 12)
 
 # --- the direct reader (DT_MONITOR_READER=xrpc). Its session cache is its own, not dt.py's:
 # refreshSession rotates the refresh token, so two programs taking turns with one cache would each be
@@ -612,7 +622,12 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
           "fails": int(state.get("fails") or 0), "last": state.get("last") or QUIET_LINE,
           "fired_at": state.get("fired_at"), "base": state.get("base"), "retries": int(state.get("retries") or 0),
           "newest": float(state.get("newest") or 0), "batch": list(state.get("batch") or []),
-          "doubled": list(state.get("doubled") or [])}
+          "doubled": list(state.get("doubled") or []),
+          "recent": [b for b in (state.get("recent") or []) if isinstance(b, dict)
+                     and now - float(b.get("at") or 0) <= REOFFER_WINDOW_S],
+          "reoffered": {u: t for u, t in (state.get("reoffered") or {}).items()
+                        if now - float(t) < FIRED_TTL_S},
+          "reoffers": [t for t in (state.get("reoffers") or []) if now - float(t) < 86400]}
     st["fired"] = {u: t for u, t in st["fired"].items() if now - float(t) < FIRED_TTL_S}
     answered = answered_asks() if answered is None else answered
     doubles = doubles or []          # main() reads them; a caller that passes none checks none
@@ -663,6 +678,29 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
             "sent again. That run may have written part of it before it died: check `dt.py recent` and the " \
             "threads before answering, so nothing is answered twice." % (
                 st["retries"], RETRY_MAX, datetime.fromtimestamp(failed_at, timezone.utc).strftime("%H:%MZ"))
+        return st["last"], st
+
+    # A recent batch whose run answered and declined nothing: offered once more (see REOFFER_AFTER_S).
+    again = []
+    if not held and len(st["reoffers"]) < REOFFER_MAX:
+        for b in st["recent"]:
+            uris = [it.get("uri") for it in b.get("items") or []]
+            # a failure after the batch is the retry's (above), however many retries it has left
+            if (REOFFER_AFTER_S <= now - float(b["at"]) <= REOFFER_WINDOW_S and uris
+                    and not (failed_at and failed_at >= float(b["at"]))
+                    and not any(closed(u) for u in uris)):
+                again += [it for it in b["items"] if it.get("uri") not in st["reoffered"]]
+    if again:
+        for it in again:
+            st["reoffered"][it["uri"]] = now
+        st["reoffers"].append(now)
+        ident = hashlib.md5("\n".join(it["uri"] for it in again).encode("utf-8")).hexdigest()[:12]
+        out = ["wake=%d reoffer id=%s" % (len(again), ident)]
+        out.extend(_line(it) for it in again)
+        out.append("reoffer: the run woken for these answered and declined none of them. Offered once more, "
+                   "and not again: answer what is owed, and `dt.py decline <uri>` what is not.")
+        st["last"] = "\n".join(out)
+        st["fired_at"] = None            # not a batch of its own: a failure after it is not retried
         return st["last"], st
 
     muted_names = quiet if quiet is not None else quiet_list()
@@ -738,6 +776,10 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
         also["muted"] = len(muted)       # a count, not the items: the list exists so they are not read
     if also:
         out.append("also: " + ", ".join(f"{v} {k}" for k, v in sorted(also.items())))
+    if st["batch"]:
+        # How the previous batch went, so a run that answered part of it is visible from the report alone.
+        prev = [u for u in st["batch"] if u]
+        out.append("previous batch: %d of %d answered or declined" % (sum(closed(u) for u in prev), len(prev)))
     waiting = [paced[u] for u in st["pending"] if paced[u]]
     if waiting:
         # Said so that a run does not go looking for the thread itself: it is being answered later.
@@ -749,6 +791,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     st["last"] = st["base"] = "\n".join(out)
     st["newest"] = max(float(st.get("newest") or 0), indexed_max)
     st["fired_at"], st["retries"], st["batch"] = now, 0, [it["uri"] for it in batch]
+    st["recent"].append({"at": now, "items": batch})
     return st["last"], st
 
 
