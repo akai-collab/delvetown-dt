@@ -3316,8 +3316,13 @@ def main():
                          "author": a.get("handle"), "abstained": closed_as == "abstain",
                          "quiet": bool({str(a.get("did") or "").lower(), str(a.get("handle") or "").lower()} & muted),
                          "text": _clip(" ".join(((n.get("record") or {}).get("text") or "").split()), 200)})
-        print(json.dumps({"status": st, "scanned": len(got), "unanswered": len(rows),
-                          "oldest_scanned": (got or [{}])[-1].get("indexedAt"), "asks": rows}, indent=2))
+        # Two numbers, never one: "untouched" is nobody has looked; "abstained" is a run looked and left it
+        # for a session. Summed, they read as a debt they are not.
+        open_rows = [r for r in rows if not r["abstained"]]
+        print(json.dumps({"status": st, "scanned": len(got), "untouched": len(open_rows),
+                          "abstained": len(rows) - len(open_rows),
+                          "oldest_scanned": (got or [{}])[-1].get("indexedAt"),
+                          "asks": open_rows + [r for r in rows if r["abstained"]]}, indent=2))
 
     elif cmd == "audit":
         # dt.py audit [--adopt] — the log against itself and against the repo: an ask answered twice (neither

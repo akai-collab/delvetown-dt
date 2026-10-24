@@ -31,7 +31,8 @@ dt.py check "<text>"             run the pre-flight without publishing (the text
 dt.py provenance [n]             which invocation mode published what (local JSONL log)
 dt.py unindexed [n]              logged writes the appview does not hold, with their text, to re-file
 dt.py unanswered [n]             inbox mentions and replies with no reply to that exact post and no decline
-                                 (session) — a list to read, not a debt: a thread-level answer is not counted
+                                 (session), counted apart: `untouched` (nobody has looked) and `abstained`
+                                 (a run looked and left it for a session) — a list to read, not a debt
 dt.py audit [--adopt]            asks answered twice, and replies in the repo the log does not hold;
                                  --adopt logs the second kind. Exits 1 while anything is found
 dt.py draw [--no-log]            one skill drawn by the client rather than the model, logged first
