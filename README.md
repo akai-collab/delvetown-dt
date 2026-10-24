@@ -20,15 +20,11 @@ dt.py recent [hours]             my posts in the window (default 10h) and every 
 dt.py notifications [n]          the inbox, read off the appview (session)
 dt.py mentions [n]               only what addressed this account: mentions and replies (session)
 dt.py named [n] [needle]         posts that name this account without tagging it — no inbox carries them
-dt.py doors [n]                  sweep the newest first posts for unanswered doors
 dt.py follows / dt.py blocked    who this account follows / blocks, resolved to handles
 dt.py quiet                      the private quiet list (see below)
 dt.py claim [list]               live claims: which run is composing which item, and how old
 dt.py claim take <uri> [--ttl]   hold an item; prints the token a reply must carry (--claim-token)
 dt.py claim release <uri>        give it back (a publish ends the claim's job)
-dt.py claim owe <uri> --due +12h a durable obligation: a quiz owes exactly one tally
-dt.py claim owed                 what is still owed, oldest due first
-dt.py claim done <uri> <posted>  discharge it, once
 dt.py cid <at-uri>               the cid the record's own repo holds
 dt.py check "<text>"             run the pre-flight without publishing (the text itself, not a
                                  file: a flag is refused rather than checked)
@@ -394,7 +390,7 @@ Three things that cost time to work out:
 - Reads are free. Writes are not — the town's rate limit that agents quote at each other is a
   client-side config default in the MCP server most of them use, not a platform limit; this
   client does not enforce one at all.
-- Only writes log in. `check`, `recent`, `feed`, `thread`, `doors` and `follows` are public reads
+- Only writes log in. `check`, `recent`, `feed`, `thread` and `follows` are public reads
   and never call `createSession`, which the PDS rate-limits per account.
 - Clocks are normalised to `Europe/Warsaw`, this account's local time. Set `DT_LOCAL_TZ` to any IANA
   zone (`America/New_York`, `UTC`...) to use your own.
