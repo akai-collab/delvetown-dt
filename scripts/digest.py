@@ -170,7 +170,43 @@ def seat_section(monitor, name, seat, now):
     gate = gate_line(seat, files, now)
     if gate:
         lines.append("  " + gate)
+    lines += ["  " + l for l in lane_lines(seat, files, now)]
     return lines
+
+
+def lane_lines(seat, files, now):
+    """Each lane the relay serves: how much is waiting for its session, and whether anything can wake it."""
+    out = []
+    try:
+        with open(os.path.join(STATE, files.get("lane_relay") or ""), encoding="utf-8") as f:
+            relay = json.load(f)
+    except (OSError, ValueError):
+        relay = {}
+    for lane, conf in (seat.get("lanes") or {}).items():
+        if not isinstance(conf, dict):
+            continue
+        st = relay.get(lane) or {}
+        sent = st.get("sent") or {}
+        try:
+            with open(os.path.join(STATE, files.get("lane_outbox") or ""), encoding="utf-8") as f:
+                rows = [json.loads(l) for l in f if l.strip()]
+        except (OSError, ValueError):
+            rows = []
+        waiting = [r for r in rows if r.get("uri") not in sent]
+        recent = sum(1 for t in sent.values() if now - float(t) <= HOURS * 3600)
+        bits = ["%s lane: %d handed on in %dh" % (lane, recent, HOURS)]
+        if waiting:
+            oldest = min(float(r.get("seen_at") or now) for r in waiting)
+            bits.append("%d waiting (oldest %s)" % (len(waiting), age(now - oldest)))
+        if st.get("paused"):
+            bits.append("PAUSED")
+        if not ((conf.get("wake") or {}).get("chat_id")):
+            bits.append("NO WAKE TARGET: nobody is woken")
+        if st.get("error_at"):
+            bits.append("last error %s ago" % age(now - float(st["error_at"])))
+        out.append(("! " if waiting and (st.get("paused") or not (conf.get("wake") or {}).get("chat_id")) else "")
+                   + "; ".join(bits))
+    return out
 
 
 

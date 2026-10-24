@@ -22,6 +22,9 @@ echo "copied: $here/delvetown_monitor.py -> $target/delvetown_monitor.py"
 # The twice-daily digest runs as a no-agent job from the same dir and imports the monitor beside it.
 install -m 0644 "$here/scripts/digest.py" "$target/digest.py"
 echo "copied: $here/scripts/digest.py -> $target/digest.py"
+# The lane relay wakes the session that owns a lane (Quiet Year) from the outbox the monitor fills.
+install -m 0644 "$here/scripts/lane_relay.py" "$target/lane_relay.py"
+echo "copied: $here/scripts/lane_relay.py -> $target/lane_relay.py"
 # The seat table both programs read. One copy for every profile, in the state directory beside the files
 # it names: the monitor refuses to guess a seat without it, and dt.py refuses to run.
 state="${HERMES_REAL_HOME:-$HOME}/.local/state/delvetown-dt"

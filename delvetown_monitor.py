@@ -592,6 +592,45 @@ def drop_session_lane(items, token=None):
     """The items a wake may act on: everything except the session's lane."""
     return [it for it in items if not in_session_lane(it, token=token)]
 
+
+# The lane is set aside, not thrown away. Filtering it out of the gate was right — a cron cannot answer it —
+# but dropped, it reached nobody, and the operator ended up watching the town by hand for hours (2026-10-24).
+# So each lane item is appended once to an outbox; scripts/lane_relay.py wakes the session that owns the
+# lane from it. One line per notification, first sighting only.
+LANE = "quietyear"
+LANE_OUTBOX = os.environ.get("DT_LANE_OUTBOX") or _state("lane_outbox", "lane-%s-%s.jsonl" % (LANE, ACCOUNT))
+
+
+def record_lane(items, now=None, path=None):
+    """Append the lane items not already in the outbox. Best effort and silent: stderr is merged into the
+    monitored output, and a lost line costs one late wake, not a wrong one."""
+    path = path or LANE_OUTBOX
+    if not items:
+        return 0
+    try:
+        seen = {json.loads(l).get("uri") for l in open(path, encoding="utf-8") if l.strip()}
+    except (OSError, ValueError):
+        seen = set()
+    fresh = [it for it in items if it.get("uri") and it.get("uri") not in seen]
+    if not fresh:
+        return 0
+    try:
+        os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            for it in fresh:
+                f.write(json.dumps(dict(it, lane=LANE, seen_at=now or time.time()), ensure_ascii=False) + "\n")
+    except OSError:
+        return 0
+    return len(fresh)
+
+
+def split_session_lane(items, token=None):
+    """(what a wake may act on, the session's lane)."""
+    keep, lane = [], []
+    for it in items:
+        (lane if in_session_lane(it, token=token) else keep).append(it)
+    return keep, lane
+
 def read_xrpc(limit):
     """The unread count and the newest `limit` notifications, read directly. Same contract as
     `read_at_mcp`: (unread, notes_text, fail), where `fail` is a short fixed phrase — never a server
@@ -610,7 +649,8 @@ def read_xrpc(limit):
     if st != 200 or not isinstance(res.get("notifications"), list):
         return "?", "", "rate-limited" if st == 429 else "no answer" if st == 0 else "http %d" % st
     items = [_item(n) for n in res["notifications"] if isinstance(n, dict)]
-    items = drop_session_lane(items, token=token)   # the session's lane never becomes a batch
+    items, lane = split_session_lane(items, token=token)   # the session's lane never becomes a batch...
+    record_lane(lane)                                       # ...it goes to the session that owns it
     st, cnt = _appview(token, "town.delve.notification.getUnreadCount", None)
     unread = cnt.get("count", "?") if st == 200 else "?"
     return unread, json.dumps({"count": len(items), "items": items}, sort_keys=True), None
