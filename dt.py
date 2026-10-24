@@ -3085,7 +3085,10 @@ def main():
 
     elif cmd == "like":
         # dt.py like <uri|rkey|url> [...]  — town.delve.feed.like, one record per post.
-        for arg in sys.argv[2:]:
+        # A cid is the second half of "post, then its cid", the shape every other write takes, so it is skipped
+        # here rather than treated as a target: passing one used to earn a 400 RecordNotFound *after* the like
+        # had already been verified, which reads as a failure that did not happen.
+        for arg in [a for a in sys.argv[2:] if not cid_shaped(a)]:
             if arg.startswith("at://"):
                 _note = blocked_refusal(arg, "--force" in sys.argv)
                 if _note:
