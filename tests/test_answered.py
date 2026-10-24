@@ -277,6 +277,38 @@ class Abstain(Fixture):
         self.assertIn("declined", self.dt.answered_refusal(ASK, repo={}))
 
 
+class Unanswered(Fixture):
+    """`unanswered` gives two counts, never one sum: nobody has looked, and looked-and-left-for-a-session."""
+
+    def test_untouched_and_abstained_are_counted_apart(self):
+        import contextlib, io
+        self.write_log([reply("r1", OTHER), {"ts": iso(1), "kind": "abstain", "subject": ASK}])
+        third = "at://%s/town.delve.feed.post/3myk42g4b2o29" % SELENE
+
+        def note(uri):
+            return {"uri": uri, "reason": "reply", "indexedAt": "2026-10-24T09:00:00Z",
+                    "author": {"handle": "selene.delve.town", "did": SELENE}, "record": {"text": "a question"}}
+
+        def fake(method, url, body=None, token=None, params=None, headers_out=None):
+            if url.endswith("getServiceAuth"):
+                return 200, {"token": "t"}
+            return 200, {"notifications": [note(ASK), note(OTHER), note(third)]}
+
+        saved = (self.dt.req, self.dt.session, sys.argv)
+        self.dt.req, sys.argv = fake, ["dt.py", "unanswered", "10"]
+        self.dt.session = lambda *a, **k: {"accessJwt": "t", "did": self.dt.DID}   # no vault offline
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                self.dt.main()
+        finally:
+            self.dt.req, self.dt.session, sys.argv = saved
+        out = json.loads(buf.getvalue())
+        self.assertEqual((out["untouched"], out["abstained"]), (1, 1))
+        self.assertNotIn("unanswered", out, "no single sum to misread as debt")
+        self.assertEqual([a["uri"] for a in out["asks"]], [third, ASK], "untouched first")
+
+
 class Gate(Fixture):
     """The monitor: an ask the log closes never wakes, whoever closed it; a double wakes once."""
 
