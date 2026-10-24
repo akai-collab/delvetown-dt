@@ -36,6 +36,7 @@ Usage — writing (every write checks the session's DID against this account's f
                                    (--again answers it a second time on purpose), and refused in a
                                    Quiet Year thread (--in-quietyear when the session asked for it)
   dt.py decline <at-uri|url> ["why"] -> close an ask without answering; nothing is sent
+  dt.py abstain <at-uri|url> ["why"] -> looked, chose not to act: closed for the gate, still answerable
   dt.py delete <rkey> [collection]
   dt.py like <uri|rkey|url> [...]
   dt.py follow <handle|did> [...]  /  dt.py unfollow <handle|did>
@@ -505,10 +506,16 @@ def log_write(kind, res, **kw):
 # a `reply` line answers its `parent_uri` unless that reply was later deleted, and a `decline` line closes
 # an ask without one. `reply` reads it before sending; the monitor reads it every tick; `audit` checks it.
 def ask_states(entries=None):
-    """{ask uri: (state, entry)} — `reply` or `decline`, the later line winning, in the log's own append
-    order (never a client clock). A reply whose record a later `delete` line removed answers nothing, so a
-    delete-and-republish repair is not a double. Lines from before 2026-10-15 carry only the parent's
-    rkey and are keyed `rkey:<rkey>` (a TID is unique in practice)."""
+    """{ask uri: (state, entry)} — `reply`, `decline` or `abstain`, the later line winning, in the log's own
+    append order (never a client clock). A reply whose record a later `delete` line removed answers nothing,
+    so a delete-and-republish repair is not a double. Lines from before 2026-10-15 carry only the parent's
+    rkey and are keyed `rkey:<rkey>` (a TID is unique in practice).
+
+    `abstain` is the weakest close: a run looked and correctly chose not to act (2026-10-24: a wake may not
+    answer repo-lane items, and four of them were re-offered because writing nothing looked like a dead run).
+    It closes the ask for the gate, but a session may still answer it, so it never overrides a reply or a
+    decline — except a line marked `replaces_decline`, which `dt.py abstain` writes on purpose to turn a
+    decline back into an abstention."""
     entries = read_publish_log(100000) if entries is None else entries
     deleted = {e.get("uri") for e in entries if isinstance(e, dict) and e.get("kind") == "delete"}
     out = {}
@@ -517,12 +524,16 @@ def ask_states(entries=None):
             continue
         if e.get("kind") == "reply" and e.get("uri") not in deleted:
             key = e.get("parent_uri") or ("rkey:%s" % e["parent"] if e.get("parent") else None)
-        elif e.get("kind") == "decline":
+        elif e.get("kind") in ("decline", "abstain"):
             key = e.get("subject")
         else:
             continue
-        if key:
-            out[key] = (e["kind"], e)
+        if not key:
+            continue
+        held = out.get(key, (None,))[0]
+        if e["kind"] == "abstain" and (held == "reply" or (held == "decline" and not e.get("replaces_decline"))):
+            continue
+        out[key] = (e["kind"], e)
     return out
 
 
@@ -2206,7 +2217,7 @@ def post_uri(arg, canonical=True):
 # about the wrong record. Measured 2026-10-16: the newest log entry was a `delete`, so `stall_over` read
 # false while the tap was demonstrably live, and five `like` entries were reported as "deleted from the
 # PDS" because the fetch asked for a post of that rkey (the likes were in the repo the whole time).
-NON_POST_KINDS = ("delete", "like", "follow", "decline")
+NON_POST_KINDS = ("delete", "like", "follow", "decline", "abstain")
 
 
 def is_post_entry(e):
@@ -2502,6 +2513,8 @@ USAGE = {
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
     "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
     "decline": 'decline <at-uri|url> ["why"]        (close an ask without answering it; local, nothing is sent)',
+    "abstain": 'abstain <at-uri|url> ["why"]        (looked, chose not to act: the gate stops offering it, a session may still answer)',
+
     "claim": 'claim [list] | claim take <uri> [--ttl MIN] -> token | claim release <uri> --claim-token <n>   (one run per item: the token goes to reply and to release)',
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
@@ -3239,16 +3252,38 @@ def main():
             return 1
         uri = post_uri(sys.argv[2])
         state, e = ask_state(uri)
-        if state:
+        if state in ("reply", "decline"):      # an abstention may be hardened into a decline
             print(json.dumps({"note": "already closed: %s at %s" % (state, e.get("ts")), "ask": uri}, indent=2))
             return
         why = " ".join(a for a in sys.argv[3:] if not a.startswith("--")) or None
         log_write("decline", {}, subject=uri, extra={"why": why} if why else None)
         print(json.dumps({"declined": uri, "why": why, "log": PUBLISH_LOG}, indent=2))
 
+    elif cmd == "abstain":
+        # dt.py abstain <at-uri|url> ["why"] — a run looked and chose not to act. The gate counts the ask as
+        # handled (no re-offer, no wake), but it stays answerable: `reply` does not refuse it, and
+        # `unanswered` still lists it, marked. The wake's tool for what only a session may answer (repo-lane
+        # items, a thread the wake cannot read); `decline` is for what nobody should answer. On an ask that
+        # was declined, this turns the decline back into an abstention.
+        if "/" not in sys.argv[2]:
+            print(json.dumps({"status": 0, "refused": "give the ask as an at:// uri or a post url, not a bare rkey"},
+                             indent=2))
+            return 1
+        uri = post_uri(sys.argv[2])
+        state, e = ask_state(uri)
+        if state in ("reply", "abstain"):
+            print(json.dumps({"note": "already %s at %s" % ("answered" if state == "reply" else "abstained",
+                                                             e.get("ts")), "ask": uri}, indent=2))
+            return
+        why = " ".join(a for a in sys.argv[3:] if not a.startswith("--")) or None
+        extra = {k: v for k, v in (("why", why), ("replaces_decline", state == "decline" or None)) if v}
+        log_write("abstain", {}, subject=uri, extra=extra or None)
+        print(json.dumps({"abstained": uri, "why": why, "replaced_decline": state == "decline",
+                          "log": PUBLISH_LOG}, indent=2))
+
     elif cmd == "unanswered":
         # dt.py unanswered [n] — the mentions and replies in the inbox (paged) with no logged reply to that
-        # exact post and no decline. Stricter than "unanswered": an answer given in the thread root, by
+        # exact post and no decline; an abstained one is listed, marked, because a session may still answer it. Stricter than "unanswered": an answer given in the thread root, by
         # quote, or under a neighbouring post does not count, so this is a list to read, not a debt figure.
         want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 100
         st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
@@ -3273,11 +3308,12 @@ def main():
         muted = {str(x.get(k) or "").lower() for x in quiet_entries() for k in ("did", "handle")} - {""}
         rows = []
         for n in _addressed(got):
-            if ask_state(n.get("uri"), states)[0]:
+            closed_as = ask_state(n.get("uri"), states)[0]
+            if closed_as in ("reply", "decline"):
                 continue
             a = n.get("author") if isinstance(n.get("author"), dict) else {}
             rows.append({"uri": n.get("uri"), "at": n.get("indexedAt"), "reason": n.get("reason"),
-                         "author": a.get("handle"),
+                         "author": a.get("handle"), "abstained": closed_as == "abstain",
                          "quiet": bool({str(a.get("did") or "").lower(), str(a.get("handle") or "").lower()} & muted),
                          "text": _clip(" ".join(((n.get("record") or {}).get("text") or "").split()), 200)})
         print(json.dumps({"status": st, "scanned": len(got), "unanswered": len(rows),
