@@ -263,13 +263,31 @@ class Digest(Homes):
         self.assertEqual(out.count("forge, last 12h"), 1, "the forge is not a seat's: one line per digest")
 
     def test_a_dead_consumer_is_loud_rather_than_quiet(self):
+        """Liveness is the cursor, not the queue: an old queue only means a quiet repo."""
         path = os.path.join(self.state, "tangled-events.jsonl")
         with open(path, "w") as f:
             f.write("")
-        os.utime(path, (time.time() - 6 * 3600, time.time() - 6 * 3600))
+        stale = time.time() - 6 * 3600
+        os.utime(path, (stale, stale))
+        cursor = os.path.join(self.state, "tangled-cursor")
+        with open(cursor, "w") as f:
+            f.write("x")
+        os.utime(cursor, (stale, stale))
         out = self.digest()
-        self.assertIn("! forge: queue untouched for", out)
-        self.assertIn("is tangled-firehose running?", out)
+        self.assertIn("! forge: consumer stalled — cursor untouched for", out)
+
+    def test_a_quiet_repo_with_a_live_consumer_is_not_an_alarm(self):
+        path = os.path.join(self.state, "tangled-events.jsonl")
+        with open(path, "w") as f:
+            f.write("")
+        stale = time.time() - 5 * 3600
+        os.utime(path, (stale, stale))
+        cursor = os.path.join(self.state, "tangled-cursor")
+        with open(cursor, "w") as f:
+            f.write("x")
+        out = self.digest()
+        self.assertIn("forge: quiet (consumer alive", out)
+        self.assertNotIn("! forge", out)
 
     def test_a_board_that_will_not_answer_costs_one_line(self):
         out = self.digest(FAKE_KANBAN_FAIL="1")

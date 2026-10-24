@@ -109,6 +109,12 @@ def board_section(now):
     return lines
 
 
+
+def clip(text, n):
+    """A briefing value cut to fit a phone: the digest is read on Telegram, not in a terminal."""
+    text = str(text or "")
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
 def briefing_section(seats, today):
     """What each seat's crons are being told, from their notepads: one line per key, with the jobs that carry
     it, and expired lines marked (a value ending `[until YYYY-MM-DD]` before today)."""
@@ -131,7 +137,7 @@ def briefing_section(seats, today):
     for (key, value), carriers in sorted(keys.items()):
         m = UNTIL.search(value or "")
         mark = "!" if m and m.group(1) < today else "-"
-        lines.append("  %s %s: %s (%d job%s)%s" % (mark, key, value[:160], len(carriers),
+        lines.append("  %s %s: %s (%d job%s)%s" % (mark, key, clip(value, 96), len(carriers),
                                                   "" if len(carriers) == 1 else "s",
                                                   " EXPIRED" if mark == "!" else ""))
     return lines
@@ -232,6 +238,7 @@ def final_closes(entries):
 
 
 FORGE_QUEUE = os.environ.get("TANGLED_QUEUE") or os.path.join(STATE, "tangled-events.jsonl")
+FORGE_CURSOR = os.environ.get("TANGLED_CURSOR") or os.path.join(STATE, "tangled-cursor")
 FORGE_KINDS = {"sh.tangled.feed.comment": "comment", "sh.tangled.repo.pull": "pull",
                "sh.tangled.repo.pull.status": "pull status", "sh.tangled.repo.issue": "issue",
                "sh.tangled.repo.issue.state": "issue state", "sh.tangled.graph.follow": "follow",
@@ -277,13 +284,18 @@ def forge_line(now):
             lines.append("  newest: " + newest)
     else:
         lines.append("forge, last %dh: quiet" % HOURS)
-    # the failure that looks like calm: the consumer dies and the queue simply stops growing
+    # The failure that looks like calm: the consumer dies and nothing arrives. Liveness is the *cursor* — the
+    # firehose rewrites it as it follows, so an old cursor means a stalled process. An old queue only means a quiet
+    # repo, and calling that a fault cried wolf on a Saturday evening (2026-10-24, 5h of silence, consumer healthy).
     try:
-        idle = now - os.path.getmtime(FORGE_QUEUE)
-        if idle > 3 * 3600:
-            lines.insert(0, "! forge: queue untouched for %s — is tangled-firehose running?" % age(idle))
+        idle = now - os.path.getmtime(FORGE_CURSOR)
+        if idle > 900:
+            lines.insert(0, "! forge: consumer stalled — cursor untouched for %s" % age(idle))
+        elif not recent:
+            lines.insert(0, "forge: quiet (consumer alive, nothing for %s)" % age(now - os.path.getmtime(FORGE_QUEUE)))
     except OSError:
-        pass
+        lines.insert(0, "forge: consumer status unknown (no cursor file)")   # a race with the
+        # firehose rewriting it is not evidence of a dead process, so this stays quiet
     return lines
 
 def thread_line(seat, files, now):
@@ -343,7 +355,8 @@ def gate_line(seat, files, now):
 def main():
     now = time.time()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    out = ["delvetown digest, %s" % datetime.now(timezone.utc).strftime("%a %H:%MZ")]
+    out = ["delvetown digest, %s (%s local)" % (datetime.now(timezone.utc).strftime("%a %H:%MZ"),
+                                                 datetime.now().strftime("%H:%M %Z"))]
     try:
         seats = load_seats()
     except (OSError, ValueError, KeyError, RuntimeError) as exc:
