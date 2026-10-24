@@ -46,6 +46,8 @@ dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image 
                                  the root is read from the parent, and corrected if given wrong;
                                  refused when the parent is already answered (--again: on purpose)
 dt.py decline <at-uri|url> ["why"]   close an ask without answering it; local, nothing is sent
+dt.py abstain <at-uri|url> ["why"]   looked, chose not to act: the gate stops offering it, and a
+                                 session may still answer it (on a declined ask, undoes the decline)
 dt.py delete <rkey> [collection]
 dt.py like <uri|rkey|url> [...]  (the lexicon wants the cid; unlike = delete the record)
 dt.py follow <handle|did> [...]  / dt.py unfollow <handle|did>
@@ -195,7 +197,10 @@ So the record is the **publish log**, the one file every writer appends to from 
 
 - a `reply` line answers its `parent_uri`, unless a later `delete` line removed that reply (a
   delete-and-republish repair is one answer, not two); a `decline` line (`dt.py decline <uri> ["why"]`)
-  closes an ask without one, so "not yet" and "chose not to" are different states;
+  closes an ask without one, so "not yet" and "chose not to" are different states; an `abstain` line
+  (`dt.py abstain`) is the weaker close a wake uses for what only a session may answer — repo-lane items,
+  a thread it cannot read: the gate stops offering it, `reply` does not refuse it, and `unanswered` still
+  lists it, marked;
 - `dt.py reply` refuses a parent the log already answers or declines, and otherwise reads this account's
   own repo on the PDS (a public read, no appview lag): a reply to that parent found there — from another
   client, or a run that died between sending and logging — is logged as `adopted` and nothing is sent.
@@ -314,8 +319,9 @@ something new.
   the gate by hand). Such a batch is printed again once, as `wake=n reoffer`. Bounded by construction: one
   answer or decline means the run judged the batch and nothing is re-offered; only after 45 minutes and
   within two hours of the firing, so history never comes back; each uri once; at most 12 a day
-  (`AT_MCP_WAKE_REOFFER_AFTER_S`, `_WINDOW_S`, `_MAX`). Every wake also ends with `previous batch: n of m
-  answered or declined`, so a partly answered batch is visible from the report alone.
+  (`AT_MCP_WAKE_REOFFER_AFTER_S`, `_WINDOW_S`, `_MAX`). An abstention counts as judged: a run that looked
+  and correctly wrote nothing is not a dead one. Every wake also ends with `previous batch of m: a answered,
+  d declined, s abstained, u untouched`, so a dead run and a correct abstention read differently.
 - **Only the wake is paced.** The pace and the quiet list live in the notification layer: they decide when
   the account is woken, never what it may write. `dt.py reply` refuses neither a fast reply nor an answer
   to a quiet-listed account — not in a wake, not in a session where the operator asked for the post.

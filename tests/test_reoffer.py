@@ -108,7 +108,7 @@ class Reoffer(unittest.TestCase):
         items = [note("d")]
         _, st = self.tick(st, T0 + 300, items, answered=[note("a")["uri"], note("b")["uri"]])
         out, st = self.tick(st, T0 + 900, items, answered=[note("a")["uri"], note("b")["uri"]])
-        self.assertIn("previous batch: 2 of 3 answered or declined", out)
+        self.assertIn("previous batch of 3: 2 answered, 0 declined, 0 abstained, 1 untouched", out)
 
 
 if __name__ == "__main__":
