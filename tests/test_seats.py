@@ -76,6 +76,23 @@ class OneTable(Base):
             self.assertTrue(m["monitor_session"].endswith("/" + seat["files"]["monitor_session"]))
             self.assertEqual((d["handle"], d["did"]), (seat["handle"], seat["did"]))
 
+    def test_a_profile_with_its_own_home_does_not_split_the_state_directory(self):
+        """A profile can run with its own HOME. Both programs must still resolve HERMES_REAL_HOME first, or
+        dt.py writes one directory and the monitor reads another."""
+        other = tempfile.mkdtemp(dir=self.home)
+        for key, seat in seats().items():
+            d = self.py(
+                "import importlib.util,json,sys;s=importlib.util.spec_from_file_location('d',sys.argv[1]);"
+                "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+                "print(json.dumps([m.PUBLISH_LOG,m.SESSION_CACHE,m.QUIET_FILE]))", DT, DT_ACCOUNT=key, HOME=other)
+            m = self.py(
+                "import importlib.util,json,sys;s=importlib.util.spec_from_file_location('m',sys.argv[1]);"
+                "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+                "print(json.dumps([m.PUBLISH_LOG,m.SESSION_CACHE,m.QUIET_FILE]))", MONITOR,
+                AT_MCP_HANDLE=seat["handle"], HOME=other)
+            self.assertEqual(d, m, key)
+            self.assertTrue(all(p.startswith(self.home + "/.local/") for p in d), d)
+
     def test_nothing_moves_on_disk(self):
         """The table records the names in use when it was written: akai's bare names, and skillissue's
         publish log as its wrapper already named it."""
