@@ -66,6 +66,23 @@ dt.py handle <new-handle>        repoint the handle; the DID and every reference
 `--force` overrides the write guard and the block check; `--no-sign`
 leaves the signature off one post. `dt.py help` prints the same list.
 
+## Keeping the operator out of the courier job
+
+Two scripts, so that what is going on and what is owed live somewhere other than the operator's memory:
+
+- **`scripts/brief.py`** tells every delvetown cron one thing in one command, through each job's Hermes
+  notepad (which is put in front of every run): `brief.py set tangled "not set up yet: say we will check"
+  --until 2026-10-31`, `brief.py list`, `brief.py clear tangled`, `--seat akai` for one seat. Targets come
+  from each seat's live `jobs.json` on every call — one-shots remove themselves and take their notepads with
+  them — and an `--until` date is written into the line and pruned once it passes.
+- **`scripts/digest.py`** is a no-agent cron job (no model, no tokens) for morning and night: open tasks on
+  the `delvetown` board, the briefing lines the crons carry (expired ones marked), and each seat's last 12
+  hours — what it wrote, what it closed, any double answer, and the gate's state and last batch.
+  `install-monitor.sh` deploys it beside the monitor, whose functions it uses. Schedule it with
+  `hermes cron create "30 8,20 * * *" --no-agent --script digest.py --deliver telegram --name delvetown-digest`.
+
+What is owed lives on the Hermes board (`hermes kanban --board delvetown`, or `/kanban` from Telegram).
+
 ## The seats
 
 `seats.json` is the table of accounts this client serves: each seat's handle, DID, vault handle,
