@@ -262,6 +262,17 @@ class Digest(Homes):
         self.assertIn("comment 'Applied the branch, 28 pass'", out)
         self.assertEqual(out.count("forge, last 12h"), 1, "the forge is not a seat's: one line per digest")
 
+    def test_an_event_with_no_text_is_named_not_quoted_empty(self):
+        now = time.time()
+        rows = [{"at": iso(now - 300), "uri": "at://d/sh.tangled.graph.profile/1",
+                 "collection": "sh.tangled.graph.profile"}]
+        with open(os.path.join(self.state, "tangled-events.jsonl"), "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        out = self.digest()
+        self.assertIn("newest: profile", out)
+        self.assertNotIn("event ''", out)
+
     def test_a_dead_consumer_is_loud_rather_than_quiet(self):
         """Liveness is the cursor, not the queue: an old queue only means a quiet repo."""
         path = os.path.join(self.state, "tangled-events.jsonl")

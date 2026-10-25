@@ -274,9 +274,13 @@ def forge_line(now):
         counts[kind] = counts.get(kind, 0) + 1
     tail = sorted(recent, key=lambda r: epoch(r.get("at") or r.get("event_time")), reverse=True)[:3]
     bits = ["%d %s" % (n, k) for k, n in sorted(counts.items(), key=lambda kv: -kv[1])]
-    newest = "; ".join("%s %r" % (FORGE_KINDS.get(r.get("collection") or "", "event"),
-                                 (r.get("title") or r.get("text") or "")[:50].replace("\n", " "))
-                       for r in tail)
+    def describe(r):
+        kind = FORGE_KINDS.get(r.get("collection") or "", (r.get("collection") or "event").split(".")[-1])
+        words = (r.get("title") or r.get("text") or "").strip()
+        # a profile update or a follow carries no text at all; printing a pair of empty quotes reads as a fault
+        return "%s %r" % (kind, words[:50].replace("\n", " ")) if words else kind
+
+    newest = "; ".join(describe(r) for r in tail)
     lines = []
     if recent:
         lines.append("forge, last %dh: %d events — %s" % (HOURS, len(recent), ", ".join(bits)))
