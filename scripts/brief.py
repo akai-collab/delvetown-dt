@@ -59,6 +59,12 @@ def delvetown_jobs(home):
     for j in jobs or []:
         if not isinstance(j, dict) or j.get("no_agent"):
             continue                       # no model reads a script-only job's prompt
+        # A paused job never runs, so a briefing line written into it is written into nothing. The
+        # store keeps it, `list` shows it, and the operator reads it as "the seat has been told" while
+        # no future run of that job will ever see the line. Five such jobs existed on 2026-10-25 (the
+        # pilot day, the beijing block, the loose-hour roller, the sydney one-shot, the presence probe).
+        if j.get("enabled") is False or str(j.get("state") or j.get("status") or "").lower() in ("paused", "disabled"):
+            continue
         if "dt.py" in str(j.get("prompt") or "") or "delvetown_monitor" in str(j.get("script") or ""):
             out.append((j.get("id"), j.get("name") or j.get("id")))
     return out
@@ -97,8 +103,8 @@ def main(argv=None):
     s.add_argument("--until", help="YYYY-MM-DD: the line is pruned once this date has passed")
     c = sub.add_parser("clear")
     c.add_argument("key")
-    sub.add_parser("list")
-    for p in (s, c):
+    l = sub.add_parser("list")
+    for p in (s, c, l):
         p.add_argument("--seat", help="a seat key from seats.json; all seats when omitted")
     args = ap.parse_args(argv)
     cmd = args.cmd or "list"
@@ -138,7 +144,10 @@ def main(argv=None):
             else:
                 rows.append({"job": job_name, "id": job_id,
                              "notes": {k: v for (j, k), v in notes(home).items() if j == job_id}})
-        report["targets"][seat.get("name") or name] = rows
+        label = seat.get("name") or name
+        # seats.json keys and display names differ for the sibling seat (locksmith / skillissue):
+        # print both, so a target is never ambiguous about which store it was written into.
+        report["targets"][name if label == name else "%s (%s)" % (name, label)] = rows
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 1 if failed else 0
 

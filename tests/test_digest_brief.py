@@ -112,7 +112,24 @@ class Brief(Homes):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.notes(self.akai), {("gate1", "tangled"): "not set up yet: say we will check",
                                                  ("wake1", "tangled"): "not set up yet: say we will check"})
-        self.assertEqual(set(self.notes(self.lock)), {("floor1", "tangled"), ("gate2", "tangled")})
+        self.assertEqual(set(self.notes(self.lock)), {("floor1", "tangled")},
+                         "gate2 is paused: a line written into it is written into nothing")
+
+    def test_a_paused_job_is_not_a_target(self):
+        """enabled=False / state=paused: the store would hold a line no run of that job ever reads."""
+        self.brief("set", "tangled", "x")
+        got = set(self.notes(self.lock))
+        self.assertIn(("floor1", "tangled"), got)
+        self.assertNotIn(("gate2", "tangled"), got)
+        out = json.loads(self.brief("list").stdout)
+        self.assertEqual([r["job"] for r in out["targets"]["locksmith (skillissue)"]], ["floor wake"])
+
+    def test_list_takes_a_seat_and_names_both_the_key_and_the_display_name(self):
+        out = json.loads(self.brief("list", "--seat", "locksmith").stdout)
+        self.assertEqual(list(out["targets"]), ["locksmith (skillissue)"],
+                         "the seats.json key, with the display name beside it")
+        out2 = json.loads(self.brief("list", "--seat", "akai").stdout)
+        self.assertEqual(list(out2["targets"]), ["akai"], "a seat whose key and name agree is not decorated")
 
     def test_a_seat_can_be_briefed_alone(self):
         self.brief("set", "quiz", "tally due Friday", "--seat", "akai")
@@ -182,7 +199,8 @@ class Digest(Homes):
         con.commit()
         con.close()
         out = self.digest()
-        self.assertIn("- tangled: not set up (4 jobs)", out)
+        # 3, not 4: the sibling seat's gate2 is paused and no longer counts as a job carrying the line
+        self.assertIn("- tangled: not set up (3 jobs)", out)
         self.assertIn("! stale: gone [until 2020-01-01] (1 job) EXPIRED", out)
 
     def test_each_seat_s_window_with_a_double_answer_and_the_gate(self):
