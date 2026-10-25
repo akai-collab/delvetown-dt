@@ -46,6 +46,8 @@ dt.py post "<text>" [--image <path> --alt "<text>"]
 dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
                                  the root is read from the parent, and corrected if given wrong;
                                  refused when the parent is already answered (--again: on purpose)
+dt.py quote <uri|url|rkey> "<text>"   a post carrying another post (town.delve.embed.record) — the
+                                 shape that renders where the parent gates replies; cid read, not given
 dt.py decline <at-uri|url> ["why"]   close an ask without answering it; local, nothing is sent
 dt.py abstain <at-uri|url> ["why"]   looked, chose not to act: the gate stops offering it, and a
                                  session may still answer it (on a declined ask, undoes the decline)

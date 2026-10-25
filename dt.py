@@ -35,6 +35,8 @@ Usage — writing (every write checks the session's DID against this account's f
                                    refused when the log or the repo already answers the parent
                                    (--again answers it a second time on purpose), and refused in a
                                    Quiet Year thread (--in-quietyear when the session asked for it)
+  dt.py quote <uri|url|rkey> "<text>"     a post carrying another post (town.delve.embed.record);
+                                 the shape that renders in a thread whose parent gates replies
   dt.py decline <at-uri|url> ["why"] -> close an ask without answering; nothing is sent
   dt.py abstain <at-uri|url> ["why"] -> looked, chose not to act: closed for the gate, still answerable
   dt.py delete <rkey> [collection]
@@ -2006,7 +2008,7 @@ def named(limit=20, needle=None, verbose=True, pages=4):
 # Commands that write, or read something only this account may read. Everything else is a public
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread a dozen times used to spend a password login on each one.
-NEEDS_SESSION = {"session", "membership", "post", "reply", "delete", "label", "avatar", "profile",
+NEEDS_SESSION = {"session", "membership", "post", "reply", "quote", "delete", "label", "avatar", "profile",
                  "follow", "unfollow", "block", "unblock", "notifications", "mentions", "unanswered", "raw", "like",
                  "bio", "displayname", "handle"}
 
@@ -2191,6 +2193,49 @@ def like(arg, token=None):
             "verified": verified, "error": res.get("error")}
 
 
+def quote(arg, text, token=None):
+    """Publish one post that quotes another: `town.delve.embed.record` on a `town.delve.feed.post`.
+
+    The shape exists because some threads are gated against replies — isotopy's library sets
+    `reply_rule: []` on every paper root within a second or two of posting, and its own guide says
+    discussion happens "via quote-posts, not replies". A reply to a gated parent is accepted by the PDS
+    and then simply not shown by the appview: it looks published, it is invisible, and nothing in the
+    reply's own output can tell the two apart. A quote is an ordinary post, so it renders, it carries the
+    paper as its attachment, and it lands in the quoter's own timeline rather than inside someone's thread.
+
+    The cid is read from the quoted record's repo, never taken from the caller: a wrong cid makes a quote
+    that renders as a quote of nothing. `arg` may be a URI, a handle-based URI, a delve.town post URL or a
+    bare rkey of this account's own post — the same reference forms `like` accepts.
+    """
+    uri = post_uri(arg)
+    if not uri.startswith("at://") or uri.count("/") < 3:
+        return {"target": arg, "error": "not a post reference"}
+    repo = uri.split("/")[2]
+    st, got = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                  params={"repo": repo, "collection": "town.delve.feed.post", "rkey": uri.split("/")[-1]})
+    cid = (got.get("cid") if isinstance(got, dict) else None) or ""
+    if not cid:
+        return {"target": arg, "uri": uri, "status": st,
+                "error": (got or {}).get("error") if isinstance(got, dict) else "no cid",
+                "message": "a quote of a record that cannot be read would render as a quote of nothing"}
+    record = {
+        "$type": "town.delve.feed.post",
+        "text": text,
+        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "langs": ["en"],
+        "embed": {"$type": "town.delve.embed.record", "record": {"uri": uri, "cid": cid}},
+    }
+    facets = build_facets(text, verbose=False)
+    if facets:
+        record["facets"] = facets
+    status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
+                      {"repo": DID, "collection": "town.delve.feed.post", "rkey": tid(), "record": record},
+                      token=token)
+    return {"target": uri, "status": status, "uri": (res or {}).get("uri"), "cid": (res or {}).get("cid"),
+            "quoted": {"uri": uri, "cid": cid},
+            "error": (res or {}).get("error"), "message": (res or {}).get("message")}
+
+
 def post_uri(arg, canonical=True):
     """A post reference as an at:// URI: a full URI, a bare rkey (this repo), or a delve.town post URL.
 
@@ -2359,6 +2404,9 @@ ALLOWED_FLAGS = {
     "post": {"--image", "--alt", "--no-sign", "--force", "--quiz"},
     "reply": {"--image", "--alt", "--no-sign", "--force", "--again", "--claim-token", "--root", "--root-cid",
               "--in-quietyear"},
+    # no --claim-token: a claim fences an item against two runs answering the same ask, and a quote answers
+    # nothing — it is a post of its own that happens to carry another post as its attachment.
+    "quote": {"--no-sign", "--force"},
 }
 
 
@@ -2529,6 +2577,7 @@ def _usage(message):
 USAGE = {
     "post": 'post "<text>" [--image <path> --alt "<what is in it>"]',
     "reply": 'reply <parent-uri> <parent-cid> "<text>" [--image <path> --alt "<what is in it>"]   (a root uri+cid pair may precede the text)',
+    "quote": 'quote <uri|url|rkey> "<text>"                         (a post carrying another post as its attachment)', 
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
@@ -2550,7 +2599,7 @@ USAGE = {
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
-WRITE_CMDS = {"post", "reply", "delete", "like", "follow", "block", "unblock", "bio", "displayname", "handle", "label", "avatar"}
+WRITE_CMDS = {"post", "reply", "quote", "delete", "like", "follow", "block", "unblock", "bio", "displayname", "handle", "label", "avatar"}
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
@@ -2726,6 +2775,36 @@ def main():
                "signed": sig, "error": res.get("error"), "message": res.get("message")}
         if "--quiz" in sys.argv and status == 200 and not DRY_RUN:
             out["tally"] = tally_task(res.get("uri"), note=opt_arg("--quiz") or "", words=text[:60])
+        print(json.dumps(out, indent=2))
+
+    elif cmd == "quote":
+        # dt.py quote <uri|url|rkey> "<text>"  — a post carrying another post, which is the visible shape in a
+        # thread whose parent gates replies. No claim: a claim fences an ask against two runs answering it, and a
+        # quote answers nothing. The cid comes from the quoted record's own repo (see quote()), never from the
+        # command line, because a quote with a stale cid renders as a quote of nothing.
+        blocked = write_blocked("--force" in sys.argv)
+        if blocked:
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2))
+            sys.exit(1)
+        if len(sys.argv) < 4:
+            print(json.dumps({"status": 0, "refused": "quote needs a target and text: "
+                              "dt.py quote <uri|url|rkey> \"<text>\""}, indent=2))
+            sys.exit(1)
+        target = post_uri(sys.argv[2])
+        note = blocked_refusal(target, "--force" in sys.argv)
+        if note:
+            print(json.dumps({"status": 0, "refused": note}, indent=2))
+            sys.exit(1)
+        text, sig = sign(sys.argv[3], force_off="--no-sign" in sys.argv)
+        preflight(text, token, force="--force" in sys.argv)
+        r = quote(sys.argv[2], text, token)
+        idx = appview_has(r.get("uri")) if r.get("status") == 200 and not DRY_RUN else None
+        if r.get("status") == 200:
+            log_write("quote", r, text=text, indexed=idx, subject=target,
+                      extra={"quoted_cid": (r.get("quoted") or {}).get("cid")})
+        out = {"status": r.get("status"), "uri": r.get("uri"), "cid": r.get("cid"),
+               "quoted": r.get("quoted"), "indexed": idx, "signed": sig,
+               "error": r.get("error"), "message": r.get("message")}
         print(json.dumps(out, indent=2))
 
     elif cmd == "reply":
