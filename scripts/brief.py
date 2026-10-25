@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Tell every delvetown cron one thing, in one command: a line in each job's Hermes notepad.
+"""Tell a seat's delvetown crons one thing, in one command: a line in each job's Hermes notepad.
 
 The notepad is put in front of every run of its job (verified 2026-10-24), which makes it the channel for
 "what is going on right now" — something settled in a session that the next wake has to know. But it is
-per job, and the same fact belongs on the gate, the clock wakes and today's one-shots of both seats, so by
-hand it is eight `hermes cron notepad` calls, each needing the right HERMES_HOME (HERMES_PROFILE does not
-move the store; the first attempt wrote to the wrong profile's database).
+per job, and the same fact belongs on that seat's gate, clock wakes and today's one-shots, so by hand it is
+five `hermes cron notepad` calls, each needing the right HERMES_HOME (HERMES_PROFILE does not move the store;
+the first attempt wrote to the wrong profile's database).
 
-    brief.py set tangled "not set up yet: say we will check, do not describe repos" --until 2026-10-31
-    brief.py list
-    brief.py clear tangled
+    brief.py set tangled "not set up yet: say we will check, do not describe repos" --seat akai --until 2026-10-31
     brief.py set quiz "tally due Friday" --seat akai
+    brief.py list --seat akai
+    brief.py clear tangled --seat akai
+
+`set` REQUIRES a seat (`--seat <key>`, or `--all-seats` said out loud). An omitted seat used to mean "every
+seat", which is how an akai-only fact lands in front of another seat's wakes: the sibling seat is a different
+account with its own brief, and a note it did not ask for is worse than no note. The default made that mistake
+the path of least resistance, so it is now an error with the two ways forward named in it.
 
 Targets are read from each seat's live jobs.json on every call, never from a list of ids: a one-shot
 removes itself after it fires and takes its notepad with it. A delvetown job is one whose prompt names
@@ -105,7 +110,11 @@ def main(argv=None):
     c.add_argument("key")
     l = sub.add_parser("list")
     for p in (s, c, l):
-        p.add_argument("--seat", help="a seat key from seats.json; all seats when omitted")
+        p.add_argument("--seat", help="a seat key from seats.json")
+    for p in (s, c):
+        p.add_argument("--all-seats", action="store_true",
+                       help="do this to every seat (required for set when --seat is omitted)")
+    l.add_argument("--all-seats", action="store_true", help="the default for list")
     args = ap.parse_args(argv)
     cmd = args.cmd or "list"
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -116,6 +125,11 @@ def main(argv=None):
 
     seats = load_seats()
     wanted = getattr(args, "seat", None)
+    if cmd == "set" and not wanted and not getattr(args, "all_seats", False):
+        sys.exit("set needs --seat <key> (or --all-seats): a line written to every seat is a note to a seat "
+                 "that did not ask for it. seats: " + ", ".join(seats))
+    if getattr(args, "all_seats", False):
+        wanted = None
     if wanted and wanted not in seats:
         sys.exit("no seat %r in seats.json (%s)" % (wanted, ", ".join(seats)))
     report, failed = {"pruned": [], "targets": {}}, False

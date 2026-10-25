@@ -108,7 +108,7 @@ class Homes(unittest.TestCase):
 class Brief(Homes):
 
     def test_one_command_reaches_every_delvetown_job_of_both_seats_and_nothing_else(self):
-        r = self.brief("set", "tangled", "not set up yet: say we will check")
+        r = self.brief("set", "tangled", "not set up yet: say we will check", "--all-seats")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.notes(self.akai), {("gate1", "tangled"): "not set up yet: say we will check",
                                                  ("wake1", "tangled"): "not set up yet: say we will check"})
@@ -117,7 +117,7 @@ class Brief(Homes):
 
     def test_a_paused_job_is_not_a_target(self):
         """enabled=False / state=paused: the store would hold a line no run of that job ever reads."""
-        self.brief("set", "tangled", "x")
+        self.brief("set", "tangled", "x", "--seat", "locksmith")
         got = set(self.notes(self.lock))
         self.assertIn(("floor1", "tangled"), got)
         self.assertNotIn(("gate2", "tangled"), got)
@@ -131,6 +131,16 @@ class Brief(Homes):
         out2 = json.loads(self.brief("list", "--seat", "akai").stdout)
         self.assertEqual(list(out2["targets"]), ["akai"], "a seat whose key and name agree is not decorated")
 
+    def test_set_without_a_seat_refuses_and_writes_nothing(self):
+        """An omitted seat meant 'every seat', which spreads one seat's fact into another seat's wakes."""
+        r = self.brief("set", "tangled", "akai-only fact")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("--seat", r.stderr)
+        self.assertEqual((self.notes(self.akai), self.notes(self.lock)), ({}, {}),
+                         "a refused set must leave both stores untouched")
+        ok = self.brief("set", "tangled", "akai-only fact", "--all-seats")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+
     def test_a_seat_can_be_briefed_alone(self):
         self.brief("set", "quiz", "tally due Friday", "--seat", "akai")
         self.assertEqual(set(self.notes(self.akai)), {("gate1", "quiz"), ("wake1", "quiz")})
@@ -138,7 +148,7 @@ class Brief(Homes):
 
     def test_until_is_written_into_the_line_and_a_passed_date_is_pruned(self):
         tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
-        self.brief("set", "soon", "short-lived", "--until", tomorrow)
+        self.brief("set", "soon", "short-lived", "--seat", "akai", "--until", tomorrow)
         self.assertEqual(self.notes(self.akai)[("gate1", "soon")], "short-lived [until %s]" % tomorrow)
         con = sqlite3.connect(os.path.join(self.akai, "cron", "notepad.db"))
         con.execute("UPDATE cron_notepad SET value = 'old [until 2020-01-01]' WHERE key = 'soon'")
@@ -149,17 +159,17 @@ class Brief(Homes):
         self.assertNotIn(("gate1", "soon"), self.notes(self.akai))
 
     def test_a_date_already_passed_is_refused(self):
-        r = self.brief("set", "late", "x", "--until", "2020-01-01")
+        r = self.brief("set", "late", "x", "--seat", "akai", "--until", "2020-01-01")
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.notes(self.akai), {})
 
     def test_clear_removes_it_everywhere(self):
-        self.brief("set", "tangled", "x")
-        self.brief("clear", "tangled")
+        self.brief("set", "tangled", "x", "--all-seats")
+        self.brief("clear", "tangled", "--all-seats")
         self.assertEqual((self.notes(self.akai), self.notes(self.lock)), ({}, {}))
 
     def test_list_names_the_jobs_it_chose(self):
-        self.brief("set", "tangled", "x")
+        self.brief("set", "tangled", "x", "--seat", "akai")
         out = json.loads(self.brief("list").stdout)
         self.assertEqual([r["job"] for r in out["targets"]["akai"]], ["gate", "clock wake"])
         self.assertEqual(out["targets"]["akai"][0]["notes"], {"tangled": "x"})
@@ -193,14 +203,15 @@ class Digest(Homes):
         self.assertNotIn("t_done", out)
 
     def test_the_briefing_shows_what_the_crons_carry_and_what_expired(self):
-        self.brief("set", "tangled", "not set up")
+        self.brief("set", "tangled", "not set up", "--seat", "akai")
         con = sqlite3.connect(os.path.join(self.akai, "cron", "notepad.db"))
         con.execute("INSERT INTO cron_notepad VALUES ('wake1', 'stale', 'gone [until 2020-01-01]', 'x')")
         con.commit()
         con.close()
         out = self.digest()
-        # 3, not 4: the sibling seat's gate2 is paused and no longer counts as a job carrying the line
-        self.assertIn("- tangled: not set up (3 jobs)", out)
+        # 2: one seat's jobs (the line is now set with --seat akai), and the sibling's paused gate2 is
+        # not a target at all — both changes visible in this one number
+        self.assertIn("- tangled: not set up (2 jobs)", out)
         self.assertIn("! stale: gone [until 2020-01-01] (1 job) EXPIRED", out)
 
     def test_each_seat_s_window_with_a_double_answer_and_the_gate(self):
