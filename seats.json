@@ -29,7 +29,7 @@
    },
    "lanes": {
     "quietyear": {
-     "_why": "The Quiet Year repo work: a burst of town messages only the Quiet Year session can answer, because only it works in the repo. scripts/lane_relay.py wakes that session with what arrived, once a burst has settled. It acts on its own; the operator is not in this loop.",
+     "_why": "The Quiet Year repo work: a burst of town messages only the Quiet Year session can answer, because only it works in the repo. scripts/lane_relay.py wakes that session with what arrived, once a burst has settled, and never more often than every 50 minutes (min_gap_s 3000): steady traffic still arrives as one burst per interval, and a lone item waits at most one interval. It acts on its own; the operator is not in this loop.",
      "wake": {
       "platform": "telegram",
       "chat_id": "207357032",
@@ -38,7 +38,8 @@
       "mode": "notify+wake"
      },
      "settle_s": 600,
-     "max_wait_s": 1800
+     "max_wait_s": 1800,
+     "min_gap_s": 3000
     }
    }
   },

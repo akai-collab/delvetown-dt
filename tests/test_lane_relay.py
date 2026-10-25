@@ -147,6 +147,34 @@ class TheRelayWakesTheSession(Lane):
         self.run_pass(T0 + 1800)
         self.assertEqual(len(self.called()), 3)
 
+    def test_a_second_burst_waits_for_the_gap_then_carries_everything(self):
+        """The floor between wakes: 50 minutes, and the next wake is the whole accumulation."""
+        self.arrive([item("a")], T0)
+        self.run_pass(T0 + 900)                      # settles, no previous wake: goes at once
+        self.assertEqual(len(self.called()), 3)
+        self.arrive([item("b")], T0 + 1000)
+        self.arrive([item("c")], T0 + 1300)
+        self.run_pass(T0 + 2000)                     # settled, but 18 minutes after the last wake
+        self.assertEqual(len(self.called()), 3, "inside the gap nothing is handed on")
+        self.run_pass(T0 + 3899)
+        self.assertEqual(len(self.called()), 3, "one second short of 50 minutes: still held")
+        self.run_pass(T0 + 3900)                     # 50 minutes after the wake at T0+900
+        calls = self.called()
+        self.assertEqual(len(calls), 6)
+        summary = calls[5][calls[5].index("--summary") + 1]
+        self.assertIn("quietyear lane: 2 new", summary)
+        self.assertIn("review? b", summary)
+        self.assertIn("review? c", summary)
+        self.run_pass(T0 + 5000)
+        self.assertEqual(len(self.called()), 6, "and once only")
+
+    def test_the_gap_defaults_to_fifty_minutes(self):
+        conf = {"settle_s": 600, "max_wait_s": 1800}
+        settled = [{"seen_at": T0, "uri": "at://x/y/z"}]
+        self.assertFalse(self.relay.due(settled, conf, T0 + 2900, last_wake=T0),
+                         "settled, but inside the 50-minute floor")
+        self.assertTrue(self.relay.due(settled, conf, T0 + 3000, last_wake=T0))
+
     def test_the_same_batch_has_the_same_idempotency_key(self):
         a = [item("a"), item("b")]
         key = lambda batch: self.relay.hashlib.md5("\n".join(sorted(i["uri"] for i in batch)).encode()).hexdigest()

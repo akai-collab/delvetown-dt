@@ -116,10 +116,19 @@ def wake_text(lane, items):
     return head + "\n\n" + "\n".join(item_line(it) for it in items)
 
 
-def due(items, conf, now):
-    """A burst is handed on once it has settled, or once its oldest item has waited long enough."""
+def due(items, conf, now, last_wake=0):
+    """A burst is handed on once it has settled, or once its oldest item has waited long enough —
+    and never sooner than `min_gap_s` after the previous wake.
+
+    The gap is the batching rule: the Quiet Year session costs a real turn, and steady lane traffic used to
+    wake it every ten to thirty minutes. At 50 minutes a continuous stream still arrives as one burst per
+    interval, and a lone item waits at most one interval instead of interrupting.
+    """
     seen = [float(it.get("seen_at") or 0) for it in items]
-    return now - max(seen) >= float(conf.get("settle_s", 600)) or now - min(seen) >= float(conf.get("max_wait_s", 1800))
+    quiet = now - max(seen) >= float(conf.get("settle_s", 600))
+    stale = now - min(seen) >= float(conf.get("max_wait_s", 1800))
+    gap_ok = now - float(last_wake or 0) >= float(conf.get("min_gap_s", 3000))
+    return (quiet or stale) and gap_ok
 
 
 def wake(lane, conf, items):
@@ -156,7 +165,7 @@ def one_pass(now=None):
             target = conf.get("wake") or {}
             if not waiting or lst.get("paused") or not (target.get("platform") and target.get("chat_id")):
                 continue        # nothing new, held on purpose, or nowhere to wake: status and the digest say so
-            if not due(waiting, conf, now):
+            if not due(waiting, conf, now, lst.get("woke_at") or 0):
                 continue
             batch = sorted(waiting, key=lambda it: float(it.get("seen_at") or 0))[:MAX_ITEMS]
             try:
