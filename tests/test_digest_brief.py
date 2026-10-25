@@ -37,7 +37,10 @@ if a[:2] == ["cron", "notepad"]:
 elif a[0] == "kanban":
     if os.environ.get("FAKE_KANBAN_FAIL"):
         sys.exit(2)
-    print(open(os.environ["FAKE_TASKS"]).read())
+    board = a[a.index("--board") + 1] if "--board" in a else "delvetown"
+    path = os.environ["FAKE_TASKS"]
+    # a board of its own reads its own fixture when one is written; otherwise every board shares the one file
+    print(open(path + "." + board if os.path.exists(path + "." + board) else path).read())
 ''' % sys.executable
 
 
@@ -202,6 +205,18 @@ class Digest(Homes):
         self.assertIn("! t_old [todo, 5d] skill trim", out)
         self.assertNotIn("t_done", out)
 
+    def test_each_seat_has_its_own_board(self):
+        """One shared board put akai's tasks in front of the sibling seat as what it owed (2026-10-25)."""
+        now = time.time()
+        self.write_tasks([{"id": "t_akai", "title": "merge the PR", "status": "ready", "created_at": now}])
+        with open(self.tasks + ".skillissue", "w") as f:
+            json.dump([{"id": "t_si", "title": "Tally: which door?", "status": "ready", "created_at": now}], f)
+        out = self.digest()
+        akai, si = out.index("board delvetown: 1 open"), out.index("board skillissue: 1 open")
+        self.assertLess(akai, out.index("t_akai"))
+        self.assertLess(si, out.index("t_si"))
+        self.assertNotIn("t_akai", out[si:si + 200])
+
     def test_the_briefing_shows_what_the_crons_carry_and_what_expired(self):
         self.brief("set", "tangled", "not set up", "--seat", "akai")
         con = sqlite3.connect(os.path.join(self.akai, "cron", "notepad.db"))
@@ -331,7 +346,7 @@ class Digest(Homes):
 
     def test_a_board_that_will_not_answer_costs_one_line(self):
         out = self.digest(FAKE_KANBAN_FAIL="1")
-        self.assertIn("board: unavailable", out)
+        self.assertIn("board delvetown: unavailable", out)
         self.assertIn("akai, last 12h", out, "the rest of the digest still arrives")
 
     def test_without_seats_it_says_so_in_one_line(self):

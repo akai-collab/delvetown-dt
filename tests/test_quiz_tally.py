@@ -60,6 +60,40 @@ class QuizFlag(unittest.TestCase):
         self.assertIn(uri, called, "the body must name the quiz so a later run knows what it is tallying")
         self.assertIn("answers naming the seat", called)
 
+    def load_as(self, account, name):
+        import importlib.util
+        tmp = tempfile.mkdtemp()
+        binp = os.path.join(tmp, "hermes")
+        open(binp, "w").write(FAKE)
+        os.chmod(binp, 0o755)
+        calls = os.path.join(tmp, "calls.log")
+        os.environ.update({"HERMES_BIN": binp, "FAKE_CALLS": calls, "DT_ACCOUNT": account,
+                           "DT_SEATS_FILE": os.path.join(tmp, "seats.json")})
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in ("HERMES_BIN", "FAKE_CALLS", "DT_ACCOUNT",
+                                                                    "DT_SEATS_FILE")])
+        with open(os.path.join(ROOT, "seats.json"), encoding="utf-8") as f:
+            seats = json.load(f)
+        seats["seats"]["boardless"] = {"handle": "x.delve.town", "did": "did:plc:x", "name": "x"}
+        with open(os.environ["DT_SEATS_FILE"], "w", encoding="utf-8") as f:
+            json.dump(seats, f)
+        spec = importlib.util.spec_from_file_location(name, DT)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m, calls
+
+    def test_a_seat_files_on_its_own_board(self):
+        """The sibling's quiz is the sibling's to tally: it goes on its board, not on akai's."""
+        m, calls = self.load_as("locksmith", "dt_quiz_si")
+        self.assertEqual(m.tally_task("at://did:plc:me/town.delve.feed.post/3quiz")["status"], 200)
+        self.assertIn("--board skillissue create", open(calls).read())
+
+    def test_a_seat_with_no_board_files_nothing(self):
+        m, calls = self.load_as("boardless", "dt_quiz_nb")
+        r = m.tally_task("at://did:plc:me/town.delve.feed.post/3quiz")
+        self.assertEqual(r["status"], 0)
+        self.assertIn("no board", r["error"])
+        self.assertFalse(os.path.exists(calls), "and never falls back to akai's board")
+
     def test_an_unavailable_hermes_is_reported_not_swallowed(self):
         import importlib.util
         os.environ["HERMES_BIN"] = "/nonexistent/hermes"

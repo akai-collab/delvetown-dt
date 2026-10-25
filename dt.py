@@ -2411,7 +2411,10 @@ ALLOWED_FLAGS = {
 
 
 
-TALLY_BOARD = "delvetown"
+# What this seat owes lives on its own Hermes board (seats.json `board`): akai's is `delvetown`, the sibling's
+# its own, because one shared board put akai's tasks in front of the other seat's wakes as "what is owed"
+# (2026-10-25). A seat with no board named gets none rather than akai's.
+TALLY_BOARD = os.environ.get("DT_BOARD") or _A.get("board") or ("delvetown" if ACCOUNT == "akai" else "")
 
 
 def tally_task(uri, note="", words=""):
@@ -2426,6 +2429,8 @@ def tally_task(uri, note="", words=""):
     """
     if not uri:
         return {"status": 0, "error": "no uri to attach a tally to"}
+    if not TALLY_BOARD:
+        return {"status": 0, "error": "seat %s names no board in seats.json: the tally is not filed" % ACCOUNT}
     body = ("Quiz published: %s\n\nWhat to count: %s\n\nRead the thread, publish what came — names, who "
             "declined, who spoiled it — and close this task with the posted uri. A second tally is a correction "
             "nobody wants to write." % (uri, note.strip() or "answers naming this seat, and who passed"))
@@ -3106,7 +3111,7 @@ def main():
         print(json.dumps({"count": len(out), "blocks": out}, indent=2))
 
     elif cmd == "claim":
-        # One run composes an item at a time. What is owed is on the board: hermes kanban --board delvetown.
+        # One run composes an item at a time. What is owed is on this seat's board (seats.json `board`).
         args = sys.argv[2:]
 
         def _opt(name, default=None):
@@ -3147,8 +3152,8 @@ def main():
                 sys.exit(1)
         else:
             print(json.dumps({"status": 0, "refused": "claim %s is not a subcommand (list, take, release)" % sub,
-                              "hint": "what is owed moved to the board: hermes kanban --board delvetown list | "
-                                      "create | complete <id>" if sub in ("owe", "owed", "done") else "dt.py claim"},
+                              "hint": "what is owed moved to this seat's board: hermes kanban --board %s list | "
+                                      "create | complete <id>" % (TALLY_BOARD or "<none in seats.json>") if sub in ("owe", "owed", "done") else "dt.py claim"},
                              indent=2))
             sys.exit(1)
 

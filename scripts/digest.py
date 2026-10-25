@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Twice a day, what is open: the board, the briefing the crons are carrying, and each seat's last 12 hours.
+"""Twice a day, what is open: each seat's board, the briefing the crons are carrying, and each seat's last 12 hours.
 
 So the operator does not have to remember to look. Run as a Hermes no-agent cron job — no model, no tokens;
 its stdout is the message — twice a day, morning and night:
@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 
 HOURS = float(os.environ.get("DT_DIGEST_HOURS") or 12)
-BOARD = os.environ.get("DT_DIGEST_BOARD") or "delvetown"
+BOARD = os.environ.get("DT_DIGEST_BOARD")   # one board instead of each seat's (seats.json `board`)
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~")
 STATE = os.path.join(BASE, ".local", "state", "delvetown-dt")
@@ -83,23 +83,35 @@ def age(seconds):
     return "%dm" % (seconds // 60)
 
 
-def board_section(now):
-    """Open tasks on the board, oldest first, with the stale ones marked."""
-    cmd = [os.environ.get("HERMES_BIN") or "hermes", "kanban", "--board", BOARD, "list", "--json"]
+def boards(seats):
+    """Each seat's board once, in seat order: DT_DIGEST_BOARD, else what seats.json names, else akai's."""
+    if BOARD:
+        return [BOARD]
+    out = []
+    for seat in seats.values():
+        b = seat.get("board")
+        if b and b not in out:
+            out.append(b)
+    return out or ["delvetown"]
+
+
+def board_section(now, board):
+    """Open tasks on one board, oldest first, with the stale ones marked."""
+    cmd = [os.environ.get("HERMES_BIN") or "hermes", "kanban", "--board", board, "list", "--json"]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if out.returncode != 0:
             # never "nothing open": a board that did not answer must not read as a clear board
-            return ["board: unavailable (hermes kanban exited %d)" % out.returncode]
+            return ["board %s: unavailable (hermes kanban exited %d)" % (board, out.returncode)]
         tasks = json.loads(out.stdout)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        return ["board: unavailable (%s)" % type(exc).__name__]
+        return ["board %s: unavailable (%s)" % (board, type(exc).__name__)]
     if not isinstance(tasks, list):
-        return ["board: unavailable (unexpected answer)"]
+        return ["board %s: unavailable (unexpected answer)" % board]
     tasks = [t for t in tasks if isinstance(t, dict) and t.get("status") not in ("done", "archived")]
     if not tasks:
-        return ["board %s: nothing open" % BOARD]
-    lines = ["board %s: %d open" % (BOARD, len(tasks))]
+        return ["board %s: nothing open" % board]
+    lines = ["board %s: %d open" % (board, len(tasks))]
     for t in sorted(tasks, key=lambda t: t.get("created_at") or 0):
         created = t.get("created_at")
         made = float(created) if isinstance(created, (int, float)) else epoch(created)
@@ -366,7 +378,8 @@ def main():
     except (OSError, ValueError, KeyError, RuntimeError) as exc:
         print("\n".join(out + ["seats: unavailable (%s) — run install-monitor.sh" % exc]))
         return
-    out += [""] + board_section(now)
+    for board in boards(seats):
+        out += [""] + board_section(now, board)
     out += [""] + briefing_section(seats, today)
     try:
         monitor = load_monitor()
