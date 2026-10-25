@@ -25,6 +25,13 @@ echo "copied: $here/scripts/digest.py -> $target/digest.py"
 # The lane relay wakes the session that owns a lane (Quiet Year) from the outbox the monitor fills.
 install -m 0644 "$here/scripts/lane_relay.py" "$target/lane_relay.py"
 echo "copied: $here/scripts/lane_relay.py -> $target/lane_relay.py"
+# akai's gate wrapper. It lives here because it did not live anywhere: the live copy was the only copy, so the
+# only reviewable record of what the 5-minute gate runs was a file on one machine. Installed only into the
+# default profile's scripts dir -- it names akai's handle, and a second profile must not inherit it.
+if [ "$target" = "$HOME/.hermes/scripts" ] && [ -f "$here/scripts/delvetown_monitor-akai.sh" ]; then
+  install -m 0755 "$here/scripts/delvetown_monitor-akai.sh" "$target/delvetown_monitor-akai.sh"
+  echo "copied: $here/scripts/delvetown_monitor-akai.sh -> $target/delvetown_monitor-akai.sh"
+fi
 # The seat table both programs read. One copy for every profile, in the state directory beside the files
 # it names: the monitor refuses to guess a seat without it, and dt.py refuses to run.
 state="${HERMES_REAL_HOME:-$HOME}/.local/state/delvetown-dt"

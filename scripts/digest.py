@@ -21,9 +21,15 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 HOURS = float(os.environ.get("DT_DIGEST_HOURS") or 12)
+APPVIEW = os.environ.get("DT_APPVIEW") or "https://api.delve.town"
+# How many of a seat's publish-time flags to re-check against the appview. Probing is one small read each, a
+# handful per seat twice a day; the cap keeps a heavy-writing window from turning the digest into a crawler.
+PROBE_MAX = int(os.environ.get("DT_DIGEST_PROBE") or 12)
 BOARD = os.environ.get("DT_DIGEST_BOARD")   # one board instead of each seat's (seats.json `board`)
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~")
@@ -155,7 +161,42 @@ def briefing_section(seats, today):
     return lines
 
 
-def seat_section(monitor, name, seat, now, once=None):
+def appview_holds(uri, timeout=8):
+    """Does the town's appview hold this record right now? None when it could not be asked.
+
+    The publish log's `indexed` is the answer at the moment of writing, and nothing rewrites it — so a write
+    the appview indexed thirty seconds later keeps its False for ever, and a digest that counts those reads
+    as "not indexed" reports a backlog that does not exist (2026-10-25: 17 for akai, when `dt.py unindexed`
+    found none). This asks the appview again, so the figure is a state and not a memory.
+    """
+    if not uri:
+        return False
+    url = "%s/xrpc/town.delve.feed.getPostThread?%s" % (
+        APPVIEW, urllib.parse.urlencode({"uri": uri, "depth": 0}))
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "digest"}), timeout=timeout) as f:
+            body = json.loads(f.read().decode("utf-8", "replace"))
+    except Exception:
+        return None
+    return bool(((body or {}).get("thread") or {}).get("post"))
+
+
+def unindexed_now(recent, probe=None):
+    """(missing, flagged, unknown) for a seat's window: what the appview does not hold *now*.
+
+    Only writes that can be in the appview are probed — posts and replies (a like, a delete or a follow is
+    never indexed, so counting those as missing is a second way to report a backlog nobody has). Probing is
+    capped at PROBE_MAX and reported as unknown when it cannot be done, never guessed.
+    """
+    flagged = [e for e in recent if e.get("indexed") is False and e.get("uri")
+               and e.get("kind") in ("post", "reply", "quote")]
+    probe = probe or appview_holds
+    checked = flagged[:PROBE_MAX]
+    verdicts = [probe(e.get("uri")) for e in checked] if PROBE_MAX else []
+    return (sum(1 for v in verdicts if v is False), len(flagged), sum(1 for v in verdicts if v is None))
+
+
+def seat_section(monitor, name, seat, now, once=None, probe=None):
     """One seat's window: what it wrote, how asks were closed, any double answer, and the gate's queue.
 
     `once` is shared across seats: the forge is not a seat's, so its line is printed with the first one."""
@@ -179,10 +220,19 @@ def seat_section(monitor, name, seat, now, once=None):
         kinds[kind] = kinds.get(kind, 0) + 1
     wrote = ", ".join("%d %s" % (kinds[k], k) for k in ("post", "reply", "delete", "like", "follow") if kinds.get(k))
     closed = ", ".join("%d %s" % (kinds[k], k) for k in ("decline", "abstain") if kinds.get(k))
-    unindexed = sum(1 for e in recent if e.get("indexed") is False)
+    missing, flagged, unknown = unindexed_now(recent, probe=probe)
+    if not PROBE_MAX and flagged:
+        idx = "; %d flagged at publish (not probed)" % flagged
+    elif missing:
+        idx = "; %d not in the appview" % missing
+    elif flagged:
+        idx = "; %d flagged at publish, all in the appview now" % flagged
+    else:
+        idx = ""
+    if unknown:
+        idx += " (%d unprobed: appview did not answer)" % unknown
     lines.append("%s, last %dh: %s%s%s" % (label, HOURS, wrote or "wrote nothing",
-                                          "; closed " + closed if closed else "",
-                                          "; %d not indexed" % unindexed if unindexed else ""))
+                                          "; closed " + closed if closed else "", idx))
     doubles = [d for d in monitor.double_answers(entries=entries) if now - epoch(d.get("at")) <= HOURS * 3600]
     for d in doubles:
         lines.append("  ! double answer to %s: %s and %s" % (str(d["ask"]).split("/")[-1],
