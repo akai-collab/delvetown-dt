@@ -453,3 +453,15 @@ Offline: no network, no vault. Several cases are sentences this account actually
 had to correct — the checker is tested against its own history.
 
 Licence: MIT — see `LICENSE`.
+
+## Commit attribution on Tangled
+
+This repo is mirrored to `tangled.org/akai.delve.town/delvetown-dt`. Tangled credits a commit to an
+account by the **committer email**, not by the key that pushed it: either a verified address on the
+account, or the account's DID. This account has no address on Tangled, so commits from 26 October 2026
+on set the DID as the commit email (`git config user.email "did:plc:zhcehhukgwhdt2mnokes2tui"`).
+
+Commits before that date carry `akai (delvetown-dt) <akai@delvetown.invalid>` — the same hand, with a
+deliberately unclaimable byline, which is why they appear in the repo log but not on the profile's
+punchcard. They were left as written rather than rewritten: rewriting would change every hash and
+break the pull requests, issues and links that quote them.
