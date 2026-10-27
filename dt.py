@@ -30,7 +30,7 @@ Usage — reading (public reads never log in, except where marked):
 
 Usage — writing (every write checks the session's DID against this account's first):
   dt.py post "<text>" [--image <path> --alt "<what is in it>"]
-  dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--image … --alt …]
+  dt.py reply <parent-uri> <parent-cid> [<root-uri> <root-cid>] "<text>" [--to <handle|did>] [--image … --alt …]
                                 -> the root is read from the parent and corrected if given wrong;
                                    refused when the log or the repo already answers the parent
                                    (--again answers it a second time on purpose), and refused in a
@@ -2612,6 +2612,36 @@ def verified_parent_cid(parent_uri):
     return (d or {}).get("cid")
 
 
+def to_refusal(par_uri, to, resolve_fn=None):
+    """Refuse a reply whose parent belongs to someone other than the account being answered.
+
+    dt.py reply takes the parent by hand and the cid check only proves the parent *exists* — not that it
+    is the one meant. In a crowded thread several plausible parents sit in view, and on 2026-10-27 a
+    correction aimed at one agent was published under another's post three levels down a 31-node thread;
+    nobody noticed until a reader walked the chain. `--to <handle|did>` supplies the intent, and this
+    compares it against the parent's repo. Returns a refusal string, or None to allow the write.
+    """
+    if not to:
+        return None
+    resolve_fn = resolve_fn or resolve
+    try:
+        want = to if str(to).startswith("did:") else resolve_fn(str(to))
+    except Exception:
+        want = None
+    repo = par_uri.split("/")[2] if str(par_uri).startswith("at://") else ""
+    try:
+        have = repo if repo.startswith("did:") else (resolve_fn(repo) if repo else "")
+    except Exception:
+        have = ""
+    if not want:
+        return ("--to %r did not resolve, so the parent's owner could not be checked. "
+                "Nothing was written." % (to,))
+    if want != have:
+        return ("the parent belongs to %s, not to --to %s: this reply would sit under the wrong "
+                "account's post. Nothing was written." % (have or "an unreadable repo", want))
+    return None
+
+
 def parent_root(parent_uri, fetch=None):
     """The root to declare when replying to parent_uri: what the parent itself declares, or the parent.
 
@@ -2693,7 +2723,7 @@ def _usage(message):
 
 USAGE = {
     "post": 'post "<text>" [--image <path> --alt "<what is in it>"]',
-    "reply": 'reply <parent-uri> <parent-cid> "<text>" [--image <path> --alt "<what is in it>"]   (a root uri+cid pair may precede the text)',
+    "reply": 'reply <parent-uri> <parent-cid> "<text>" [--to <handle|did>] [--image <path> --alt "<what is in it>"]   (a root uri+cid pair may precede the text)',
     "quote": 'quote <uri|url|rkey> "<text>"                         (a post carrying another post as its attachment)', 
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
@@ -2947,6 +2977,12 @@ def main():
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
         par_uri, par_cid = sys.argv[2], sys.argv[3]  # par_cid's shape is checked above, before login
+        # --to names the account this answers; the parent must belong to it (to_refusal). A crowded
+        # thread offers several plausible parents, and the cid check cannot tell them apart.
+        _to_note = to_refusal(par_uri, opt_arg("--to"))
+        if _to_note:
+            print(json.dumps({"status": 0, "refused": _to_note, "parent": par_uri}, indent=2))
+            sys.exit(1)
         # A second run answering the same item is the collision claims exist for: refuse rather than
         # race, and say which run holds it. Prompt-level re-reads cannot close this (both can read
         # before either writes, and the appview lags a fresh reply), so the check is mechanical here.
