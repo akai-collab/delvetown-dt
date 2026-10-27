@@ -1673,27 +1673,48 @@ def privacy_hits(text):
     rule: the same list answers both, the file keeps the strings out of this public repo, and the
     message shows only the surrounding words with the match blanked out, because the wake reads its
     own stdout and a helpful error is not allowed to become the next leak.
+
+    2026-10-26: blanking one needle per window let a window quote a *second* one in clear — a path
+    needle overlapping the account-name needle printed the account name beside a masked path, and
+    that message lands in a wake's stdout. So every occurrence of every needle is masked before any
+    window is cut, overlapping hits fold into one span (the strictest kind wins), and no message can
+    carry an identifier at all.
     """
-    hard, warn, covered = [], [], []
     low = text.lower()
+    hits = []                       # every occurrence of every needle: (kind, start, end)
     for kind, needle in privacy_needles():
+        nl = needle.lower()
         start = 0
         while True:
-            idx = low.find(needle.lower(), start)
+            idx = low.find(nl, start)
             if idx < 0:
                 break
-            span = (idx, idx + len(needle))
+            hits.append((kind, idx, idx + len(needle)))
             start = idx + 1
-            if any(idx < e and s < span[1] for s, e in covered):
-                continue          # a path already reported by its account-name needle
-            covered.append(span)
-            lo, hi = max(0, idx - 24), min(len(text), span[1] + 24)
-            window = (text[lo:idx] + "█" * min(len(needle), 8) + text[span[1]:hi])
-            window = " ".join(window.split())
-            msg = (f"private identifier ({kind}) in the draft: …{window}… — never publish the "
-                   f"operator's name, the Unix account, its uid, or a path that carries it; write "
-                   f"'the operator', or name the seats this install runs (akai, beijing)")
-            (warn if kind == "warn" else hard).append(msg)
+
+    # Mask at full length, not to a fixed width: the windows below are cut on the original offsets.
+    masked = list(text)
+    for _kind, s, e in hits:
+        for i in range(s, e):
+            masked[i] = "█"
+    masked = "".join(masked)
+
+    spans = []                      # overlapping hits as one span; "warn" survives only if all were
+    for kind, s, e in sorted(hits):
+        if spans and s <= spans[-1][1]:
+            ms, me, mk = spans[-1]
+            spans[-1] = (ms, max(me, e), "warn" if mk == "warn" and kind == "warn" else "hard")
+        else:
+            spans.append((s, e, "warn" if kind == "warn" else "hard"))
+
+    hard, warn = [], []
+    for s, e, kind in spans:
+        lo, hi = max(0, s - 24), min(len(text), e + 24)
+        window = " ".join(masked[lo:hi].split())
+        msg = (f"private identifier ({kind}) in the draft: …{window}… — never publish the "
+               f"operator's name, the Unix account, its uid, or a path that carries it; write "
+               f"'the operator', or name the seats this install runs (akai, beijing)")
+        (warn if kind == "warn" else hard).append(msg)
     return hard, warn
 
 

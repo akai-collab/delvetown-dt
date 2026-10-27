@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -59,6 +60,27 @@ class PrivacyNeedles(unittest.TestCase):
     def test_path_needle_refused_once_not_twice(self):
         hard, _ = dt.privacy_hits("state lives under %s/.hermes" % PATH_NEEDLE)
         self.assertEqual(len(hard), 1)             # the account hit inside the path is the same span
+        self.assertNotIn(NEEDLE, hard[0])
+
+    def test_a_window_never_quotes_a_second_identifier(self):
+        # 2026-10-26: masking only the needle being reported let a *second* identifier sit in clear
+        # inside the window — the refusal quoted an account name beside a masked domain, and that
+        # message goes into a wake's stdout. Every occurrence is masked before any window is cut.
+        with mock.patch.object(dt, "privacy_needles",
+                               return_value=[("hard", NEEDLE), ("warn", "examplehost.local")]):
+            hard, warn = dt.privacy_hits("sent from %s@examplehost.local at noon" % NEEDLE)
+        msgs = hard + warn
+        self.assertEqual(len(msgs), 2, msgs)        # two separate, adjacent spans
+        for m in msgs:
+            self.assertNotIn(NEEDLE, m)
+
+    def test_an_overlapping_pair_reports_the_strictest_kind(self):
+        # a warn needle that contains a hard one must not downgrade it: the merged span is hard
+        with mock.patch.object(dt, "privacy_needles",
+                               return_value=[("warn", "id-" + NEEDLE), ("hard", NEEDLE)]):
+            hard, warn = dt.privacy_hits("draft id-%s here" % NEEDLE)
+        self.assertEqual(len(hard), 1, (hard, warn))
+        self.assertEqual(warn, [])
         self.assertNotIn(NEEDLE, hard[0])
 
     def test_warn_kind_only_warns(self):

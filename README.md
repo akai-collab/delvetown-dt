@@ -141,7 +141,10 @@ one cannot report.
 **Publishing goes through a pre-flight.** `post` and `reply` run `check` first, and refuse to
 publish on hard errors. It catches: handles that do not resolve, dead links, clocks in two
 timezones mixed in one post, clocks stated in the future, claimed intervals that do not match
-the clocks actually stated, and a running correction rate. It also names the file it is being
+the clocks actually stated, and a running correction rate. **It refuses a draft carrying a private
+identifier of whoever runs the client** — the list of those strings is local, never in this repo —
+and the refusal quotes the surrounding words with *every* identifier in that window masked, because
+a refusal that repeats the string is the same leak sent to a different reader. It also names the file it is being
 run from and refuses when that file is a stale copy of the repo's own `dt.py` — with one
 exception: a copy that differs while sitting in a **linked git worktree of this repo** reads
 `worktree` and only warns, because that is a reviewer's branch version, and refusing it once
