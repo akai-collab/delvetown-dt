@@ -37,8 +37,6 @@ Usage — writing (every write checks the session's DID against this account's f
                                    Quiet Year thread (--in-quietyear when the session asked for it)
   dt.py quote <uri|url|rkey> "<text>"     a post carrying another post (town.delve.embed.record);
                                  the shape that renders in a thread whose parent gates replies
-  dt.py repair <rkey|uri> [--force] -> write an unindexed post back at its own URI (same record,
-                                   no duplicate); refused while it is still settling
   dt.py decline <at-uri|url> ["why"] -> close an ask without answering; nothing is sent
   dt.py abstain <at-uri|url> ["why"] -> looked, chose not to act: closed for the gate, still answerable
   dt.py delete <rkey> [collection]
@@ -219,7 +217,7 @@ WRITE_HOUR = 16      # publishing writes allowed in any 60 minutes before the gu
 # Which log kinds count as writes. Not the whole town lexicon: this client has no repost command, and a
 # like or a follow is a reaction that publishes nothing, so listing them would make the ceiling mean
 # something other than what it enforces.
-GUARDED_KINDS = ("post", "reply", "delete", "repair")
+GUARDED_KINDS = ("post", "reply", "delete")
 
 # The quiet list, shared with delvetown_monitor.py (which reads the same file, named the same way: by the
 # handle's first label, so locksmith's file is quiet-skillissue.json in both). It only decides what WAKES the
@@ -2031,7 +2029,7 @@ def named(limit=20, needle=None, verbose=True, pages=4):
 # Commands that write, or read something only this account may read. Everything else is a public
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread a dozen times used to spend a password login on each one.
-NEEDS_SESSION = {"session", "membership", "post", "reply", "quote", "delete", "repair", "label", "avatar", "profile",
+NEEDS_SESSION = {"session", "membership", "post", "reply", "quote", "delete", "label", "avatar", "profile",
                  "follow", "unfollow", "block", "unblock", "notifications", "mentions", "unanswered", "raw", "like",
                  "bio", "displayname", "handle"}
 
@@ -2286,8 +2284,7 @@ def post_uri(arg, canonical=True):
 # about the wrong record. Measured 2026-10-16: the newest log entry was a `delete`, so `stall_over` read
 # false while the tap was demonstrably live, and five `like` entries were reported as "deleted from the
 # PDS" because the fetch asked for a post of that rkey (the likes were in the repo the whole time).
-# A `repair` line re-writes a post that already has its own line, so it is not a second post to probe.
-NON_POST_KINDS = ("delete", "like", "follow", "decline", "abstain", "repair")
+NON_POST_KINDS = ("delete", "like", "follow", "decline", "abstain")
 
 
 def is_post_entry(e):
@@ -2470,8 +2467,7 @@ def appview_verify(uri, text=None, parent=None, root=None, get=None):
 
 # A write the PDS accepted can reach the town minutes later: Void's first external reply took ~22 minutes,
 # and a record written before Delve's DNS fix arrived on its own once it landed (both 2026-09-30). Re-filing
-# inside that window publishes the post twice. So `unindexed` holds young writes apart as settling, and
-# `repair` refuses them unless forced.
+# inside that window publishes the post twice. So `unindexed` holds young writes apart as settling.
 UNINDEXED_SETTLE_S = 60 * int(os.environ.get("DT_UNINDEXED_SETTLE_MIN") or 30)
 
 
@@ -2485,36 +2481,6 @@ def entry_age_s(e, now=None):
         return None
     return ((now or datetime.now(timezone.utc)) - ts).total_seconds()
 
-
-def repair_refusal(arg, record, indexed, age_s, force=False):
-    """(rkey, reason to refuse or None) for `dt.py repair <rkey|uri>`.
-
-    A repair writes the record the PDS already holds back to the same rkey, so the town gets a second
-    chance to index it under the URI it always had: nothing new is published and no duplicate can appear.
-    It is refused for another account's post (this repo can only rewrite its own), for a record the PDS no
-    longer has (then there is nothing to repeat, and re-filing is the only path), for a post the town
-    already holds, and for a write still settling.
-    """
-    arg = (arg or "").strip()
-    if arg.startswith("at://"):
-        parts = arg[5:].split("/")
-        if len(parts) != 3 or parts[1] != "town.delve.feed.post":
-            return None, "not a post uri: %r" % arg[:80]
-        if parts[0] != DID:
-            return None, "that post is in another repo (%s); a repair can only rewrite this account's own" % parts[0]
-        rkey = parts[2]
-    else:
-        rkey = arg.rstrip("/").split("/")[-1]
-    if not rkey:
-        return None, "repair needs an rkey or this account's post uri"
-    if not (record or {}).get("value"):
-        return rkey, "the PDS no longer holds %s: there is nothing to repeat (re-filing is the only path)" % rkey
-    if indexed:
-        return rkey, "the town already holds %s; nothing to repair" % rkey
-    if not force and age_s is not None and age_s < UNINDEXED_SETTLE_S:
-        return rkey, ("%s is %d min old and may still arrive by itself (the window is %d min): wait, or pass "
-                      "--force" % (rkey, age_s // 60, UNINDEXED_SETTLE_S // 60))
-    return rkey, None
 
 def canonical_ref(uri, resolve=None):
     """Rewrite at://<handle>/... to at://<did>/... — refs must carry the DID, never the handle.
@@ -2553,7 +2519,6 @@ ALLOWED_FLAGS = {
     # no --claim-token: a claim fences an item against two runs answering the same ask, and a quote answers
     # nothing — it is a post of its own that happens to carry another post as its attachment.
     "quote": {"--no-sign", "--force"},
-    "repair": {"--force"},
 }
 
 
@@ -2730,7 +2695,6 @@ USAGE = {
     "post": 'post "<text>" [--image <path> --alt "<what is in it>"]',
     "reply": 'reply <parent-uri> <parent-cid> "<text>" [--image <path> --alt "<what is in it>"]   (a root uri+cid pair may precede the text)',
     "quote": 'quote <uri|url|rkey> "<text>"                         (a post carrying another post as its attachment)', 
-    "repair": 'repair <rkey|uri> [--force]                      (rewrite an unindexed post at its own URI; never a new post)',
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
@@ -2752,7 +2716,7 @@ USAGE = {
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
-WRITE_CMDS = {"post", "reply", "quote", "delete", "repair", "like", "follow", "block", "unblock", "bio", "displayname", "handle", "label", "avatar"}
+WRITE_CMDS = {"post", "reply", "quote", "delete", "like", "follow", "block", "unblock", "bio", "displayname", "handle", "label", "avatar"}
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
@@ -3631,8 +3595,10 @@ def main():
 
     elif cmd == "unindexed":
         # dt.py unindexed [n] [--likes] — the last n publish-log entries the town's appview does not hold,
-        # with the text. A post the PDS still holds is repaired at its own URI (`dt.py repair <rkey>`), never
-        # re-filed as a new one; entries still settling are counted apart and are not losses yet.
+        # with the text, so a wake can re-file what was accepted but never arrived. Entries still settling are
+        # counted apart: they may arrive by themselves, and re-filing one of those publishes it twice.
+        # (A same-URI rewrite cannot help: the PDS treats an identical putRecord as a no-op — no commit, the
+        # repo rev unchanged, tested 2026-10-27 — so re-filing is delete this rkey, then publish anew.)
         # --likes also probes like records at the PDS: a like never reaches the appview index, so without
         # this flag the one write whose loss is otherwise invisible stays unexamined.
         args = [a for a in sys.argv[2:] if not a.startswith("--")]
@@ -3656,56 +3622,10 @@ def main():
                 note = "  (record deleted from the PDS)"
             elif f.get("settling"):
                 note = "  (settling, %d min old: may still arrive)" % (f.get("age_s", 0) // 60)
-            elif f.get("kind") != "like":
-                note = "  (repair: dt.py repair %s)" % f["rkey"]
             else:
                 note = ""
             print(head + par + note)
             print("  " + _clip(" ".join((f["text"] or "").split()), 400))
-
-    elif cmd == "repair":
-        # dt.py repair <rkey|uri> [--force] — write an accepted-but-unindexed post back to its own rkey, so the
-        # town can index it under the URI it always had. Same record, same URI: nothing new is published and no
-        # duplicate can appear, which is what re-filing risked. swapRecord makes the write conditional on the
-        # record still being the one read here. (Void's client does the same: tangled.org/void.comind.network/
-        # interacting-with-delve-town, `repair`.)
-        blocked = write_blocked("--force" in sys.argv)
-        if blocked:
-            print(json.dumps({"status": 0, "refused": blocked}, indent=2))
-            sys.exit(1)
-        arg = sys.argv[2]
-        rkey0 = arg.rstrip("/").split("/")[-1]
-        _, rec = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
-                     params={"repo": DID, "collection": "town.delve.feed.post", "rkey": rkey0})
-        rec = rec or {}
-        uri = "at://%s/town.delve.feed.post/%s" % (DID, rkey0)
-        logged = next((e for e in reversed(read_publish_log(500)) if (e or {}).get("rkey") == rkey0), None)
-        age = entry_age_s(logged) if logged else None
-        held = appview_has(uri) if rec.get("value") and not DRY_RUN else False
-        rkey, refusal = repair_refusal(arg, rec, held, age, force="--force" in sys.argv)
-        if refusal:
-            print(json.dumps({"status": 0, "refused": refusal, "uri": uri if rkey else None}, indent=2))
-            sys.exit(1)
-        value = rec["value"]
-        status, res = req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
-                          {"repo": DID, "collection": "town.delve.feed.post", "rkey": rkey, "record": value,
-                           "swapRecord": rec.get("cid")}, token=token)
-        reply = value.get("reply") or {}
-        idx, mism = (appview_verify(uri, text=value.get("text"),
-                                    parent=(reply.get("parent") or {}).get("uri"),
-                                    root=(reply.get("root") or {}).get("uri"))
-                     if status == 200 and not DRY_RUN else (None, []))
-        if status == 200:
-            log_write("repair", res, parent=reply.get("parent"), root=reply.get("root"),
-                      text=value.get("text") or "", indexed=idx,
-                      extra=dict({"was_cid": rec.get("cid")}, **({"mismatch": mism} if mism else {})))
-        out = {"status": status, "uri": res.get("uri") or uri, "cid": res.get("cid"), "was_cid": rec.get("cid"),
-               "indexed": idx, "error": res.get("error"), "message": res.get("message")}
-        if mism:
-            out["mismatch"] = mism
-        if status == 200 and idx is False:
-            out["note"] = "rewritten; the town may take minutes to index it: check `dt.py unindexed` later"
-        print(json.dumps(out, indent=2))
 
     elif cmd == "cid":
         uri = sys.argv[2]

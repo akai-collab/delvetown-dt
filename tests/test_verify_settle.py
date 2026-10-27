@@ -3,15 +3,12 @@
 1. One `town.delve.feed.getPosts` call asks about 25 records; getPostThread asked about one.
 2. After a write, check that the town holds *what was sent* — author, text, parent, root — not only that
    something sits at the URI.
-3. A post the PDS accepted can reach the town minutes later (Void's first outside reply: ~22 minutes), so a
-   missing post is repaired at its own URI, never re-filed as a new one, and young writes are left to settle.
+3. A post the PDS accepted can reach the town minutes later (Void's first outside reply: ~22 minutes), so
+   young writes are listed as settling rather than lost, and are not re-filed yet.
 
 Offline: every appview answer here is a stub.
 """
 
-import contextlib
-import io
-import json
 import pathlib
 import sys
 import unittest
@@ -127,65 +124,9 @@ class UnindexedBatchAndSettle(unittest.TestCase):
             out = dt.unindexed_entries(entries, fetch=self.FETCH, posts=posts, now=NOW)
         self.assertEqual([e["rkey"] for e in out], ["b"])
 
-    def test_a_repair_line_is_not_a_second_post(self):
-        entries = [{"rkey": "a", "kind": "post", "ts": ts(120)}, {"rkey": "a", "kind": "repair", "ts": ts(60)}]
-        out = dt.unindexed_entries(entries, fetch=self.FETCH, posts=lambda b: [], now=NOW)
-        self.assertEqual([(e["rkey"], e["kind"]) for e in out], [("a", "post")])
-
     def test_no_posts_in_the_page_asks_nothing(self):
         entries = [{"rkey": "l", "kind": "like", "ts": ts(120)}]
         self.assertEqual(dt.unindexed_entries(entries, posts=lambda b: self.fail("asked")), [])
-
-
-class RepairRefusal(unittest.TestCase):
-    REC = {"uri": uri("a"), "cid": "bafyreiexample", "value": {"text": "hello"}}
-    OLD = 2 * 3600
-
-    def test_an_old_unindexed_post_of_this_account_is_repaired(self):
-        self.assertEqual(dt.repair_refusal("a", self.REC, False, self.OLD), ("a", None))
-        self.assertEqual(dt.repair_refusal(uri("a"), self.REC, False, self.OLD), ("a", None))
-
-    def test_another_repo_is_refused(self):
-        rkey, why = dt.repair_refusal(uri("a", "did:plc:someone"), self.REC, False, self.OLD)
-        self.assertIsNone(rkey)
-        self.assertIn("another repo", why)
-
-    def test_a_record_the_pds_lost_cannot_be_repaired(self):
-        self.assertIn("no longer holds", dt.repair_refusal("a", {}, False, self.OLD)[1])
-
-    def test_a_post_the_town_holds_needs_nothing(self):
-        self.assertIn("already holds", dt.repair_refusal("a", self.REC, True, self.OLD)[1])
-
-    def test_a_settling_post_waits_unless_forced(self):
-        self.assertIn("still arrive", dt.repair_refusal("a", self.REC, False, 300)[1])
-        self.assertIsNone(dt.repair_refusal("a", self.REC, False, 300, force=True)[1])
-
-    def test_an_unknown_age_does_not_block(self):
-        self.assertIsNone(dt.repair_refusal("a", self.REC, False, None)[1])
-
-    def test_a_uri_that_is_not_a_post_is_refused(self):
-        self.assertIn("not a post uri", dt.repair_refusal(uri("a").replace("feed.post", "feed.like"),
-                                                          self.REC, False, self.OLD)[1])
-
-    def test_repair_is_a_guarded_write_and_not_a_post_kind(self):
-        self.assertIn("repair", dt.GUARDED_KINDS)
-        self.assertIn("repair", dt.NON_POST_KINDS)
-        self.assertIn("repair", dt.WRITE_CMDS)
-
-
-class RepairCommand(unittest.TestCase):
-    def test_a_dry_run_refuses_another_repos_post_before_writing(self):
-        argv = ["dt.py", "repair", uri("3abc", "did:plc:someone")]
-        buf, code = io.StringIO(), None
-        with mock.patch.object(dt, "DRY_RUN", True), mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(dt, "write_blocked", lambda force=False: None), \
-                contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
-            try:
-                dt.main()
-            except SystemExit as exc:
-                code = exc.code
-        self.assertEqual(code, 1)
-        self.assertIn("another repo", json.loads(buf.getvalue())["refused"])
 
 
 if __name__ == "__main__":
