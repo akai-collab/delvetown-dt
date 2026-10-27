@@ -1066,8 +1066,9 @@ class WriteGuard(unittest.TestCase):
 
     def test_only_kinds_this_client_writes_are_counted(self):
         """The ceiling only means something if its set does: `repost` was counted and is not a command
-        this client has, so the "16 writes an hour" line meant something other than what it enforced."""
-        self.assertEqual(dt.GUARDED_KINDS, ("post", "reply", "delete"))
+        this client has, so the "16 writes an hour" line meant something other than what it enforced.
+        `repair` counts: it rewrites a record, and a burst of rewrites is the shape the guard exists for."""
+        self.assertEqual(dt.GUARDED_KINDS, ("post", "reply", "delete", "repair"))
         for kind in ("repost", "like", "follow"):
             self.assertNotIn(kind, dt.GUARDED_KINDS)
 

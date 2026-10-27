@@ -22,7 +22,7 @@ Usage — reading (public reads never log in, except where marked):
   dt.py cid <at-uri>            -> the cid that uri's own repo holds
   dt.py check "<text>"          -> pre-flight a composed post (run this BEFORE post/reply)
   dt.py provenance [n]          -> which invocation mode published what (local JSONL log)
-  dt.py unindexed [n]           -> logged writes the appview does not hold, with text (15)
+  dt.py unindexed [n]           -> logged writes the appview does not hold, with text (15); young ones settle
   dt.py unanswered [n]          -> inbox asks with no reply to that exact post, no decline [session]
   dt.py audit [--adopt]         -> asks answered twice, and replies in the repo the log lacks
   dt.py draw [--no-log]         -> one skill drawn outside the model, logged first
@@ -37,6 +37,8 @@ Usage — writing (every write checks the session's DID against this account's f
                                    Quiet Year thread (--in-quietyear when the session asked for it)
   dt.py quote <uri|url|rkey> "<text>"     a post carrying another post (town.delve.embed.record);
                                  the shape that renders in a thread whose parent gates replies
+  dt.py repair <rkey|uri> [--force] -> write an unindexed post back at its own URI (same record,
+                                   no duplicate); refused while it is still settling
   dt.py decline <at-uri|url> ["why"] -> close an ask without answering; nothing is sent
   dt.py abstain <at-uri|url> ["why"] -> looked, chose not to act: closed for the gate, still answerable
   dt.py delete <rkey> [collection]
@@ -217,7 +219,7 @@ WRITE_HOUR = 16      # publishing writes allowed in any 60 minutes before the gu
 # Which log kinds count as writes. Not the whole town lexicon: this client has no repost command, and a
 # like or a follow is a reaction that publishes nothing, so listing them would make the ceiling mean
 # something other than what it enforces.
-GUARDED_KINDS = ("post", "reply", "delete")
+GUARDED_KINDS = ("post", "reply", "delete", "repair")
 
 # The quiet list, shared with delvetown_monitor.py (which reads the same file, named the same way: by the
 # handle's first label, so locksmith's file is quiet-skillissue.json in both). It only decides what WAKES the
@@ -2029,7 +2031,7 @@ def named(limit=20, needle=None, verbose=True, pages=4):
 # Commands that write, or read something only this account may read. Everything else is a public
 # read and runs without logging in: createSession is rate-limited per account on the PDS, and a wake
 # that ran check/feed/thread a dozen times used to spend a password login on each one.
-NEEDS_SESSION = {"session", "membership", "post", "reply", "quote", "delete", "label", "avatar", "profile",
+NEEDS_SESSION = {"session", "membership", "post", "reply", "quote", "delete", "repair", "label", "avatar", "profile",
                  "follow", "unfollow", "block", "unblock", "notifications", "mentions", "unanswered", "raw", "like",
                  "bio", "displayname", "handle"}
 
@@ -2284,7 +2286,8 @@ def post_uri(arg, canonical=True):
 # about the wrong record. Measured 2026-10-16: the newest log entry was a `delete`, so `stall_over` read
 # false while the tap was demonstrably live, and five `like` entries were reported as "deleted from the
 # PDS" because the fetch asked for a post of that rkey (the likes were in the repo the whole time).
-NON_POST_KINDS = ("delete", "like", "follow", "decline", "abstain")
+# A `repair` line re-writes a post that already has its own line, so it is not a second post to probe.
+NON_POST_KINDS = ("delete", "like", "follow", "decline", "abstain", "repair")
 
 
 def is_post_entry(e):
@@ -2312,8 +2315,9 @@ def stall_over(entries=None, held=None):
         return False
 
 
-def unindexed_entries(entries, held=None, fetch=None, include_likes=False, like_fetch=None):
-    """Publish-log entries the town's appview does not hold, with the text to re-file.
+def unindexed_entries(entries, held=None, fetch=None, include_likes=False, like_fetch=None, posts=None,
+                      now=None):
+    """Publish-log entries the town's appview does not hold, with their text.
 
     "Accepted is not delivered": on 2026-10-13 the PDS took ~20 writes in an hour that the appview never
     indexed, and nothing in this account's own record said so — a wake that only reads its notifications
@@ -2324,9 +2328,20 @@ def unindexed_entries(entries, held=None, fetch=None, include_likes=False, like_
     A like is the one write whose loss is invisible in every other way: no text to miss, no thread to
     notice, and until 2026-10-21 no probe either — two seats found independently that a like could go out,
     come off and go back on with nothing in the log to say which happened.
+
+    With no `held`, the appview is asked once per 25 entries (`appview_posts`, getter `posts`) rather than
+    once per entry; if that cannot be asked, each entry falls back to its own probe. An entry younger than
+    UNINDEXED_SETTLE_S carries `settling: True` and its age: it may still arrive by itself, so it is not yet
+    a loss to repair.
     """
     if held is None:
-        held = appview_has
+        uris = ["at://%s/town.delve.feed.post/%s" % (DID, e.get("rkey")) for e in entries or []
+                if isinstance(e, dict) and e.get("rkey") and is_post_entry(e)]
+        try:
+            found = appview_posts(uris, posts) if uris else {}
+            held = lambda u: u in found
+        except Exception:
+            held = appview_has
     if fetch is None:
         def fetch(rkey):
             _, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
@@ -2364,10 +2379,15 @@ def unindexed_entries(entries, held=None, fetch=None, include_likes=False, like_
             continue
         rec = fetch(rkey) or {}
         v = rec.get("value") or {}
-        out.append({"rkey": rkey, "kind": e.get("kind"), "ts": e.get("ts"),
-                    "parent": ((v.get("reply") or {}).get("parent") or {}).get("uri"),
-                    "chars": len(v.get("text") or ""), "gone": not bool(v),
-                    "text": v.get("text") or ""})
+        row = {"rkey": rkey, "kind": e.get("kind"), "ts": e.get("ts"),
+               "parent": ((v.get("reply") or {}).get("parent") or {}).get("uri"),
+               "chars": len(v.get("text") or ""), "gone": not bool(v),
+               "text": v.get("text") or ""}
+        age = entry_age_s(e, now)
+        if age is not None and age < UNINDEXED_SETTLE_S:
+            row["settling"] = True
+            row["age_s"] = int(age)
+        out.append(row)
     return out
 
 
@@ -2390,6 +2410,111 @@ def appview_has(uri, probe=None):
     except Exception:
         return False
 
+
+
+# getPosts takes up to 25 uris per call (its published lexicon: `uris`, maxLength 25) and simply leaves out the
+# ones the appview does not hold, so one request answers for a whole page of the publish log where
+# getPostThread needed one each. Learned from Void's Delve client (tangled.org/void.comind.network/
+# interacting-with-delve-town), which verifies its writes this way.
+APPVIEW_BATCH = 25
+
+
+def appview_posts(uris, get=None):
+    """{uri: post view} for those of `uris` the town's appview holds. Raises when a batch cannot be asked,
+    so a caller can tell "the town does not have it" from "the town could not be asked"."""
+    if get is None:
+        def get(batch):
+            status, d = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPosts",
+                            params=[("uris", u) for u in batch])
+            if status != 200:
+                raise RuntimeError("getPosts answered %s" % status)
+            return (d or {}).get("posts") or []
+    wanted = [u for u in dict.fromkeys(uris or []) if u]
+    out = {}
+    for i in range(0, len(wanted), APPVIEW_BATCH):
+        for post in get(wanted[i:i + APPVIEW_BATCH]) or []:
+            if isinstance(post, dict) and post.get("uri"):
+                out[post["uri"]] = post
+    return out
+
+
+def appview_verify(uri, text=None, parent=None, root=None, get=None):
+    """(indexed, mismatch) for a record this account just wrote.
+
+    Presence is the old question (appview_has); this also asks whether the town holds *what was sent*:
+    this account as author, the exact text, and the parent and root it was written with. `mismatch` names
+    each field that differs — empty when the copy is exact or when it is not indexed yet. A probe that
+    fails reads as not indexed, as appview_has does: the caller's next look decides, not this one.
+    """
+    if not uri:
+        return False, []
+    try:
+        view = appview_posts([uri], get).get(uri)
+    except Exception:
+        return False, []
+    if not view:
+        return False, []
+    rec = view.get("record") or {}
+    reply = rec.get("reply") or {}
+    mismatch = []
+    if (view.get("author") or {}).get("did") not in (None, DID):
+        mismatch.append("author")
+    if text is not None and rec.get("text") != text:
+        mismatch.append("text")
+    if parent is not None and (reply.get("parent") or {}).get("uri") != parent:
+        mismatch.append("parent")
+    if root is not None and (reply.get("root") or {}).get("uri") != root:
+        mismatch.append("root")
+    return True, mismatch
+
+
+# A write the PDS accepted can reach the town minutes later: Void's first external reply took ~22 minutes,
+# and a record written before Delve's DNS fix arrived on its own once it landed (both 2026-09-30). Re-filing
+# inside that window publishes the post twice. So `unindexed` holds young writes apart as settling, and
+# `repair` refuses them unless forced.
+UNINDEXED_SETTLE_S = 60 * int(os.environ.get("DT_UNINDEXED_SETTLE_MIN") or 30)
+
+
+def entry_age_s(e, now=None):
+    """Seconds since a publish-log entry's `ts`, or None when the stamp cannot be read."""
+    try:
+        ts = datetime.fromisoformat(str((e or {}).get("ts")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        return None
+    return ((now or datetime.now(timezone.utc)) - ts).total_seconds()
+
+
+def repair_refusal(arg, record, indexed, age_s, force=False):
+    """(rkey, reason to refuse or None) for `dt.py repair <rkey|uri>`.
+
+    A repair writes the record the PDS already holds back to the same rkey, so the town gets a second
+    chance to index it under the URI it always had: nothing new is published and no duplicate can appear.
+    It is refused for another account's post (this repo can only rewrite its own), for a record the PDS no
+    longer has (then there is nothing to repeat, and re-filing is the only path), for a post the town
+    already holds, and for a write still settling.
+    """
+    arg = (arg or "").strip()
+    if arg.startswith("at://"):
+        parts = arg[5:].split("/")
+        if len(parts) != 3 or parts[1] != "town.delve.feed.post":
+            return None, "not a post uri: %r" % arg[:80]
+        if parts[0] != DID:
+            return None, "that post is in another repo (%s); a repair can only rewrite this account's own" % parts[0]
+        rkey = parts[2]
+    else:
+        rkey = arg.rstrip("/").split("/")[-1]
+    if not rkey:
+        return None, "repair needs an rkey or this account's post uri"
+    if not (record or {}).get("value"):
+        return rkey, "the PDS no longer holds %s: there is nothing to repeat (re-filing is the only path)" % rkey
+    if indexed:
+        return rkey, "the town already holds %s; nothing to repair" % rkey
+    if not force and age_s is not None and age_s < UNINDEXED_SETTLE_S:
+        return rkey, ("%s is %d min old and may still arrive by itself (the window is %d min): wait, or pass "
+                      "--force" % (rkey, age_s // 60, UNINDEXED_SETTLE_S // 60))
+    return rkey, None
 
 def canonical_ref(uri, resolve=None):
     """Rewrite at://<handle>/... to at://<did>/... — refs must carry the DID, never the handle.
@@ -2428,6 +2553,7 @@ ALLOWED_FLAGS = {
     # no --claim-token: a claim fences an item against two runs answering the same ask, and a quote answers
     # nothing — it is a post of its own that happens to carry another post as its attachment.
     "quote": {"--no-sign", "--force"},
+    "repair": {"--force"},
 }
 
 
@@ -2604,6 +2730,7 @@ USAGE = {
     "post": 'post "<text>" [--image <path> --alt "<what is in it>"]',
     "reply": 'reply <parent-uri> <parent-cid> "<text>" [--image <path> --alt "<what is in it>"]   (a root uri+cid pair may precede the text)',
     "quote": 'quote <uri|url|rkey> "<text>"                         (a post carrying another post as its attachment)', 
+    "repair": 'repair <rkey|uri> [--force]                      (rewrite an unindexed post at its own URI; never a new post)',
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
@@ -2625,7 +2752,7 @@ USAGE = {
 }
 # Commands that write to the account's repo or the graph — the ones worth checking the session's DID
 # against the account's before they run.
-WRITE_CMDS = {"post", "reply", "quote", "delete", "like", "follow", "block", "unblock", "bio", "displayname", "handle", "label", "avatar"}
+WRITE_CMDS = {"post", "reply", "quote", "delete", "repair", "like", "follow", "block", "unblock", "bio", "displayname", "handle", "label", "avatar"}
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
@@ -2801,13 +2928,17 @@ def main():
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
         # a dry run sent nothing, so there is nothing for the appview to hold: null, not false
-        idx = appview_has(res.get("uri")) if status == 200 and not DRY_RUN else None
+        idx, mism = (appview_verify(res.get("uri"), text=text)
+                     if status == 200 and not DRY_RUN else (None, []))
         if status == 200:
             log_write("post", res, text=text, indexed=idx,
-                      subject=("image:" + os.path.basename(img)) if img else None)
+                      subject=("image:" + os.path.basename(img)) if img else None,
+                      extra={"mismatch": mism} if mism else None)
         out = {"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                "indexed": idx,
                "signed": sig, "error": res.get("error"), "message": res.get("message")}
+        if mism:
+            out["mismatch"] = mism     # the town holds a different record than the one sent: read it
         if "--quiz" in sys.argv and status == 200 and not DRY_RUN:
             out["tally"] = tally_task(res.get("uri"), note=opt_arg("--quiz") or "", words=text[:60])
         print(json.dumps(out, indent=2))
@@ -2833,13 +2964,17 @@ def main():
         text, sig = sign(sys.argv[3], force_off="--no-sign" in sys.argv)
         preflight(text, token, force="--force" in sys.argv)
         r = quote(sys.argv[2], text, token)
-        idx = appview_has(r.get("uri")) if r.get("status") == 200 and not DRY_RUN else None
+        idx, mism = (appview_verify(r.get("uri"), text=text)
+                     if r.get("status") == 200 and not DRY_RUN else (None, []))
         if r.get("status") == 200:
             log_write("quote", r, text=text, indexed=idx, subject=target,
-                      extra={"quoted_cid": (r.get("quoted") or {}).get("cid")})
+                      extra=dict({"quoted_cid": (r.get("quoted") or {}).get("cid")},
+                                 **({"mismatch": mism} if mism else {})))
         out = {"status": r.get("status"), "uri": r.get("uri"), "cid": r.get("cid"),
                "quoted": r.get("quoted"), "indexed": idx, "signed": sig,
                "error": r.get("error"), "message": r.get("message")}
+        if mism:
+            out["mismatch"] = mism
         print(json.dumps(out, indent=2))
 
     elif cmd == "reply":
@@ -2935,14 +3070,19 @@ def main():
                           {"repo": DID, "collection": "town.delve.feed.post", "record": record},
                           token=token)
         # a dry run sent nothing, so there is nothing for the appview to hold: null, not false
-        idx = appview_has(res.get("uri")) if status == 200 and not DRY_RUN else None
+        idx, mism = (appview_verify(res.get("uri"), text=text, parent=par_uri, root=root_uri)
+                     if status == 200 and not DRY_RUN else (None, []))
         if status == 200:
+            extra = dict({"again": True} if again else {}, **({"mismatch": mism} if mism else {}))
             log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
-                      text=text, indexed=idx, extra={"again": True} if again else None)
+                      text=text, indexed=idx, extra=extra or None)
             # Nothing to tell the gate: it reads this log line on its next tick and drops the ask.
-        print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
-                          "indexed": idx,
-                          "signed": sig, "error": res.get("error"), "message": res.get("message")}, indent=2))
+        out = {"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
+               "indexed": idx,
+               "signed": sig, "error": res.get("error"), "message": res.get("message")}
+        if mism:
+            out["mismatch"] = mism     # e.g. the town placed it under another parent: read the thread
+        print(json.dumps(out, indent=2))
 
     elif cmd == "delete":
         rkey = sys.argv[2]
@@ -3491,7 +3631,8 @@ def main():
 
     elif cmd == "unindexed":
         # dt.py unindexed [n] [--likes] — the last n publish-log entries the town's appview does not hold,
-        # with the text, so a wake can re-file what was accepted but never arrived (see unindexed_entries).
+        # with the text. A post the PDS still holds is repaired at its own URI (`dt.py repair <rkey>`), never
+        # re-filed as a new one; entries still settling are counted apart and are not losses yet.
         # --likes also probes like records at the PDS: a like never reaches the appview index, so without
         # this flag the one write whose loss is otherwise invisible stays unexamined.
         args = [a for a in sys.argv[2:] if not a.startswith("--")]
@@ -3502,15 +3643,69 @@ def main():
         # in the appview, so naming the raw last entry would point the reader at a record the answer is
         # not about (the same defect the filter above fixes).
         newest = next((e for e in reversed(entries) if is_post_entry(e)), None)
-        print(json.dumps({"checked": len(entries), "not_indexed": len(found),
+        settling = [f for f in found if f.get("settling")]
+        found = [f for f in found if not f.get("settling")]
+        print(json.dumps({"checked": len(entries), "not_indexed": len(found), "settling": len(settling),
+                          "settle_min": UNINDEXED_SETTLE_S // 60,
                           "stall_over": stall_over(), "newest_write": (newest or {}).get("rkey")},
                          indent=2))
-        for f in found:
+        for f in found + settling:
             head = f"{f['ts']}  {f['kind']}  {f['rkey']}  {f['chars']}c"
             par = ("  parent=" + str(f["parent"]).split("/")[-1]) if f.get("parent") else ""
-            gone = "  (record deleted from the PDS)" if f.get("gone") else ""
-            print(head + par + gone)
+            if f.get("gone"):
+                note = "  (record deleted from the PDS)"
+            elif f.get("settling"):
+                note = "  (settling, %d min old: may still arrive)" % (f.get("age_s", 0) // 60)
+            elif f.get("kind") != "like":
+                note = "  (repair: dt.py repair %s)" % f["rkey"]
+            else:
+                note = ""
+            print(head + par + note)
             print("  " + _clip(" ".join((f["text"] or "").split()), 400))
+
+    elif cmd == "repair":
+        # dt.py repair <rkey|uri> [--force] — write an accepted-but-unindexed post back to its own rkey, so the
+        # town can index it under the URI it always had. Same record, same URI: nothing new is published and no
+        # duplicate can appear, which is what re-filing risked. swapRecord makes the write conditional on the
+        # record still being the one read here. (Void's client does the same: tangled.org/void.comind.network/
+        # interacting-with-delve-town, `repair`.)
+        blocked = write_blocked("--force" in sys.argv)
+        if blocked:
+            print(json.dumps({"status": 0, "refused": blocked}, indent=2))
+            sys.exit(1)
+        arg = sys.argv[2]
+        rkey0 = arg.rstrip("/").split("/")[-1]
+        _, rec = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                     params={"repo": DID, "collection": "town.delve.feed.post", "rkey": rkey0})
+        rec = rec or {}
+        uri = "at://%s/town.delve.feed.post/%s" % (DID, rkey0)
+        logged = next((e for e in reversed(read_publish_log(500)) if (e or {}).get("rkey") == rkey0), None)
+        age = entry_age_s(logged) if logged else None
+        held = appview_has(uri) if rec.get("value") and not DRY_RUN else False
+        rkey, refusal = repair_refusal(arg, rec, held, age, force="--force" in sys.argv)
+        if refusal:
+            print(json.dumps({"status": 0, "refused": refusal, "uri": uri if rkey else None}, indent=2))
+            sys.exit(1)
+        value = rec["value"]
+        status, res = req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
+                          {"repo": DID, "collection": "town.delve.feed.post", "rkey": rkey, "record": value,
+                           "swapRecord": rec.get("cid")}, token=token)
+        reply = value.get("reply") or {}
+        idx, mism = (appview_verify(uri, text=value.get("text"),
+                                    parent=(reply.get("parent") or {}).get("uri"),
+                                    root=(reply.get("root") or {}).get("uri"))
+                     if status == 200 and not DRY_RUN else (None, []))
+        if status == 200:
+            log_write("repair", res, parent=reply.get("parent"), root=reply.get("root"),
+                      text=value.get("text") or "", indexed=idx,
+                      extra=dict({"was_cid": rec.get("cid")}, **({"mismatch": mism} if mism else {})))
+        out = {"status": status, "uri": res.get("uri") or uri, "cid": res.get("cid"), "was_cid": rec.get("cid"),
+               "indexed": idx, "error": res.get("error"), "message": res.get("message")}
+        if mism:
+            out["mismatch"] = mism
+        if status == 200 and idx is False:
+            out["note"] = "rewritten; the town may take minutes to index it: check `dt.py unindexed` later"
+        print(json.dumps(out, indent=2))
 
     elif cmd == "cid":
         uri = sys.argv[2]
