@@ -10,11 +10,12 @@ three days after that edition went out and at fourteen streets. The second is ev
 a dated receipt is how a rule explains itself, and flagging receipts would bury the real rot.
 """
 
+import contextlib
 import importlib.util
+import io
 import pathlib
-import sys
-
-import pytest
+import tempfile
+import unittest
 
 SCRIPT = pathlib.Path.home() / ".hermes/scripts/cron-prompt-lint.py"
 
@@ -43,40 +44,48 @@ PROCEDURE = ("Read the live wake job from ~/.hermes/cron/jobs.json and state its
              "is enabled, then convert each wake hour to UTC.")
 
 
-def test_the_stale_map_sentence_is_flagged():
-    hits = [w for s in lint.sentences(STALE_MAP) for w in lint.suspects(s)]
-    joined = " ".join(hits)
-    assert "job id" in joined, hits
-    assert "count" in joined or "date" in joined, hits
+class PromptLint(unittest.TestCase):
+    def test_the_stale_map_sentence_is_flagged(self):
+        hits = [w for s in lint.sentences(STALE_MAP) for w in lint.suspects(s)]
+        joined = " ".join(hits)
+        self.assertIn("job id", joined, hits)
+        self.assertTrue("count" in joined or "date" in joined, hits)
+
+    def test_a_dated_receipt_is_left_alone(self):
+        for s in lint.sentences(EVIDENCE):
+            self.assertEqual(lint.suspects(s), [], s)
+
+    def test_a_handoff_snapshot_is_flagged(self):
+        hits = [w for s in lint.sentences(HANDOFF) for w in lint.suspects(s)]
+        self.assertTrue(any("date" in h for h in hits), hits)
+
+    def test_a_procedural_sentence_is_left_alone(self):
+        for s in lint.sentences(PROCEDURE):
+            self.assertEqual(lint.suspects(s), [], s)
+
+    def test_a_clean_prompt_produces_no_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = pathlib.Path(tmp) / "jobs.json"
+            jobs.write_text('{"jobs": [{"id": "abc", "name": "clean", "prompt": "%s"}]}'
+                            % PROCEDURE.replace('"', "'"))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                lint.main(["--jobs", str(jobs)])
+            self.assertEqual(buf.getvalue(), "")
+
+    def test_a_stale_prompt_names_the_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = pathlib.Path(tmp) / "jobs.json"
+            jobs.write_text('{"jobs": [{"id": "deadbeefcafe", "name": "the rotten one", "prompt": "%s"}]}'
+                            % STALE_MAP.replace('"', "'"))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                lint.main(["--jobs", str(jobs)])
+            out = buf.getvalue()
+            self.assertIn("deadbeefcafe", out)
+            self.assertIn("the rotten one", out)
+            self.assertIn("snapshot sentence", out)
 
 
-def test_a_dated_receipt_is_left_alone():
-    for s in lint.sentences(EVIDENCE):
-        assert lint.suspects(s) == [], s
-
-
-def test_a_handoff_snapshot_is_flagged():
-    hits = [w for s in lint.sentences(HANDOFF) for w in lint.suspects(s)]
-    assert any("date" in h for h in hits), hits
-
-
-def test_a_procedural_sentence_is_left_alone():
-    for s in lint.sentences(PROCEDURE):
-        assert lint.suspects(s) == [], s
-
-
-def test_a_clean_prompt_produces_no_output(tmp_path, capsys):
-    jobs = tmp_path / "jobs.json"
-    jobs.write_text('{"jobs": [{"id": "abc", "name": "clean", "prompt": "%s"}]}' % PROCEDURE.replace('"', "'"))
-    lint.main(["--jobs", str(jobs)])
-    assert capsys.readouterr().out == ""
-
-
-def test_a_stale_prompt_names_the_job(tmp_path, capsys):
-    jobs = tmp_path / "jobs.json"
-    jobs.write_text('{"jobs": [{"id": "deadbeefcafe", "name": "the rotten one", "prompt": "%s"}]}'
-                    % STALE_MAP.replace('"', "'"))
-    lint.main(["--jobs", str(jobs)])
-    out = capsys.readouterr().out
-    assert "deadbeefcafe" in out and "the rotten one" in out
-    assert "snapshot sentence" in out
+if __name__ == "__main__":
+    unittest.main()

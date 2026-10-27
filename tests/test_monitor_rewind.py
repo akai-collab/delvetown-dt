@@ -8,11 +8,8 @@ cheap to close: a stale page from the appview, and two runs interleaving their r
 
 import datetime
 import importlib.util
-import json
 import pathlib
-import sys
-
-import pytest
+import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("dt_monitor", ROOT / "delvetown_monitor.py")
@@ -28,50 +25,51 @@ def ts(hhmm):
     return f"2026-10-23T{hhmm}:00.000Z"
 
 
-def test_a_rewind_is_ignored():
-    old = item("at://x/post/1", ts("04:30"))
-    newer_published = "wake=2 reply=2 id=newer\n" + "10:45Z reply @cairn.delve.town 3myjdry2ave27: newer brief"
-    state = {"last": newer_published, "base": newer_published, "fired": {},
-             "newest": monitor._newest_epoch([item("at://x/post/2", ts("10:45"))])}
+class MonitorRewind(unittest.TestCase):
+    def test_a_rewind_is_ignored(self):
+        old = item("at://x/post/1", ts("04:30"))
+        newer_published = "wake=2 reply=2 id=newer\n" + "10:45Z reply @cairn.delve.town 3myjdry2ave27: newer brief"
+        state = {"last": newer_published, "base": newer_published, "fired": {},
+                 "newest": monitor._newest_epoch([item("at://x/post/2", ts("10:45"))])}
 
-    out, st = monitor.wake_output([old], state, now=monitor._newest_epoch([old]) + 10000)
+        out, st = monitor.wake_output([old], state, now=monitor._newest_epoch([old]) + 10000)
 
-    assert out == newer_published, "an older reading must not replace the newer brief"
-    assert st["last"] == newer_published
-    assert st["newest"] == state["newest"], "the high-water mark must not move down"
+        self.assertEqual(out, newer_published, "an older reading must not replace the newer brief")
+        self.assertEqual(st["last"], newer_published)
+        self.assertEqual(st["newest"], state["newest"], "the high-water mark must not move down")
+
+    def test_a_newer_reading_still_publishes(self):
+        fresh = item("at://x/post/9", ts("12:10"))
+        now = monitor._newest_epoch([fresh]) + 60
+        state = {"last": "old brief", "base": "old brief", "fired": {},
+                 "newest": monitor._newest_epoch([item("at://x/post/1", ts("04:30"))]),
+                 # first seen long enough ago that the settle window has passed
+                 "pending": {"at://x/post/9": {"t": now - monitor.SETTLE_S - 60, "item": fresh}}}
+        out, st = monitor.wake_output([fresh], state, now=now)
+
+        self.assertNotEqual(out, "old brief", "a genuinely newer batch must still print")
+        self.assertGreaterEqual(st["newest"], monitor._newest_epoch([fresh]))
+
+    def test_an_empty_reading_is_not_a_rewind(self):
+        """No items means nothing to say, not a regression: the guard must not freeze the gate."""
+        state = {"last": "old brief", "base": "old brief", "fired": {}, "newest": 2000.0}
+        out, st = monitor.wake_output([], state, now=3000.0)
+        self.assertEqual(out, "old brief")
+        self.assertEqual(st["newest"], 2000.0)
+
+    def test_items_without_timestamps_do_not_trip_the_guard(self):
+        state = {"last": "old brief", "base": "old brief", "fired": {}, "newest": 2000.0}
+        out, st = monitor.wake_output([{"uri": "at://x/post/1", "reason": "reply", "author": "a", "text": "b"}],
+                                      state, now=3000.0)
+        self.assertEqual(out, "old brief")
+
+    def test_newest_epoch_reads_the_index_not_the_client_clock(self):
+        items = [item("at://x/post/1", ts("04:30")), item("at://x/post/2", ts("11:02"))]
+        newest = monitor._newest_epoch(items)
+        self.assertEqual(datetime.datetime.fromtimestamp(newest, datetime.timezone.utc).strftime("%H:%M"), "11:02")
+        self.assertEqual(monitor._newest_epoch([]), 0)
+        self.assertEqual(monitor._newest_epoch([{"indexed_at": "not a time"}]), 0)
 
 
-def test_a_newer_reading_still_publishes():
-    fresh = item("at://x/post/9", ts("12:10"))
-    now = monitor._newest_epoch([fresh]) + 60
-    state = {"last": "old brief", "base": "old brief", "fired": {},
-             "newest": monitor._newest_epoch([item("at://x/post/1", ts("04:30"))]),
-             # first seen long enough ago that the settle window has passed
-             "pending": {"at://x/post/9": {"t": now - monitor.SETTLE_S - 60, "item": fresh}}}
-    out, st = monitor.wake_output([fresh], state, now=now)
-
-    assert out != "old brief", "a genuinely newer batch must still print"
-    assert st["newest"] >= monitor._newest_epoch([fresh])
-
-
-def test_an_empty_reading_is_not_a_rewind():
-    """No items means nothing to say, not a regression: the guard must not freeze the gate."""
-    state = {"last": "old brief", "base": "old brief", "fired": {}, "newest": 2000.0}
-    out, st = monitor.wake_output([], state, now=3000.0)
-    assert out == "old brief"
-    assert st["newest"] == 2000.0
-
-
-def test_items_without_timestamps_do_not_trip_the_guard():
-    state = {"last": "old brief", "base": "old brief", "fired": {}, "newest": 2000.0}
-    out, st = monitor.wake_output([{"uri": "at://x/post/1", "reason": "reply", "author": "a", "text": "b"}],
-                                  state, now=3000.0)
-    assert out == "old brief"
-
-
-def test_newest_epoch_reads_the_index_not_the_client_clock():
-    items = [item("at://x/post/1", ts("04:30")), item("at://x/post/2", ts("11:02"))]
-    newest = monitor._newest_epoch(items)
-    assert datetime.datetime.fromtimestamp(newest, datetime.timezone.utc).strftime("%H:%M") == "11:02"
-    assert monitor._newest_epoch([]) == 0
-    assert monitor._newest_epoch([{"indexed_at": "not a time"}]) == 0
+if __name__ == "__main__":
+    unittest.main()

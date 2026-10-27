@@ -15,8 +15,7 @@ import io
 import json
 import pathlib
 import sys
-
-import pytest
+import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -26,53 +25,62 @@ import dt  # noqa: E402
 PARENT = "at://did:plc:sulmklaf45bkwwe2o373jpgf/town.delve.feed.post/3myk42g4b2o27"
 
 
-def run_reply(argv, monkeypatch):
+def run_reply(argv):
     """Drive main() with a stubbed argv, capturing stdout and any SystemExit."""
-    monkeypatch.setattr(sys, "argv", argv)
+    saved = sys.argv
+    sys.argv = list(argv)
     buf = io.StringIO()
     code = None
-    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
-        try:
-            dt.main()
-        except SystemExit as exc:
-            code = exc.code
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                dt.main()
+            except SystemExit as exc:
+                code = exc.code
+    finally:
+        sys.argv = saved
     return code, buf.getvalue()
 
 
-def test_a_token_is_not_a_cid(monkeypatch):
-    code, out = run_reply(["dt.py", "reply", PARENT, "31", "the actual sentence"], monkeypatch)
-    assert code == 1
-    payload = json.loads(out)
-    assert payload["status"] == 0
-    assert "cid" in payload["refused"].lower()
-    assert "31" in payload["refused"]
+class ReplyArity(unittest.TestCase):
+    def test_a_token_is_not_a_cid(self):
+        code, out = run_reply(["dt.py", "reply", PARENT, "31", "the actual sentence"])
+        self.assertEqual(code, 1)
+        payload = json.loads(out)
+        self.assertEqual(payload["status"], 0)
+        self.assertIn("cid", payload["refused"].lower())
+        self.assertIn("31", payload["refused"])
+
+    def test_a_flag_in_the_cid_slot_is_refused(self):
+        code, out = run_reply(["dt.py", "reply", PARENT, "--claim-token", "31", "text"])
+        self.assertEqual(code, 1)
+        self.assertIn("cid", json.loads(out)["refused"].lower())
+
+    def test_no_network_call_is_attempted(self):
+        """The refusal must come before login, claim checks or any request: no session is needed to say no."""
+        def explode(*_a, **_k):
+            raise AssertionError("the guard must refuse before any request")
+
+        saved = dt.req
+        dt.req = explode
+        try:
+            code, _ = run_reply(["dt.py", "reply", PARENT, "31", "text"])
+        finally:
+            dt.req = saved
+        self.assertEqual(code, 1)
+
+    def test_the_shapes_it_accepts(self):
+        for good in ("bafyreidtdbt3l4x6ya6s32kwymmz3zrqh6a23tt4k55n3h7uiglybtj6rm",
+                     "bafkreiafhwykqj75t4gtb5vzq6sdswgkhifcr2uwwtvdfzyklvrp7kkwpa",
+                     "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"):
+            self.assertTrue(dt.cid_shaped(good), good)
+
+    def test_the_shapes_it_rejects(self):
+        for bad in ("31", "", "  ", "bafy", "not-a-cid", "--claim-token", "3myk42g4b2o27",
+                    "bafyreidtdbt3l4x6ya6s32kwymmz3zrqh6a23tt4k55n3h7uiglybtj6r!",  # a cid with punctuation
+                    None):
+            self.assertFalse(dt.cid_shaped(bad), bad)
 
 
-def test_a_flag_in_the_cid_slot_is_refused(monkeypatch):
-    code, out = run_reply(["dt.py", "reply", PARENT, "--claim-token", "31", "text"], monkeypatch)
-    assert code == 1
-    assert "cid" in json.loads(out)["refused"].lower()
-
-
-def test_no_network_call_is_attempted(monkeypatch):
-    """The refusal must come before login, claim checks or any request: no session is needed to say no."""
-    def explode(*_a, **_k):
-        raise AssertionError("the guard must refuse before any request")
-
-    monkeypatch.setattr(dt, "req", explode)
-    code, _ = run_reply(["dt.py", "reply", PARENT, "31", "text"], monkeypatch)
-    assert code == 1
-
-
-def test_the_shapes_it_accepts():
-    for good in ("bafyreidtdbt3l4x6ya6s32kwymmz3zrqh6a23tt4k55n3h7uiglybtj6rm",
-                 "bafkreiafhwykqj75t4gtb5vzq6sdswgkhifcr2uwwtvdfzyklvrp7kkwpa",
-                 "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"):
-        assert dt.cid_shaped(good), good
-
-
-def test_the_shapes_it_rejects():
-    for bad in ("31", "", "  ", "bafy", "not-a-cid", "--claim-token", "3myk42g4b2o27",
-                "bafyreidtdbt3l4x6ya6s32kwymmz3zrqh6a23tt4k55n3h7uiglybtj6r!",  # a cid with punctuation
-                None):
-        assert not dt.cid_shaped(bad), bad
+if __name__ == "__main__":
+    unittest.main()
