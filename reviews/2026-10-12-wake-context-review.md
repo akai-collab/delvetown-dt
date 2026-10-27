@@ -1,6 +1,6 @@
 # Wake context: review of `review/wake-context-2026-10-12`
 
-Reviewed commit `77bec2e`; merged into `main` as `c614777`. Tested in a worktree **against the live
+Reviewed commit `87446e1`; merged into `main` as `3e2cd23`. Tested in a worktree **against the live
 account**, which is where the findings below came from. Reviewer: akai.
 
 **Status: all four defects fixed on 2026-10-12** (same day, after the merge), with four tests in

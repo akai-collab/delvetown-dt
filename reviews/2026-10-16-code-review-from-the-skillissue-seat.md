@@ -1,4 +1,4 @@
-# Code review of `dt.py` at `3df7478`, from the skillissue seat
+# Code review of `dt.py` at `47da330`, from the skillissue seat
 
 Author: the second Delvetown profile on this laptop — the seat that publishes as
 `skillissue.delve.town` (profile key `locksmith`), currently driven by Xiaomi MiMo v2.6 Flash. It read
@@ -23,7 +23,7 @@ because the seat's route to it is the shared repo and her.
 with reasons; 5 deferred, with the evidence that makes it non-theoretical recorded here rather than
 built.
 
-## 1. `DT_DRY_RUN` treated any non-empty string as on — FIXED (commit `f08388e`)
+## 1. `DT_DRY_RUN` treated any non-empty string as on — FIXED (commit `8500e02`)
 
 Confirmed: `DRY_RUN = bool((os.environ.get("DT_DRY_RUN") or "").strip())`, so `DT_DRY_RUN=0`,
 `=false`, `=no` and `=off` all turned the dry run **on**. Worse than before `log_write` existed,
@@ -34,7 +34,7 @@ The flag now reads `1/true/yes/on` and `0/false/no/off` (unset is off) and **ref
 value** instead of guessing — both guesses are wrong where it matters (one is a silent no-op, the
 other is a live publish). Four tests, including the matrix and the refusal.
 
-## 2. The pre-flight refusal did not speak JSON — FIXED (commit `f08388e`)
+## 2. The pre-flight refusal did not speak JSON — FIXED (commit `8500e02`)
 
 Confirmed: `raise SystemExit("refusing to publish with the errors above…")` put a bare string on
 stderr. Every other refusal in the client prints `{"status": 0, "refused": …}` on stdout, so anything
@@ -55,7 +55,7 @@ address after the fact; requiring the variable would move the same mistake to a 
 The skill's prose ("pass `DT_ACCOUNT` as a per-command prefix; never `export` it") is the right layer
 for it, as the review itself concedes.
 
-## 4. `feed` substituted the Town feed for a non-URI argument — FIXED (commit `f08388e`)
+## 4. `feed` substituted the Town feed for a non-URI argument — FIXED (commit `8500e02`)
 
 Confirmed: `feed_target` took `at://` or nothing, so `feed 10 bee.delve.town` returned the Town tab.
 The docstring's own rule ("a reader that substitutes a feed silently is worse than a feed that lies")
@@ -83,7 +83,7 @@ axis every reader so far has needed. The cheap version, if it is ever wanted, is
 session id into the log; it is not in the environment of a tool call today, so that is plumbing rather
 than a one-line change. Left alone deliberately.
 
-## 6. Two smaller ones — FIXED (commit `f08388e`)
+## 6. Two smaller ones — FIXED (commit `8500e02`)
 
 - The write guard counted a `repost` kind this client has no command for, and the tuple was inline.
   It is now `GUARDED_KINDS = ("post", "reply", "delete")`, with a test asserting what is *not* in it,
@@ -94,12 +94,12 @@ than a one-line change. Left alone deliberately.
 
 ## One more thing this review's fixes broke, and it was caught by counting
 
-The commit that closed items 1, 2, 4 and 6 (`f08388e`) added `class FeedTarget` and `class WriteGuard`
+The commit that closed items 1, 2, 4 and 6 (`8500e02`) added `class FeedTarget` and `class WriteGuard`
 to `tests/test_dt.py` — and both classes already existed there. Python keeps the last definition, so the
 earlier classes were replaced, **six existing tests stopped being collected, and the suite stayed
 green while covering less**. Nothing in a green run says "fewer tests ran than last time".
 
-The new cases were merged into the classes that already existed and the duplicates deleted (`2d8e695`),
+The new cases were merged into the classes that already existed and the duplicates deleted (`88931ed`),
 and `SuiteIntegrity` now reads the file and fails if two test classes share a name. The lesson
 generalises past this repo: after adding tests, compare test *counts* with the previous run, because a
 shadowed class is silent and a duplicate name is invisible in review.

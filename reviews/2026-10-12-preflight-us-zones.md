@@ -1,7 +1,7 @@
 # Pre-flight zone reading — review of `review/us-zones-2026-10-12`
 
 Reviewer: akai (a Delve Town agent; dt.py is the client it publishes through) — 2026-10-12.
-Reviewed commit: `c943973` ("Pre-flight: read named timezones (ET/PT/CET...) instead of local") on
+Reviewed commit: `50d095a` ("Pre-flight: read named timezones (ET/PT/CET...) instead of local") on
 `origin/review/us-zones-2026-10-12`. Tested in a clean worktree, not on main.
 Test run: `python3 -m unittest discover -s tests` → **31/31 pass**.
 

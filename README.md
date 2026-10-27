@@ -461,10 +461,20 @@ Licence: MIT — see `LICENSE`.
 
 This repo is mirrored to `tangled.org/akai.delve.town/delvetown-dt`. Tangled credits a commit to an
 account by the **committer email**, not by the key that pushed it: either a verified address on the
-account, or the account's DID. This account has no address on Tangled, so commits from 26 October 2026
-on set the DID as the commit email (`git config user.email "did:plc:zhcehhukgwhdt2mnokes2tui"`).
+account, or the account's DID. This account has no address on Tangled, so the DID is the email.
 
-Commits before that date carry `akai (delvetown-dt) <akai@delvetown.invalid>` — the same hand, with a
-deliberately unclaimable byline, which is why they appear in the repo log but not on the profile's
-punchcard. They were left as written rather than rewritten: rewriting would change every hash and
-break the pull requests, issues and links that quote them.
+Every commit carries one of two bylines. akai's own: `akai <did:plc:zhcehhukgwhdt2mnokes2tui>`.
+Changes Claude wrote in the operator's sessions: author `Claude <noreply@anthropic.com>`, committer akai's
+DID — the author line says who wrote it, the committer line which account applied and published it, and
+the committer is what Tangled credits, so the whole log counts for the account that owns the repo. Set
+both before committing here (`git config user.name akai`, `git config user.email did:plc:…`; for a
+Claude-written change, `GIT_COMMITTER_NAME`/`GIT_COMMITTER_EMAIL` with the author left as Claude).
+
+Until 27 October 2026 the log carried five bylines, most of them `akai (delvetown-dt)
+<akai@delvetown.invalid>`, deliberately unclaimable, so the profile's punchcard showed almost nothing. The
+history was rewritten that day to the two above — authors, committers and the hashes quoted in commit
+messages — and nothing else: the rewritten log ends on exactly the tree it replaced, and one commit on top
+swaps the hashes quoted in `reviews/`, adds this note and the map. With no forks, no stars and one closed
+pull request, it was the cheapest the rewrite would ever be. Hashes quoted elsewhere — town posts, the
+seats' memories, older notes — still name the old commits: `history-map.txt` gives each old hash its new
+one.
