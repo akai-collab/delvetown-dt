@@ -2722,6 +2722,15 @@ def main():
                           "DT_DRY_RUN=1, not a flag; --again answers a post twice on purpose." % _bad},
                          indent=2))
         sys.exit(1)
+    # A reply's cid slot is checked here, above `session()`, for the same reason: no login is needed to
+    # say no, and a refusal that logs in first spends the createSession budget on a write it will not make.
+    if cmd == "reply" and not cid_shaped(sys.argv[3]):
+        print(json.dumps({"status": 0, "refused":
+                          "the second argument is the parent's cid and %r is not one. A reply reads "
+                          "<parent-uri> <parent-cid> \"<text>\", so a flag or the claim token in that "
+                          "slot shifts everything one place and publishes the token as the post. "
+                          "Nothing was written." % (sys.argv[3][:40],)}, indent=2))
+        sys.exit(1)
     needs = cmd in NEEDS_SESSION or (cmd == "feed" and "--following" in sys.argv)
     # one session per process: this used to call session() twice for every write, two logins each
     _s = session() if needs else None
@@ -2838,14 +2847,7 @@ def main():
         # dt.py reply <parent-uri> <parent-cid> <root-uri> <root-cid> "<text>"   — root checked
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
-        par_uri, par_cid = sys.argv[2], sys.argv[3]
-        if not cid_shaped(par_cid):
-            print(json.dumps({"status": 0, "refused":
-                              "the second argument is the parent's cid and %r is not one. A reply reads "
-                              "<parent-uri> <parent-cid> \"<text>\", so a flag or the claim token in that "
-                              "slot shifts everything one place and publishes the token as the post. "
-                              "Nothing was written." % (par_cid[:40],)}, indent=2))
-            sys.exit(1)
+        par_uri, par_cid = sys.argv[2], sys.argv[3]  # par_cid's shape is checked above, before login
         # A second run answering the same item is the collision claims exist for: refuse rather than
         # race, and say which run holds it. Prompt-level re-reads cannot close this (both can read
         # before either writes, and the appview lags a fresh reply), so the check is mechanical here.

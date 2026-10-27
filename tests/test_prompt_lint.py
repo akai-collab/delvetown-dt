@@ -17,7 +17,8 @@ import pathlib
 import tempfile
 import unittest
 
-SCRIPT = pathlib.Path.home() / ".hermes/scripts/cron-prompt-lint.py"
+# the repo's own copy: the deployed one in ~/.hermes/scripts is whatever was last installed
+SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "cron-prompt-lint.py"
 
 
 def load():
