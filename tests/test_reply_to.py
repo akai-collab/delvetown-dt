@@ -63,6 +63,10 @@ class ToRefusalTests(unittest.TestCase):
         note = dt.to_refusal(parent(HUM), "hum.delve.town", resolve_fn=boom)
         self.assertIsNotNone(note)
 
+    def test_dry_run_tolerates_an_unresolvable_to(self):
+        # DT_DRY_RUN has no network, so every handle is unresolvable; that must not make dry runs useless.
+        self.assertIsNone(dt.to_refusal(parent(HUM), "hum.delve.town", resolve_fn=resolve, strict=False))
+
     def test_unreadable_parent_repo_fails_closed(self):
         note = dt.to_refusal("not-a-uri", HUM, resolve_fn=resolve)
         self.assertIsNotNone(note)

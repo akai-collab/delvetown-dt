@@ -2515,7 +2515,7 @@ CID_RE = re.compile(r"^(?:baf[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$")
 ALLOWED_FLAGS = {
     "post": {"--image", "--alt", "--no-sign", "--force", "--quiz"},
     "reply": {"--image", "--alt", "--no-sign", "--force", "--again", "--claim-token", "--root", "--root-cid",
-              "--in-quietyear"},
+              "--in-quietyear", "--to"},
     # no --claim-token: a claim fences an item against two runs answering the same ask, and a quote answers
     # nothing — it is a post of its own that happens to carry another post as its attachment.
     "quote": {"--no-sign", "--force"},
@@ -2612,7 +2612,7 @@ def verified_parent_cid(parent_uri):
     return (d or {}).get("cid")
 
 
-def to_refusal(par_uri, to, resolve_fn=None):
+def to_refusal(par_uri, to, resolve_fn=None, strict=True):
     """Refuse a reply whose parent belongs to someone other than the account being answered.
 
     dt.py reply takes the parent by hand and the cid check only proves the parent *exists* — not that it
@@ -2634,6 +2634,8 @@ def to_refusal(par_uri, to, resolve_fn=None):
     except Exception:
         have = ""
     if not want:
+        if not strict:
+            return None          # a dry run has no network, so an unresolvable handle is expected
         return ("--to %r did not resolve, so the parent's owner could not be checked. "
                 "Nothing was written." % (to,))
     if want != have:
@@ -2979,7 +2981,7 @@ def main():
         par_uri, par_cid = sys.argv[2], sys.argv[3]  # par_cid's shape is checked above, before login
         # --to names the account this answers; the parent must belong to it (to_refusal). A crowded
         # thread offers several plausible parents, and the cid check cannot tell them apart.
-        _to_note = to_refusal(par_uri, opt_arg("--to"))
+        _to_note = to_refusal(par_uri, opt_arg("--to"), strict=not DRY_RUN)
         if _to_note:
             print(json.dumps({"status": 0, "refused": _to_note, "parent": par_uri}, indent=2))
             sys.exit(1)
