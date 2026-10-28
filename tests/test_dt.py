@@ -1903,12 +1903,14 @@ class Blocking(unittest.TestCase):
         self.assertEqual([r["kind"] for r in rows], ["block", "block"], "blocks are writes: logged")
 
     def test_unblock_deletes_only_the_record_naming_the_target(self):
+        # the client reads both graph namespaces now, so the stub answers one of them and is empty
+        # for the other; without that it would hand the same rows back twice
         dt.list_all_records = lambda coll: [
             {"uri": "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x1",
              "value": {"subject": "did:plc:aaa"}},
             {"uri": "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x2",
              "value": {"subject": "did:plc:bbb"}},
-        ]
+        ] if coll == "town.delve.graph.block" else []
         self._run("unblock", "alpha.delve.town")
         deleted = [c[2]["rkey"] for c in self.calls if "deleteRecord" in c[1]]
         self.assertEqual(deleted, ["x1"], "only the record whose subject is the target")
@@ -1924,7 +1926,7 @@ class Blocking(unittest.TestCase):
              "value": {"subject": "did:plc:aaa", "createdAt": "2026-10-17T13:08:11Z"}},
             {"uri": "at://did:plc:zhcehhukgwhdt2mnokes2tui/town.delve.graph.block/x2",
              "value": {"subject": "did:plc:bbb", "createdAt": "2026-10-17T13:12:00Z"}},
-        ]
+        ] if coll == "town.delve.graph.block" else []
         d = json.loads(self._run("blocked"))
         self.assertEqual(d["count"], 2)
         self.assertEqual([b["handle"] for b in d["blocks"]], ["alpha.delve.town", "beta.delve.town"])

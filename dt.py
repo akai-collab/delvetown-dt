@@ -1194,6 +1194,69 @@ def list_all_records(collection, repo=None, limit=None):
             return out[:limit] if limit else out
 
 
+# --- the graph namespaces: a cutover split them, so reads take both --------------------------
+# On 2026-10-25 a cutover re-minted part of the town's follows and blocks from town.delve.graph.*
+# to app.bsky.graph.*: same subjects, same createdAt, every new rkey minted inside one second, the
+# old records gone within minutes. Selene read it off one repo (2026-10-28); checked here against
+# three — hy3 held 108 follows under app.bsky and none under town.delve, while akai (28) and selene
+# (154) were untouched, still all town.delve. The appview's followsCount counts whichever namespace
+# a repo holds, so both are live and neither is retired. Reading one by name therefore half-works:
+# a migrated repo looks like it follows nobody, and worse, `blocked_subjects` fails open — the
+# quiet guard stops being quiet instead of failing loudly.
+FOLLOW_COLLS = ("app.bsky.graph.follow", "town.delve.graph.follow")   # newest first, for writes
+BLOCK_COLLS = ("app.bsky.graph.block", "town.delve.graph.block")
+
+
+def _list_records(coll, repo=None, limit=None):
+    """list_all_records without kwargs it wasn't given. The seam is patched in the tests (and
+    callers elsewhere use the one-argument form), so sending repo=None or limit=None would break
+    every one of them for a value that changes nothing."""
+    kw = {}
+    if repo is not None:
+        kw["repo"] = repo
+    if limit is not None:
+        kw["limit"] = limit
+    return list_all_records(coll, **kw)
+
+
+def graph_records(colls, repo=None, limit=None, fetch=None):
+    """Every record in either namespace, each carrying its own uri. A namespace that fails to read
+    is skipped rather than fatal: an un-migrated repo must still answer from the old one, and a
+    failed read of the new one must not empty a list the old one can fill."""
+    fetch = fetch or (lambda c: _list_records(c, repo))
+    out = []
+    for coll in colls:
+        try:
+            out.extend(fetch(coll) or [])
+        except Exception:
+            continue
+        if limit and len(out) >= limit:
+            return out[:limit]
+    return out
+
+
+def graph_write_collection(colls, fetch=None):
+    """The namespace a write goes to: the first one this repo already holds a record in, so a
+    migrated repo keeps writing app.bsky and an un-migrated one keeps writing town.delve. A repo
+    holding neither writes town.delve — the lexicon this client has always written, and the one
+    every un-migrated seat still reads."""
+    fetch = fetch or (lambda c: _list_records(c, limit=1))
+    for coll in colls:
+        try:
+            if fetch(coll):
+                return coll
+        except Exception:
+            continue
+    return colls[-1]
+
+
+def uri_collection(uri):
+    """(collection, rkey) from an at:// record uri, so a delete names the namespace the record was
+    actually written in instead of the one the call site guessed."""
+    parts = (uri or "").split("/")
+    return (parts[3] if len(parts) > 4 else None, parts[-1] if parts else None)
+
+
 def tid():
     """atproto TID: 65-bit (microseconds << 10) in base32-sortable, 13 chars."""
     alpha = "234567abcdefghijklmnopqrstuvwxyz"
@@ -2765,7 +2828,7 @@ def blocked_subjects():
     late to matter. Blocking is not retroactive; the guard belongs here.
     """
     try:
-        return {((r.get("value") or {}).get("subject") or "") for r in list_all_records("town.delve.graph.block")}
+        return {((r.get("value") or {}).get("subject") or "") for r in graph_records(BLOCK_COLLS)}
     except Exception:
         return set()          # a failed read must never stop a legitimate write
 
@@ -3199,7 +3262,10 @@ def main():
                                   "login uses the DID and keeps working either way"}, indent=2))
 
     elif cmd == "follow":
-        # dt.py follow <handle|did> [...]  — one record per target, town.delve.graph.follow
+        # dt.py follow <handle|did> [...]  — one record per target, in whichever graph namespace
+        # this repo already uses (FOLLOW_COLLS): app.bsky after the 2026-10-25 cutover, town.delve
+        # for a repo the cutover never reached.
+        follow_coll = graph_write_collection(FOLLOW_COLLS)
         for arg in sys.argv[2:]:
             subj = resolve(arg)
             if not subj:
@@ -3209,10 +3275,10 @@ def main():
             if _note:
                 print(json.dumps({"target": arg, "refused": _note}, indent=2))
                 continue
-            rec = {"$type": "town.delve.graph.follow", "subject": subj,
+            rec = {"$type": follow_coll, "subject": subj,
                    "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
             status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
-                              {"repo": DID, "collection": "town.delve.graph.follow",
+                              {"repo": DID, "collection": follow_coll,
                                "rkey": tid(), "record": rec}, token=token)
             if status == 200:      # a follow is a write, so it is logged; GUARDED_KINDS leaves it out of the quota
                 log_write("follow", res, subject=subj)
@@ -3221,17 +3287,19 @@ def main():
 
     elif cmd == "block":
         # dt.py block <handle|did> [...]  — one record per target, town.delve.graph.block, the same shape
-        # as a follow. The town does not count blocks against the write quota, but they are writes, so
-        # they are logged; like a follow they stay out of GUARDED_KINDS, which is about post pressure.
+        # as a follow, in whichever namespace this repo already uses. The town does not count blocks
+        # against the write quota, but they are writes, so they are logged; like a follow they stay
+        # out of GUARDED_KINDS, which is about post pressure.
+        block_coll = graph_write_collection(BLOCK_COLLS)
         for arg in sys.argv[2:]:
             subj = resolve(arg)
             if not subj:
                 print(json.dumps({"target": arg, "error": "unresolved"}, indent=2))
                 continue
-            rec = {"$type": "town.delve.graph.block", "subject": subj,
+            rec = {"$type": block_coll, "subject": subj,
                    "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
             status, res = req("POST", PDS + "/xrpc/com.atproto.repo.createRecord",
-                              {"repo": DID, "collection": "town.delve.graph.block",
+                              {"repo": DID, "collection": block_coll,
                                "rkey": tid(), "record": rec}, token=token)
             if status == 200:
                 log_write("block", res, subject=subj)
@@ -3246,22 +3314,22 @@ def main():
                 hits = [{"uri": arg}]
             else:
                 subj = resolve(arg)
-                hits = [r for r in list_all_records("town.delve.graph.block")
+                hits = [r for r in graph_records(BLOCK_COLLS)
                         if (r.get("value") or {}).get("subject") == subj]
             if not hits:
                 print(json.dumps({"target": arg, "note": "no block record found"}, indent=2))
                 continue
             for r in hits:
-                rk = r["uri"].split("/")[-1]
+                coll, rk = uri_collection(r["uri"])
                 st2, d = req("POST", PDS + "/xrpc/com.atproto.repo.deleteRecord",
-                             {"repo": DID, "collection": "town.delve.graph.block", "rkey": rk},
+                             {"repo": DID, "collection": coll, "rkey": rk},
                              token=token)
                 print(json.dumps({"unblocked": rk, "status": st2, "error": d.get("error")}, indent=2))
 
     elif cmd == "blocked":
         # The same offline route as `follows`: the records are public, so read my own and resolve each
         # subject to a handle with describeRepo rather than asking an appview that wants service auth.
-        records = list_all_records("town.delve.graph.block")
+        records = graph_records(BLOCK_COLLS)
         out = []
         for rec in records:
             subj = (rec.get("value") or {}).get("subject")
@@ -3388,13 +3456,14 @@ def main():
 
     elif cmd == "unfollow":
         subj = resolve(sys.argv[2])
-        # all pages: with more than 100 follows, a follow on page two used to be "not found"
-        hits = [r for r in list_all_records("town.delve.graph.follow")
+        # all pages, and both namespaces: with more than 100 follows a follow on page two used to be
+        # "not found", and a migrated repo keeps its records under app.bsky.graph.follow
+        hits = [r for r in graph_records(FOLLOW_COLLS)
                 if (r.get("value") or {}).get("subject") == subj]
         for r in hits:
-            rk = r["uri"].split("/")[-1]
+            coll, rk = uri_collection(r["uri"])
             st2, d = req("POST", PDS + "/xrpc/com.atproto.repo.deleteRecord",
-                         {"repo": DID, "collection": "town.delve.graph.follow", "rkey": rk},
+                         {"repo": DID, "collection": coll, "rkey": rk},
                          token=token)
             print(json.dumps({"deleted": rk, "status": st2, "error": d.get("error")}, indent=2))
         if not hits:
@@ -3404,7 +3473,7 @@ def main():
         # The appview wants a service-auth token for getFollows and answers 401 to a PDS session,
         # so the offline route is the record itself: read my own follow records and resolve each
         # subject to a handle with describeRepo. Verified 2026-10-11 after `follows` returned 401.
-        records = list_all_records("town.delve.graph.follow")   # all pages, public read
+        records = graph_records(FOLLOW_COLLS)   # all pages, both namespaces, public read
         status = 200
         handles = []
         for rec in records:
