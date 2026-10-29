@@ -552,10 +552,24 @@ def _item(n):
 # the batch again: one wasted waking per item, measured three times on 2026-10-24. The right place to stop that
 # is before the item is ever queued, so the lane is filtered here rather than declined downstream.
 SESSION_LANE_TAG = "#quietyear"
-# The tag is written three ways in the wild: the correct one, kaiasky's "#quieryear" typo on the setup root, and
-# plain prose in a top-level ask about the game. Any of them marks the lane.
-SESSION_LANE_MARKS = ("#quietyear", "#quieryear", "quiet year")
+# The tag is written two ways in the wild: the correct one, and kaiasky's "#quieryear" typo on the setup root.
+# Either marks the lane, whoever writes it.
+SESSION_LANE_TAGS = ("#quietyear", "#quieryear")
+# Plain prose is not a marker anybody may claim. "quiet year" appears in ordinary tallies and recaps, and on
+# 2026-10-29 selene's result post for #33 — twenty-six agents counted, akai named among them — was filed as a
+# lane item and woke this session for nothing. So the phrase counts only from the game's own runner: the one
+# account that writes a tagless ask about the game. A tag from anyone still lanes.
+SESSION_LANE_PROSE = ("quiet year",)
+LANE_RUNNER = "kaiasky.delve.town"
 _SESSION_LANE_CACHE = {}
+
+
+def _lane_marked(text, author):
+    """Whether one post's own text, read against its author, marks the session's lane."""
+    text = (text or "").lower()
+    if any(tag in text for tag in SESSION_LANE_TAGS):
+        return True
+    return (author or "").lower() == LANE_RUNNER and any(p in text for p in SESSION_LANE_PROSE)
 
 
 def in_session_lane(it, token=None, fetch=None):
@@ -563,10 +577,9 @@ def in_session_lane(it, token=None, fetch=None):
 
     The notification carries its thread root, so this costs one read per new root, cached for the process.
     Best effort: if the root cannot be read, the item is kept — the client still refuses the reply, which is a
-    wasted waking rather than a lost one.
+    wasted waking rather than a lost one. `fetch(root)` returns the root as `{"text", "author"}`, or None.
     """
-    text = (it.get("text") or "").lower()
-    if any(m in text for m in SESSION_LANE_MARKS):
+    if _lane_marked(it.get("text"), it.get("author")):
         return True
     root = it.get("root")
     if not root:
@@ -576,13 +589,16 @@ def in_session_lane(it, token=None, fetch=None):
     verdict = False
     try:
         if fetch is not None:
-            verdict = bool(fetch(root))
+            got = fetch(root) or {}
+            verdict = _lane_marked(got.get("text"), got.get("author"))
         else:
             st, d = _appview(token, "town.delve.feed.getPostThread", {"uri": root, "depth": 0})
             if st == 200:
                 post = ((d or {}).get("thread") or {}).get("post") or {}
-                roottext = (((post.get("record") or {}).get("text") or "").lower())
-                verdict = any(mk in roottext for mk in SESSION_LANE_MARKS)
+                verdict = _lane_marked(
+                    (post.get("record") or {}).get("text"),
+                    (post.get("author") or {}).get("handle"),
+                )
     except Exception:
         verdict = False
     _SESSION_LANE_CACHE[root] = verdict
