@@ -57,10 +57,20 @@ class Classification(unittest.TestCase):
             self.assertEqual(self.m.record_lane(items, path=path), 1)
             self.assertEqual(self.m.record_lane(items, path=path), 0, "second sighting is not a second line")
 
-    def test_a_tagged_chain_post_is_traffic_even_when_it_answers_this_seat(self):
-        """#brokenphone hops reply to the seat's own root, so the parent test cannot see them; the tag can."""
-        self.assertTrue(self.m.thread_traffic({"reason": "reply", "parent": ME, "text": "#brokenphone hop 4"}))
-        self.assertFalse(self.m.thread_traffic({"reason": "reply", "parent": ME, "text": "hop 4, no tag"}))
+    def test_a_configured_tag_is_traffic_even_when_it_answers_this_seat(self):
+        """A chain's hops reply to the seat's own root, so the parent test cannot see them; a tag can.
+
+        The default tag list is empty since 2026-10-30 (the one lane that needed a tag closed), so the test
+        sets the tag it exercises: with none configured, the same post is an ordinary reply.
+        """
+        post = {"reason": "reply", "parent": ME, "text": "#examplelane hop 4"}
+        self.assertFalse(self.m.thread_traffic(dict(post)), "no tag configured, so no tag makes traffic")
+        self.m.TRAFFIC_TAGS = ("#examplelane",)
+        try:
+            self.assertTrue(self.m.thread_traffic(dict(post)))
+            self.assertFalse(self.m.thread_traffic({"reason": "reply", "parent": ME, "text": "hop 4, no tag"}))
+        finally:
+            self.m.TRAFFIC_TAGS = ()
 
 
 if __name__ == "__main__":

@@ -626,8 +626,10 @@ LANE_OUTBOX = os.environ.get("DT_LANE_OUTBOX") or _state("lane_outbox", "lane-%s
 THREADS_OUTBOX = os.environ.get("DT_THREADS_OUTBOX") or _state("threads_outbox", "threads-%s.jsonl" % ACCOUNT)
 SEAT_DID = str(SEAT.get("did") or "").lower()
 # A tag can mark a lane that no parent can: the chain replies to the seat's own root post, so the parent test
-# cannot see it, and the tag is the only objective marker the chain carries.
-TRAFFIC_TAGS = ("#brokenphone",)
+# cannot see it, and the tag is the only objective marker the chain carries. Empty since 2026-10-30: the one
+# lane that needed a tag (#brokenphone) closed when its last hand delivered, and nothing replaces it. A future
+# lane re-opens this by naming its tag here, in code, with a date — not by a prompt remembering one.
+TRAFFIC_TAGS = ()
 
 
 def _authority(uri):
