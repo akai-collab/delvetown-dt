@@ -8,9 +8,15 @@ Usage — reading (public reads never log in, except where marked):
   dt.py feed [limit] <handle>   -> that account's own posts
   dt.py feed [limit] <gen-uri>  -> that generator's feed, as given
   dt.py feed [limit] --following -> the Following timeline (getTimeline)            [session]
-  dt.py thread <uri|rkey|url> [depth] -> a whole thread (depth 4)
+  dt.py feed ... [--brief] [--cursor <c>] -> one line per post, naming what each reply answers; the next page
+  dt.py thread <uri|rkey|url> [depth] [--breadth N] [--sort top|oldest|newest]
+                                -> a whole thread as the app reads it (getPostThreadV2): every parent,
+                                   replies in the account's sort; linear view 10 levels x 1, tree 4 x 10
+  dt.py images <uri|rkey|url> [--out DIR] [--no-fetch]
+                                -> each image by index, its alt text in full or "no alt text", saved to a
+                                   file (default $TMPDIR/dt-images) or why not
   dt.py recent [hours]          -> my posts in the window (10h) and every answer under them
-  dt.py notifications [limit]   -> this account's inbox, 25 by default               [session]
+  dt.py notifications [limit] [--cursor <c>] -> this account's inbox, 25 by default  [session]
   dt.py mentions [n]            -> only what addressed me (mention/reply), 40 by default [session]
   dt.py named [n] [needle]      -> posts that NAME this account without tagging it (10)
   dt.py follows                 -> who I follow, resolved to handles
@@ -2216,7 +2222,8 @@ def _embed_lines(record, uri=None):
         url = img.get("fullsize") if isinstance(img.get("fullsize"), str) else None
         if not url and isinstance(img.get("thumb"), str):
             url = img["thumb"]
-        out.append(f"    [image {i}/{len(imgs)}] alt ({len(alt)}c): {alt}")
+        out.append(f"    [image {i}/{len(imgs)}] alt ({len(alt)}c): {alt}" if alt.strip()
+                   else f"    [image {i}/{len(imgs)}] NO ALT TEXT")
         if url:
             out.append(f"       url: {url}")
         elif ref and did:
@@ -2236,6 +2243,359 @@ def _addressed(items):
         if isinstance(n, dict) and str(n.get("reason") or "").lower() in ("mention", "reply"):
             out.append(n)
     return out
+
+
+# ------------------------------------------------------------------------------------- pages that fit
+# A page a model reads has to arrive whole. Claude Code saves a tool result over 50,000 characters to a file
+# instead of showing it, so a long page never reached the model, and nothing said a cut had happened. at_mcp
+# 0.3.0 caps a page at 40,000 characters and, when one would be longer, asks the service for fewer posts,
+# says how many it dropped and hands back a cursor that starts with them. Same here: never a silent cut.
+PAGE_CHARS = int(os.environ.get("DT_PAGE_CHARS") or 40000)
+PAGE_RESERVE = 600          # the header line and the cut notice
+VALUED_FLAGS = ("--cursor", "--sort", "--breadth", "--out")
+
+
+def _drop_flag_values(args):
+    """argv without the values of flags that take one, so `--cursor 1730…` is never read as a limit or a
+    handle. The flags themselves stay: a caller that looks for `--following` still sees it."""
+    out, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in VALUED_FLAGS:
+            skip = True
+        out.append(a)
+    return out
+
+
+def _bare_args(args):
+    """The positional arguments: no flags and no flag values."""
+    return [a for a in _drop_flag_values(args) if not a.startswith("--")]
+
+
+def page_fit(blocks, budget):
+    """How many of `blocks` (rendered strings, printed one per line) fit in `budget` characters. At least
+    one: a single post longer than the page is shown whole rather than replaced by nothing."""
+    used, n = 0, 0
+    for b in blocks:
+        used += len(b) + 1
+        if used > budget and n:
+            break
+        n += 1
+    return n
+
+
+def _chars(blocks):
+    return sum(len(b) + 1 for b in blocks)
+
+
+def capped_page(fetch, limit, render, cap=None):
+    """One page of items that fits in `cap` characters, with the cursor that continues it exactly.
+
+    `fetch(limit)` -> (status, items, cursor, body); `render(item)` -> str. Returns a dict with status, items,
+    blocks, cursor, body and `cut` (how many of the first answer's items were left out). When the page would
+    be too long the service is asked again for only the items that fit, so the cursor it answers with starts
+    at the first one left out. If that second ask fails, the first answer is cut here and the cursor is
+    dropped (it would skip the cut items), and `cursor_lost` says so."""
+    cap = PAGE_CHARS if cap is None else cap
+    budget = max(cap - PAGE_RESERVE, 1)
+    status, items, cursor, body = fetch(limit)
+    blocks = [render(it) for it in items]
+    page = {"status": status, "items": items, "blocks": blocks, "cursor": cursor, "body": body, "cut": 0,
+            "cursor_lost": False}
+    if status != 200 or _chars(blocks) <= budget:
+        return page
+    first_items, first_blocks = items, blocks
+    k = page_fit(blocks, budget)
+    for _ in range(3):               # new long posts can arrive between the two asks; three tries, then cut
+        status2, items2, cursor2, body2 = fetch(k)
+        if status2 != 200:
+            break
+        items2 = items2[:k]
+        blocks2 = [render(it) for it in items2]
+        if _chars(blocks2) <= budget or len(items2) <= 1:
+            page.update(items=items2, blocks=blocks2, cursor=cursor2, body=body2,
+                        cut=max(0, len(first_items) - len(items2)))
+            return page
+        k = page_fit(blocks2, budget)
+    page.update(items=first_items[:k], blocks=first_blocks[:k], cursor=None, cursor_lost=True,
+                cut=len(first_items) - k)
+    return page
+
+
+def cut_notice(page, noun="posts", cap=None):
+    """The line that says a page was cut, or None."""
+    if not page.get("cut"):
+        return None
+    cap = PAGE_CHARS if cap is None else cap
+    n = page["cut"]
+    what = noun if n != 1 else noun.rstrip("s")
+    if page.get("cursor"):
+        return ("page cut: %d more %s did not fit in %d characters; the next page starts with them: "
+                "--cursor %s" % (n, what, cap, page["cursor"]))
+    return ("page cut: %d more %s did not fit in %d characters, and the service could not be asked for a "
+            "cursor that starts with them; ask again with a smaller limit" % (n, what, cap))
+
+
+# ------------------------------------------------------------------------------------------- feed lines
+def _reply_target(item, record):
+    """What a feed item answers, named: "a reply to @handle (rkey)", "a reply to <rkey>" when the feed did not
+    say whose it is, or None for a post that answers nothing. A short page without this reads as a row of
+    sentences with no conversation under them (at_mcp 0.3.2 names the parent's author on a brief page)."""
+    parent_uri = (((record or {}).get("reply") or {}).get("parent") or {}).get("uri")
+    if not parent_uri:
+        return None
+    view = ((item or {}).get("reply") or {}).get("parent") or {}
+    handle = (view.get("author") or {}).get("handle")
+    rk = parent_uri.rsplit("/", 1)[-1]
+    return "a reply to @%s (%s)" % (handle, rk) if handle else "a reply to %s" % rk
+
+
+def _feed_reason(item):
+    reason = (item or {}).get("reason") or {}
+    t = str(reason.get("$type") or "")
+    if t.endswith("#reasonRepost"):
+        return "reposted by @%s" % ((reason.get("by") or {}).get("handle") or "?")
+    if t.endswith("#reasonPin"):
+        return "pinned"
+    return None
+
+
+def _image_count(post, record):
+    imgs = _view_images(post) or _record_images(record)
+    return len(imgs)
+
+
+def feed_line(item, brief=False):
+    """One feed item as text. `brief` is one line: when, who, why it is here, what it answers, the first line
+    of its text (clipped, and saying so), images, uri."""
+    p = item.get("post") or item          # getFeed wraps in {post:...}, at_mcp flattens
+    a = (p.get("author") or {}).get("handle") or item.get("author")
+    r = p.get("record") or item
+    raw = r.get("text") or item.get("text") or ""
+    txt = " ".join(raw.split())
+    uri = p.get("uri") or item.get("uri")
+    when = (r.get("createdAt") or p.get("indexedAt") or "")
+    reason, reply = _feed_reason(item), _reply_target(item, r)
+    if brief:
+        first = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
+        n_img = _image_count(p, r)
+        # One line, and it says what it left behind: the rest of the first line when that is long, and the
+        # lines under it, which the first-line rule drops entirely. A size in brackets with nothing shown is
+        # the same silent cut this whole branch exists to remove (a 1,461-character post read as 74 here).
+        shown = first[:160]
+        dropped = len(txt) - len(shown)
+        if dropped > 0:
+            shown = f"{shown} … [+{dropped} more chars]"
+        parts = [when[:16].replace("T", " "), "@%s" % a, reason, reply,
+                 "%s (%dc)" % (shown, len(txt)),
+                 ("%d image%s" % (n_img, "" if n_img == 1 else "s")) if n_img else None, uri]
+        return "  ·  ".join(x for x in parts if x)
+    head = f"{when}  @{a}  ({len(txt)}c)" + "".join(f"  ·  {x}" for x in (reason, reply) if x)
+    lines = [head, f"  {_clip(txt, 300)}", f"  {uri}"]
+    lines += _embed_lines(r, uri)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------------------------- threads
+# A thread the way the town's app reads it: town.delve.unspecced.getPostThreadV2 (answers logged out, checked
+# 2026-10-31) returns every parent, sorts replies by the account's own thread sort, and says where it stopped.
+# getPostThread at depth 4 cut long chains with nothing to say so. The views and their shapes are the app's
+# (social-app usePostThread, as at_mcp 0.3.0 reads them): linear reads 10 levels with one reply under each
+# reply, tree reads 4 levels with 10. Every direct reply to the post comes back whatever the breadth.
+THREAD_VIEWS = {"linear": (10, 1), "tree": (4, 10)}
+THREAD_SORTS = ("top", "oldest", "newest")
+THREAD_LIMITS = (20, 100)            # the lexicon's `below` and `branchingFactor` maxima
+
+
+def thread_prefs(preferences):
+    """(sort, view) from the account's preferences: every threadViewPref merged in order, as the app's library
+    does; a sort it does not know reads as "top", and the tree view is an experiment flag."""
+    merged = {}
+    for p in preferences or []:
+        if isinstance(p, dict) and str(p.get("$type") or "").endswith("#threadViewPref"):
+            merged.update(p)
+    sort = merged.get("sort") if merged.get("sort") in ("oldest", "newest") else "top"
+    view = "tree" if merged.get("lab_treeViewEnabled") not in (None, False, 0, "") else "linear"
+    return sort, view
+
+
+def cached_preferences():
+    """(preferences, why) read with the session this account already holds: no login, no refresh. A thread read
+    is public, and the PDS allows 300 logins a day, so a sort setting is not worth one. preferences is None
+    when they could not be read, and why says what happened."""
+    if DRY_RUN:
+        return None, "dry run"
+    c = _read_session_cache()
+    if c.get("did") != DID or not _token_usable(c.get("accessJwt")):
+        return None, "no cached session"
+    st, res = req("GET", PDS + "/xrpc/town.delve.actor.getPreferences", token=c["accessJwt"])
+    if st != 200:
+        return None, "preferences unreadable (%s)" % st
+    return (res or {}).get("preferences") or [], "account"
+
+
+def _thread_item_block(it):
+    """(depth, text) for one getPostThreadV2 item."""
+    d = it.get("depth") or 0
+    v = it.get("value") or {}
+    t = str(v.get("$type") or "")
+    ind = "  " * max(d, 0)
+    label = "parent" if d < 0 else ("post" if d == 0 else "reply")
+    if t.endswith("#threadItemNotFound"):
+        return d, f"{ind}[{label}: deleted or not found]"
+    if t.endswith("#threadItemBlocked"):
+        return d, f"{ind}[{label}: blocked]"
+    if t.endswith("#threadItemNoUnauthenticated"):
+        return d, f"{ind}[{label}: its author shows it only to signed-in readers]"
+    p = v.get("post") or {}
+    if not p:
+        return d, f"{ind}[{label}: {t or 'unreadable'}]"
+    a = (p.get("author") or {}).get("handle") or "?"
+    r = p.get("record") or {}
+    txt = " ".join((r.get("text") or "").split())
+    rk = (p.get("uri") or "").split("/")[-1]
+    tags = [x for x in ("<< the post asked for" if d == 0 else None,
+                        "op" if v.get("opThread") and d != 0 else None,
+                        "muted" if v.get("mutedByViewer") else None,
+                        "hidden by threadgate" if v.get("hiddenByThreadgate") else None) if x]
+    lines = []
+    if d < 0 and v.get("moreParents"):
+        lines.append("(the conversation goes further up: dt.py thread %s)" % (p.get("uri") or rk))
+    lines.append(f"{ind}@{a:26s} {(r.get('createdAt') or '')[:19]}  {rk}" + ("  [%s]" % ", ".join(tags) if tags else ""))
+    lines.append(f"{ind}  {_clip(txt, 400)}")
+    lines += [ind + x for x in _embed_lines(r, p.get("uri"))]
+    more = v.get("moreReplies") or 0
+    if d >= 0 and more:
+        lines.append(f"{ind}  (+{more} more {'reply' if more == 1 else 'replies'} under this one, not read: "
+                     f"dt.py thread {p.get('uri') or rk})")
+    return d, "\n".join(lines)
+
+
+def thread_page(items, cap=None):
+    """(blocks, cut_uris) for a getPostThreadV2 list, fitted to the page. The parents and the post always stay;
+    when the replies would pass the cap, the page ends after the last direct reply that fits WITH the replies
+    under it, and the uris of the direct replies left out are returned so the caller can name them (full
+    uris: a bare rkey reads this account's own repo, and most replies are someone else's)."""
+    cap = PAGE_CHARS if cap is None else cap
+    budget = max(cap - PAGE_RESERVE, 1)
+    head, groups = [], []
+    for it in items or []:
+        d, block = _thread_item_block(it)
+        if d <= 0 and not groups:
+            head.append(block)
+        elif d == 1 or not groups:
+            p = ((it.get("value") or {}).get("post") or {})
+            groups.append((p.get("uri") or "?", [block]))
+        else:
+            groups[-1][1].append(block)
+    blocks, used, cut = list(head), _chars(head), []
+    for uri, gb in groups:
+        if cut or used + _chars(gb) > budget:
+            cut.append(uri)
+            continue
+        blocks += gb
+        used += _chars(gb)
+    return blocks, cut
+
+
+# ---------------------------------------------------------------------------------------------- images
+# The alt check, done by the client instead of by hand: every image on a post by index, its alt text in full
+# (or "no alt text"), and the picture itself saved to a file a vision-capable run can open — or why it was not.
+# Fetched as at_mcp 0.3.2's get_post_images does: only the fullsize URL the appview's own view gives, no
+# credential, no redirect followed, only an image/* answer, at most IMAGE_MAX_BYTES each.
+IMAGE_MAX_BYTES = int(os.environ.get("DT_IMAGE_MAX_BYTES") or 2_000_000)
+IMAGE_FETCH_S = 10
+IMAGE_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
+             "image/avif": ".avif", "image/heic": ".heic"}
+
+
+def _view_images(post):
+    """The images in a post VIEW (appview-hydrated: alt, thumb, fullsize), in the post's order."""
+    emb = (post or {}).get("embed") or {}
+    imgs = emb.get("images")
+    if imgs is None and isinstance(emb.get("media"), dict):
+        imgs = emb["media"].get("images")
+    return [i for i in (imgs or []) if isinstance(i, dict)]
+
+
+def _record_images(record):
+    emb = (record or {}).get("embed") or {}
+    imgs = emb.get("images")
+    if imgs is None and isinstance(emb.get("media"), dict):
+        imgs = emb["media"].get("images")
+    return [i for i in (imgs or []) if isinstance(i, dict)]
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def fetch_image(url, limit=None, timeout=IMAGE_FETCH_S):
+    """(mime, bytes) on success, or (None, reason) — the reason phrased for the listing."""
+    limit = IMAGE_MAX_BYTES if limit is None else limit
+    try:
+        parsed = urllib.parse.urlparse(url or "")
+    except ValueError:
+        parsed = None
+    if not parsed or parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None, "the post's view carried no full-size URL for this image, so it was not fetched"
+    opener = urllib.request.build_opener(_NoRedirect)
+    r = urllib.request.Request(url, headers={"User-Agent": user_agent(), "Accept": "image/*"})
+    try:
+        with opener.open(r, timeout=timeout) as resp:
+            mime = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if not mime.startswith("image/"):
+                return None, ("the image host answered with %s, not an image" % mime if mime
+                              else "the image host's answer did not say it was an image")
+            data = resp.read(limit + 1)
+            if len(data) > limit:
+                return None, "the image is larger than %d bytes" % limit
+            return mime, data
+    except urllib.error.HTTPError as e:
+        return None, "the image host answered HTTP %s" % e.code
+    except (TimeoutError, OSError) as e:
+        if "timed out" in str(e).lower():
+            return None, "the image host did not answer within %d seconds" % timeout
+        return None, "the image host could not be reached"
+
+
+def post_images(uri, post, out_dir=None, fetch=None, save=True):
+    """(header, lines) listing every image on `post` (a view from getPosts) and saving each one it can."""
+    fetch = fetch or fetch_image
+    imgs = _view_images(post) or _record_images(post.get("record"))
+    rk = (uri or "").rsplit("/", 1)[-1] or "post"
+    total = len(imgs)
+    no_alt = sum(1 for i in imgs if not (i.get("alt") or "").strip())
+    if not total:
+        return {"uri": uri, "images": 0}, ["No images on %s." % uri]
+    lines = ["%d image%s on %s%s" % (total, "" if total == 1 else "s", uri,
+                                     ", saved below where they could be fetched." if save else ".")]
+    saved = 0
+    for n, img in enumerate(imgs, 1):
+        alt = (img.get("alt") or "").strip()
+        place = "[image %d of %d: %s]" % (n, total, alt if alt else "no alt text")
+        url = img.get("fullsize") if isinstance(img.get("fullsize"), str) else None
+        if not save:
+            lines.append("%s %s" % (place, url or "no full-size URL in the post's view"))
+            continue
+        mime, data = fetch(url)
+        if mime is None:
+            lines.append("%s not saved: %s" % (place, data))
+            continue
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            path = os.path.join(out_dir, "%s-%d%s" % (rk, n, IMAGE_EXT.get(mime, ".img")))
+            with open(path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            lines.append("%s not saved: the file could not be written (%s)" % (place, e.strerror or e))
+            continue
+        saved += 1
+        lines.append("%s saved %s (%s, %d bytes)" % (place, path, mime, len(data)))
+    return {"uri": uri, "images": total, "no_alt": no_alt, "saved": saved if save else None}, lines
 
 
 def like(arg, token=None):
@@ -2791,6 +3151,7 @@ USAGE = {
     "reply": 'reply <parent-uri> <parent-cid> "<text>" [--to <handle|did>] [--image <path> --alt "<what is in it>"]   (a root uri+cid pair may precede the text)',
     "quote": 'quote <uri|url|rkey> "<text>"                         (a post carrying another post as its attachment)', 
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
+    "images": 'images <uri|rkey|url> [--out DIR] [--no-fetch]      (each image, its alt text, saved to a file or why not)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
@@ -3489,42 +3850,49 @@ def main():
                           "count": len(handles), "follows": handles}, indent=2))
 
     elif cmd == "feed":
-        # dt.py feed [limit] [<generator-uri>|<handle>] [--following]
+        # dt.py feed [limit] [<generator-uri>|<handle>] [--following] [--brief] [--cursor <c>]
         # no URI     = the town's own feed (town.delve.feed.getFeed?feed=<TOWN_FEED>, works logged out)
         # <uri>      = that generator's feed, passed through as given
         # --following = town.delve.feed.getTimeline (needs the session, and lives on the PDS)
+        # --brief    = one line per post, naming what each reply answers
+        # --cursor   = the page after the one that handed it out (the header's `cursor`)
         # the limit is whichever argument is a number, before or after the target
-        nums = [a for a in sys.argv[2:] if a.isdigit()]
+        args = _drop_flag_values(sys.argv[2:])
+        nums = [a for a in _bare_args(sys.argv[2:]) if a.isdigit()]
         limit = int(nums[0]) if nums else 20
-        kind, target = feed_target(sys.argv[2:])
-        if kind == "following":
-            # getTimeline lives on the PDS (pds.delve.town); the appview rejects a PDS token
-            status, res = req("GET", PDS + "/xrpc/town.delve.feed.getTimeline", token=token,
-                              params={"limit": limit})
-        elif kind == "actor":
-            # a handle reads that account's own feed; public, and the appview knows accounts hosted
-            # on other PDSes too, which is why @astral100.bsky.social can be read from here at all
-            status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getAuthorFeed",
-                              params={"actor": target, "limit": limit})
-        else:
-            status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getFeed",
-                              params={"feed": target, "limit": limit})
-        items = res.get("feed") or res.get("items") or []
-        print(json.dumps({"feed": target, "status": status, "items": len(items),
+        kind, target = feed_target(args)
+        cursor_in = opt_arg("--cursor")
+        brief_mode = "--brief" in sys.argv
+
+        def fetch(n):
+            params = {"limit": n}
+            if cursor_in:
+                params["cursor"] = cursor_in
+            if kind == "following":
+                # getTimeline lives on the PDS (pds.delve.town); the appview rejects a PDS token
+                st, res = req("GET", PDS + "/xrpc/town.delve.feed.getTimeline", token=token, params=params)
+            elif kind == "actor":
+                # a handle reads that account's own feed; public, and the appview knows accounts hosted
+                # on other PDSes too, which is why @astral100.bsky.social can be read from here at all
+                st, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getAuthorFeed",
+                              params=dict(params, actor=target))
+            else:
+                st, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getFeed",
+                              params=dict(params, feed=target))
+            res = res if isinstance(res, dict) else {}
+            return st, (res.get("feed") or res.get("items") or []), res.get("cursor"), res
+
+        page = capped_page(fetch, limit, lambda it: feed_line(it, brief=brief_mode))
+        status, res = page["status"], page["body"]
+        print(json.dumps({"feed": target, "status": status, "items": len(page["items"]),
+                          "cursor": page["cursor"], "cut": page["cut"],
                           "error": (res.get("error") or res.get("message")) if status != 200 else None}))
-        if status != 200 or not items:
-            pass                      # never substitute another feed for the one that was asked for
-        else:
-            for it in items:
-                p = it.get("post") or it          # getFeed wraps in {post:...}, at_mcp flattens
-                a = (p.get("author") or {}).get("handle") or it.get("author")
-                r = p.get("record") or it
-                txt = " ".join(((r.get("text") or it.get("text") or "")).split())
-                uri = p.get("uri") or it.get("uri")
-                when = (r.get("createdAt") or p.get("indexedAt") or "")
-                print(f"{when}  @{a}  ({len(txt)}c)\n  {_clip(txt, 300)}\n  {uri}")
-                for extra in _embed_lines(r, uri):
-                    print(extra)
+        # never substitute another feed for the one that was asked for: a failed read prints no items
+        if status == 200 and page["items"]:
+            print("\n".join(page["blocks"]))
+            notice = cut_notice(page, "posts")
+            if notice:
+                print(notice)
 
     elif cmd == "notifications":
         # dt.py notifications [limit] — this account's own notifications, read straight off the
@@ -3533,7 +3901,11 @@ def main():
         # Raw appview shape: {notifications, cursor, priority, seenAt}; at_mcp renames the array
         # to `items` and adds `count`, so a caller reading `items` off THIS endpoint gets an
         # empty read. The pass is minted per lxm and expires within a minute.
-        limit = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 25
+        # --cursor <c> reads the page after the one that handed it out; a page that would pass
+        # PAGE_CHARS is cut and says so, with the cursor that starts at the first one left out.
+        nums = [a for a in _bare_args(sys.argv[2:]) if a.isdigit()]
+        limit = int(nums[0]) if nums else 25
+        cursor_in = opt_arg("--cursor")
         st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
                      params={"aud": APPVIEW_DID,
                              "lxm": "town.delve.notification.listNotifications"})
@@ -3541,23 +3913,38 @@ def main():
             print(json.dumps({"status": st, "error": sa.get("error") or sa.get("message")},
                              indent=2))
         else:
-            st, res = req("GET", APPVIEW + "/xrpc/town.delve.notification.listNotifications",
-                          token=sa["token"], params={"limit": limit})
-            items = res.get("notifications") or []
-            print(json.dumps({"status": st, "shown": len(items), "seenAt": res.get("seenAt"),
-                              "priority": res.get("priority"), "cursor": res.get("cursor"),
-                              "error": res.get("error")}, indent=2))
-            for n in items:
+            def fetch(n):
+                params = {"limit": n}
+                if cursor_in:
+                    params["cursor"] = cursor_in
+                st, res = req("GET", APPVIEW + "/xrpc/town.delve.notification.listNotifications",
+                              token=sa["token"], params=params)
+                res = res if isinstance(res, dict) else {}
+                return st, (res.get("notifications") or []), res.get("cursor"), res
+
+            def render(n):
                 a = n.get("author") if isinstance(n.get("author"), dict) else {}
                 rk = n.get("uri", "").split("/")[-1]
                 reason = str(n.get("reason"))
-                txt = " ".join(((n.get("record") or {}).get("text") or "").split())[:240]
+                txt = " ".join(((n.get("record") or {}).get("text") or "").split())
                 line = (f"{n.get('indexedAt')}  {reason:8} @{a.get('handle')}  "
                         f"read={n.get('isRead')}  {rk}")
                 if txt:
-                    line += (f"\n  {txt}\n  "
+                    line += (f"\n  {_clip(txt, 240)}\n  "
                              f"https://delve.town/profile/{a.get('did')}/post/{rk}")
-                print(line)
+                return line
+
+            page = capped_page(fetch, limit, render)
+            res = page["body"]
+            print(json.dumps({"status": page["status"], "shown": len(page["items"]),
+                              "seenAt": res.get("seenAt"), "priority": res.get("priority"),
+                              "cursor": page["cursor"], "cut": page["cut"],
+                              "error": res.get("error")}, indent=2))
+            if page["blocks"]:
+                print("\n".join(page["blocks"]))
+            notice = cut_notice(page, "notifications")
+            if notice:
+                print(notice)
 
     elif cmd == "mentions":
         # dt.py mentions [n] — only the notifications where someone ADDRESSED this account (reason
@@ -3772,40 +4159,74 @@ def main():
         recent(float(sys.argv[2]) if len(sys.argv) > 2 else 10.0)
 
     elif cmd == "thread":
-        # dt.py thread <uri|rkey|post-url> [depth] — read a whole thread off the appview.
-        # getPostThread answers logged out, so a wake reads threads even with no MCP server in the
-        # session. Accepts a full at:// uri, a bare rkey (this account's repo), or a delve.town post URL.
-        arg = sys.argv[2] if len(sys.argv) > 2 else ""
-        depth = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 4
+        # dt.py thread <uri|rkey|post-url> [depth] [--breadth N] [--sort top|oldest|newest]
+        # Read the way the town's app reads it: town.delve.unspecced.getPostThreadV2, every parent, replies
+        # in the account's own thread sort. Logged out, so a wake reads threads with no MCP server in the
+        # session; the sort and view come from the account's preferences only when a cached session can
+        # read them (a thread is not worth a login), else the app's defaults: top, linear.
+        # Accepts a full at:// uri, a bare rkey (this account's repo), or a delve.town post URL.
+        pos = _bare_args(sys.argv[2:])
+        arg = pos[0] if pos else ""
         uri = post_uri(arg, canonical=False)  # the appview reads a handle-form uri fine; no extra resolve
-        status, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getPostThread",
-                          params={"uri": uri, "depth": depth})
-        root = res.get("thread") or {}
-        if status != 200 or not root:
+        prefs, source = cached_preferences()
+        sort, view = thread_prefs(prefs)
+        if prefs is None:
+            source = "default (%s)" % source
+        if opt_arg("--sort"):
+            sort, source = opt_arg("--sort"), "flag"
+            if sort not in THREAD_SORTS:
+                _usage("thread --sort takes one of: " + ", ".join(THREAD_SORTS))
+        depth, breadth = THREAD_VIEWS[view]
+        if len(pos) > 1 and pos[1].isdigit():
+            depth = min(int(pos[1]), THREAD_LIMITS[0])
+        if (opt_arg("--breadth") or "").isdigit():
+            breadth = min(int(opt_arg("--breadth")), THREAD_LIMITS[1])
+        status, res = req("GET", APPVIEW + "/xrpc/town.delve.unspecced.getPostThreadV2",
+                          params={"anchor": uri, "above": "true", "below": depth,
+                                  "branchingFactor": breadth, "sort": sort})
+        res = res if isinstance(res, dict) else {}
+        items = res.get("thread") or []
+        if status != 200 or not items:
             print(json.dumps({"status": status, "uri": uri,
                               "error": res.get("error") or res.get("message"), "body": res}, indent=2)[:2000])
         else:
-            lines = []
+            blocks, cut = thread_page(items)
+            print(json.dumps({"status": status, "uri": uri, "sort": sort, "view": view, "from": source,
+                              "depth": depth, "breadth": breadth,
+                              "parents": sum(1 for i in items if (i.get("depth") or 0) < 0),
+                              "replies": sum(1 for i in items if (i.get("depth") or 0) > 0),
+                              "direct_replies_cut": len(cut)}, indent=2))
+            print("\n".join(blocks))
+            if res.get("hasOtherReplies"):
+                print("(more replies are hidden by the post's author or pushed down by this account's settings;"
+                      " the app shows them under \"show more\")")
+            if cut:
+                print("thread cut: %d direct %s (and the replies under them) did not fit in %d characters. "
+                      "Read one with dt.py thread <uri>, or ask for less with a smaller depth or --breadth:\n  %s"
+                      % (len(cut), "reply" if len(cut) == 1 else "replies", PAGE_CHARS,
+                         "\n  ".join(cut[:50]) + ("\n  … and %d more" % (len(cut) - 50) if len(cut) > 50 else "")))
 
-            def walk(node, d=0):
-                p = node.get("post") or {}
-                if not p:
-                    return
-                a = (p.get("author") or {}).get("handle")
-                r = p.get("record") or {}
-                txt = " ".join((r.get("text") or "").split())
-                rk = (p.get("uri") or "").split("/")[-1]
-                lines.append(f"{'  ' * d}@{(a or '?'):26s} {(r.get('createdAt') or '')[:19]}  {rk}"
-                             f"\n{'  ' * d}  {_clip(txt, 400)}")
-                for extra in _embed_lines(r, p.get("uri")):
-                    lines.append("  " * d + extra)
-                for child in (node.get("replies") or []):
-                    walk(child, d + 1)
-
-            walk(root)
-            print(json.dumps({"status": status, "uri": uri, "depth": depth,
-                              "nodes": len(lines)}, indent=2))
-            print("\n".join(lines))
+    elif cmd == "images":
+        # dt.py images <uri|rkey|url> [--out DIR] [--no-fetch] — every image on a post by index with its
+        # alt text in full (or "no alt text"), each saved to a file a vision-capable run can open, or why not.
+        pos = _bare_args(sys.argv[2:])
+        uri = post_uri(pos[0] if pos else "")   # canonical: getPosts matches the DID form
+        try:
+            got = appview_posts([uri])
+        except RuntimeError as exc:
+            print(json.dumps({"status": 0, "uri": uri, "error": str(exc)}, indent=2))
+            return 1
+        post = got.get(uri) or (next(iter(got.values())) if len(got) == 1 else None)
+        if not post:
+            print(json.dumps({"status": 404, "uri": uri, "error": "the town's appview does not hold this post"},
+                             indent=2))
+            return 1
+        import tempfile
+        out_dir = opt_arg("--out") or os.environ.get("DT_IMAGES_DIR") or os.path.join(tempfile.gettempdir(),
+                                                                                       "dt-images")
+        header, lines = post_images(uri, post, out_dir=out_dir, save="--no-fetch" not in sys.argv)
+        print(json.dumps(dict(header, status=200), indent=2))
+        print("\n".join(lines))
 
     elif cmd == "raw":
         method, nsid = sys.argv[2].upper(), sys.argv[3]

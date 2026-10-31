@@ -5,7 +5,8 @@ Speaks just enough MCP stdio: initialize, then a tools/call for get_unread_count
 get_notifications. Behaviour is chosen by environment:
 
   FAKE_MODE=ok     (default) a real-shaped notification reading: JSON, with the facets/cids that
-                   the monitor must distil away
+                   the monitor must distil away, when asked for `format: "json"`; otherwise prose,
+                   as at_mcp 0.3.0+ answers every read
   FAKE_MODE=error  the notification call comes back as an at_mcp error string, whose "N seconds"
                    varies between runs (FAKE_SECONDS) — the case that must not schedule a wake
   FAKE_MODE=die    the client exits before answering, the case that used to print a traceback
@@ -55,6 +56,11 @@ NOTES = json.dumps({
     ],
 })
 
+# What at_mcp 0.3.0+ returns for a read that does not ask for JSON: text written for a model.
+PROSE = ("2 notifications. Seen in the app up to 2026-10-12 18:50.\n\n"
+         "1. mention from @selene.delve.town at 2026-10-12 18:57: Bot or not? Round 2.\n\n"
+         "2. reply from @carly.delve.town at 2026-10-12 19:04: quick answer under your post")
+
 
 def respond(mid, text):
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": mid,
@@ -88,5 +94,7 @@ for line in sys.stdin:
                         "Nothing was changed. Retrying later may succeed.")
             elif MODE == "die":
                 sys.exit(0)
-            else:
+            elif ((msg.get("params") or {}).get("arguments") or {}).get("format") == "json":
                 respond(msg.get("id"), NOTES)
+            else:
+                respond(msg.get("id"), PROSE)
