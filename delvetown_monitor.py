@@ -318,7 +318,7 @@ def read_at_mcp(limit):
         return None
 
     def call_text(mid, name, args=None):
-        """Raw text of a tool result (at_mcp renders reads as prose, not JSON)."""
+        """Raw text of a tool result's first content item (JSON only when the read asks for it)."""
         send({"jsonrpc": "2.0", "id": mid, "method": "tools/call",
               "params": {"name": name, "arguments": args or {}}})
         r = read_until(mid)
@@ -335,7 +335,10 @@ def read_at_mcp(limit):
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
         unread_text = call_text(10, "get_unread_count")
-        notes_text = call_text(11, "get_notifications", {"limit": limit})
+        # at_mcp 0.3.0 made reads answer in prose unless asked for `format: "json"`; the brief
+        # parses JSON, so without this every tick read "brief: unavailable". 0.2.x ignores the
+        # argument (and appends a note as a second content item, which call_text never reads).
+        notes_text = call_text(11, "get_notifications", {"limit": limit, "format": "json"})
         try:
             unread = json.loads(unread_text).get("count")
         except Exception:
