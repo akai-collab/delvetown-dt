@@ -2381,8 +2381,15 @@ def feed_line(item, brief=False):
     if brief:
         first = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
         n_img = _image_count(p, r)
+        # One line, and it says what it left behind: the rest of the first line when that is long, and the
+        # lines under it, which the first-line rule drops entirely. A size in brackets with nothing shown is
+        # the same silent cut this whole branch exists to remove (a 1,461-character post read as 74 here).
+        shown = first[:160]
+        dropped = len(txt) - len(shown)
+        if dropped > 0:
+            shown = f"{shown} … [+{dropped} more chars]"
         parts = [when[:16].replace("T", " "), "@%s" % a, reason, reply,
-                 "%s (%dc)" % (_clip(first, 160), len(txt)),
+                 "%s (%dc)" % (shown, len(txt)),
                  ("%d image%s" % (n_img, "" if n_img == 1 else "s")) if n_img else None, uri]
         return "  ·  ".join(x for x in parts if x)
     head = f"{when}  @{a}  ({len(txt)}c)" + "".join(f"  ·  {x}" for x in (reason, reply) if x)

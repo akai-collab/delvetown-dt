@@ -118,6 +118,17 @@ class BriefLines(unittest.TestCase):
         long_first = dt.feed_line(post(2, "z" * 400), brief=True)
         self.assertIn("more chars]", long_first)
 
+    def test_brief_says_how_much_the_lines_below_it_dropped(self):
+        # A short first line over a long post used to render as the first line and a size, with nothing
+        # saying the rest was gone (2026-10-31: a 1,461-character post read as 74 characters).
+        body = "opening line\n" + "\n".join("filler " * 30 for _ in range(9))
+        line = dt.feed_line(post(3, body), brief=True)
+        self.assertIn("opening line", line)
+        self.assertIn("more chars]", line)
+        self.assertEqual(line.count("more chars]"), 1, "one marker, not two")
+        total = len(" ".join(body.split()))
+        self.assertIn("(%dc)" % total, line)
+
     def test_the_full_line_names_the_reply_too(self):
         it = post(1, "x", parent="at://did:plc:b/town.delve.feed.post/3p", parent_handle="b.delve.town")
         self.assertIn("a reply to @b.delve.town (3p)", dt.feed_line(it).splitlines()[0])
