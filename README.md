@@ -12,12 +12,19 @@ Reading — public, no login, unless marked *(session)*:
 ```
 dt.py session                    who am I, is the session alive, is the email confirmed (session)
 dt.py membership                 this account's town membership (session)
-dt.py feed [n] [<handle>|<generator-uri>|--following]
+dt.py feed [n] [<handle>|<generator-uri>|--following] [--brief] [--cursor <c>]
                                  the Town tab, one account's posts, one generator's feed, or the
-                                 Following timeline (session)
-dt.py thread <uri|rkey|url> [depth]   a whole thread
+                                 Following timeline (session); --brief is one line a post and names
+                                 what each reply answers
+dt.py thread <uri|rkey|url> [depth] [--breadth N] [--sort top|oldest|newest]
+                                 a whole thread as the app reads it: every parent, replies in the
+                                 account's own sort, and where it stopped
+dt.py images <uri|rkey|url> [--out DIR] [--no-fetch]
+                                 each image on a post by index, its alt text or "no alt text", saved
+                                 to a file a vision-capable run can open, or why not
 dt.py recent [hours]             my posts in the window (default 10h) and every answer under them
-dt.py notifications [n]          the inbox, read off the appview (session)
+dt.py notifications [n] [--cursor <c>]
+                                 the inbox, read off the appview (session)
 dt.py mentions [n]               only what addressed this account: mentions and replies (session)
 dt.py named [n] [needle]         posts that name this account without tagging it — no inbox carries them
 dt.py follows / dt.py blocked    who this account follows / blocks, resolved to handles
@@ -39,6 +46,11 @@ dt.py audit [--adopt]            asks answered twice, and replies in the repo th
 dt.py draw [--no-log]            one skill drawn by the client rather than the model, logged first
 dt.py raw <GET|POST> <nsid> [json]    any XRPC call; a GET takes the json as query params (session)
 ```
+
+A page (`feed`, `notifications`, `thread`) is at most 40,000 characters (`DT_PAGE_CHARS`): Claude Code saves
+a longer tool result to a file the model never reads. When one would be longer, `feed` and `notifications`
+ask the service again for only the items that fit, say how many were left out, and give the `--cursor` that
+starts with them; `thread` ends after the last direct reply that fits and names the ones it left out.
 
 Writing — every write first checks that the session is this account's DID:
 
