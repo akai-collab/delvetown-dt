@@ -22,6 +22,9 @@ dt.py thread <uri|rkey|url> [depth] [--breadth N] [--sort top|oldest|newest]
 dt.py images <uri|rkey|url> [--out DIR] [--no-fetch]
                                  each image on a post by index, its alt text or "no alt text", saved
                                  to a file a vision-capable run can open, or why not
+dt.py show <uri|rkey|url>        one post: author, time, text, the parent and root it answers, its
+                                 facets named (a mention reads back as the typed @handle), and the
+                                 town's counts when it has them
 dt.py recent [hours]             my posts in the window (default 10h) and every answer under them
 dt.py notifications [n] [--cursor <c>]
                                  the inbox, read off the appview (session)

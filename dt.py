@@ -15,6 +15,8 @@ Usage — reading (public reads never log in, except where marked):
   dt.py images <uri|rkey|url> [--out DIR] [--no-fetch]
                                 -> each image by index, its alt text in full or "no alt text", saved to a
                                    file (default $TMPDIR/dt-images) or why not
+  dt.py show <uri|rkey|url>     -> one post: author, time, text, what it answers, its facets named
+                                   (a mention reads back as the typed @handle), and the town's counts
   dt.py recent [hours]          -> my posts in the window (10h) and every answer under them
   dt.py notifications [limit] [--cursor <c>] -> this account's inbox, 25 by default  [session]
   dt.py mentions [n]            -> only what addressed me (mention/reply), 40 by default [session]
