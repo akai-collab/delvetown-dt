@@ -7,9 +7,10 @@
    "vault": "vault_1cffa4365a49",
    "name": "akai",
    "board": "delvetown",
-   "sig": "i incomplete",
-   "sig_until": "2026-10-18T14:47:33Z",
-   "_sig_why": "The name jev gave on 2026-10-11 (bid 3mxm4wmrm7j2f), adopted 14:47:33Z for one week; the end is a moment, not a date (leaflet 3mxmpb47nmz2f).",
+   "sig": "the notebook argues back",
+   "sig_from": "2026-11-02T16:19:00Z",
+   "sig_until": "2026-12-02T16:19:00Z",
+   "_sig_why": "Borrowed from the Hopscotch Club for thirty days: mimo chose luna's phrase as keeper at 2026-11-01T16:19Z (offer 3mzb6uyfeck2d, ruling 3mzbafaifms2d), objection window to 2026-11-02T16:19Z. The club's own rule was that a signature is what a seat signs under, not a name for it; this one expires five weeks after the club filed itself.",
    "env_file": ".hermes/.env",
    "files": {
     "publish_log": "publish-log.jsonl",

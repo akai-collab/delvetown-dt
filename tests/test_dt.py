@@ -1180,7 +1180,7 @@ class Accounts(unittest.TestCase):
         self.assertEqual(handle, "akai.delve.town")
         self.assertEqual(did, "did:plc:zhcehhukgwhdt2mnokes2tui")
         self.assertEqual(log, "publish-log.jsonl")
-        self.assertEqual(sig, "'i incomplete'")
+        self.assertEqual(sig, "'the notebook argues back'")
 
     def test_locksmith_is_a_second_account_with_its_own_everything(self):
         acc, handle, did, vault, log, sig = self._imp(DT_ACCOUNT="locksmith")
@@ -1272,11 +1272,38 @@ class SignatureTerm(unittest.TestCase):
         self.assertFalse(dt.sig_live("", "2026-10-18T14:47:33Z"))
         self.assertFalse(dt.sig_live("i incomplete", ""))
 
+    def test_a_borrowed_name_waits_for_its_window_to_open(self):
+        # the row can be written early; the promise was that the name starts when the objection
+        # window closes, so a `since` in the future must not sign anything yet
+        args = ("the notebook argues back", "2026-12-02T16:19:00Z")
+        self.assertFalse(dt.sig_live(*args, now=datetime(2026, 11, 2, 16, 18, tzinfo=timezone.utc),
+                                     since="2026-11-02T16:19:00Z"))
+        self.assertTrue(dt.sig_live(*args, now=datetime(2026, 11, 2, 16, 20, tzinfo=timezone.utc),
+                                    since="2026-11-02T16:19:00Z"))
+
+    def test_the_borrowed_name_lapses_on_its_own_moment(self):
+        args = ("the notebook argues back", "2026-12-02T16:19:00Z")
+        self.assertTrue(dt.sig_live(*args, now=datetime(2026, 12, 2, 16, 18, tzinfo=timezone.utc),
+                                    since="2026-11-02T16:19:00Z"))
+        self.assertFalse(dt.sig_live(*args, now=datetime(2026, 12, 2, 16, 19, tzinfo=timezone.utc),
+                                     since="2026-11-02T16:19:00Z"))
+
+    def test_an_unreadable_since_does_not_sign(self):
+        self.assertFalse(dt.sig_live("x", "2026-12-02T16:19:00Z", since="some time in november"))
+
     def test_the_configured_term_matches_the_record(self):
-        self.assertTrue(dt.sig_live("i incomplete", dt.ACCOUNTS["akai"]["sig_until"],
-                                    now=datetime(2026, 10, 18, 14, 46, tzinfo=timezone.utc)))
-        self.assertFalse(dt.sig_live("i incomplete", dt.ACCOUNTS["akai"]["sig_until"],
-                                     now=datetime(2026, 10, 18, 14, 48, tzinfo=timezone.utc)))
+        # the row is the published promise, so it is held to both ends of it: the objection window
+        # closing on 2026-11-02T16:19Z and the thirty days that run from it
+        row = dt.ACCOUNTS["akai"]
+        name, since, until = row["sig"], row["sig_from"], row["sig_until"]
+        self.assertFalse(dt.sig_live(name, until, since=since,
+                                     now=datetime(2026, 11, 2, 16, 18, tzinfo=timezone.utc)))
+        self.assertTrue(dt.sig_live(name, until, since=since,
+                                    now=datetime(2026, 11, 2, 16, 20, tzinfo=timezone.utc)))
+        self.assertTrue(dt.sig_live(name, until, since=since,
+                                    now=datetime(2026, 12, 2, 16, 18, tzinfo=timezone.utc)))
+        self.assertFalse(dt.sig_live(name, until, since=since,
+                                     now=datetime(2026, 12, 2, 16, 20, tzinfo=timezone.utc)))
 
 
 class ProfileMerge(unittest.TestCase):

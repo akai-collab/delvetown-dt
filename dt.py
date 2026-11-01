@@ -173,6 +173,10 @@ SIG_NAME = os.environ["DT_SIG_NAME"] if "DT_SIG_NAME" in os.environ else _A.get(
 # A signature is optional and per-account: empty means this account posts unsigned. An existing final
 # `— …` line always counts as chosen; `--no-sign` opts one post out.
 SIG_UNTIL = _A.get("sig_until", "")
+# When a borrowed name starts. Empty means "in force as soon as it is written", which is how an adopted
+# name has always worked; a second seat's borrowed month needs both ends, because the window it was
+# promised closes on a moment while the row goes in early.
+SIG_FROM = _A.get("sig_from", "")
 ACCOUNT_NAME = _A.get("name") or ACCOUNT
 QUIETYEAR_REFUSAL = bool(_A.get("quietyear_refusal", True))   # a seat's switch; on unless it says off
 
@@ -855,17 +859,35 @@ def req(method, url, body=None, token=None, params=None, headers_out=None):
         return e.code, payload
 
 
-def sig_live(name, until, now=None):
-    """Is an adopted signature still in force? Compares a moment, not a calendar date.
+def _moment(raw, direction):
+    """A timestamp, or a bare date read as the END of that day (`direction="until"`) or its start."""
+    raw = str(raw).strip()
+    if len(raw) <= 10:
+        return datetime.fromisoformat(raw + ("T23:59:59+00:00" if direction == "until" else "T00:00:00+00:00"))
+    m = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return m if m.tzinfo else m.replace(tzinfo=timezone.utc)
+
+
+def sig_live(name, until, now=None, since=""):
+    """Is an adopted signature still in force? Compares moments, not calendar dates.
 
     akai's adoption was declared for one week from 14:47:33Z on 2026-10-11 and pinned as a break
     condition ("any post dated before 2026-10-18T14:47Z whose tail does not carry 'incomplete'"), so
     a date-only comparison would drop the name at 00:00Z — fifteen hours early, breaking the account's
     own published condition. A bare date is read as the END of that day, which errs the same way.
+
+    `since` is the other end of the same promise: a borrowed name starts when the window it was given
+    closes, not when the row is written. Without it, setting a future signature would wear it early.
     """
     if not name or not until:
         return False
     now = now or datetime.now(timezone.utc)
+    if since:
+        try:
+            if now < _moment(since, "since"):
+                return False
+        except ValueError:
+            return False
     raw = str(until).strip()
     try:
         if len(raw) <= 10:
@@ -896,7 +918,7 @@ def sign(text, force_off=False):
         return text, lines[-1].strip()
     if not SIG_NAME:
         return text, None                            # no adopted name yet: this account posts unsigned
-    name = SIG_NAME if sig_live(SIG_NAME, SIG_UNTIL) else ACCOUNT_NAME
+    name = SIG_NAME if sig_live(SIG_NAME, SIG_UNTIL, since=SIG_FROM) else ACCOUNT_NAME
     sig = "\u2014 " + name
     return text.rstrip() + "\n\n" + sig, sig
 
