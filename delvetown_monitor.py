@@ -142,6 +142,13 @@ WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # 
 # handle stops matching through a rename without saying so.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state(
     "quiet", "quiet.json" if ACCOUNT == "akai" else "quiet-%s.json" % ACCOUNT)
+# Threads whose notifications never wake this account: a root uri and everything under it. The account
+# list cannot say "this conversation is running and I do not want a wake for it" — the speakers are
+# strangers — and no tag has to be on the root for the thread to be recognisable, because every
+# notification already carries its root. Same shape as the quiet list, same per-tick reload; edited by
+# `dt.py quiet thread` (dt.py reads this file with its own copy of the reader).
+QUIET_THREADS_FILE = os.environ.get("DT_QUIET_THREADS_FILE") or _state(
+    "quiet_threads", "quiet-threads.json" if ACCOUNT == "akai" else "quiet-threads-%s.json" % ACCOUNT)
 # Thread pacing, in the notification layer only: a notification in a thread where this account has just
 # been answering one counterpart waits longer before it may wake the account, and the wait doubles with
 # each turn — PACE_PAIR_S after the first reply to that account there, twice that after the second, and
@@ -781,7 +788,7 @@ QUIET_LINE = "wake=none"
 
 
 def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_at=None, answered=None,
-                doubles=None):
+                doubles=None, threads=None):
     """Decide whether this tick wakes the model. Returns (output, new_state).
 
     The scheduler wakes the model when the output differs from the last tick's, so the decision is
@@ -895,6 +902,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
         return st["last"], st
 
     muted_names = quiet if quiet is not None else quiet_list()
+    muted_threads = threads if threads is not None else quiet_threads()
     replies = own_replies(now) if replies is None else replies
     actionable, reactions, muted = [], [], []
     for it in items:
@@ -903,7 +911,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
             continue
         if (it.get("reason") or "") in QUIET_REASONS:
             reactions.append(it)
-        elif is_muted(it, muted_names):
+        elif is_muted(it, muted_names) or in_quiet_thread(it, muted_threads):
             muted.append(it)
         else:
             actionable.append(it)
@@ -926,7 +934,8 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     # An account put on the quiet list while its item was already waiting is quiet from now on: the
     # list is read every tick so that a change applies at once, and that includes what is in the queue.
     for u, e in list(pending.items()):
-        if e["item"] is not None and is_muted(e["item"], muted_names):
+        if e["item"] is not None and (is_muted(e["item"], muted_names)
+                                      or in_quiet_thread(e["item"], muted_threads)):
             pending.pop(u)
             if u not in {it["uri"] for it in muted}:
                 muted.append(e["item"])
@@ -1030,6 +1039,28 @@ def quiet_list(path=None):
             if isinstance(v, str) and v.strip():
                 names.add(v.strip().lstrip("@").lower())
     return names
+
+
+def quiet_threads(path=None):
+    """Root uris whose threads never wake this account, lowercased. `{"threads": [{"root": ..., "note": ...}]}`
+    as `dt.py quiet thread` writes it; a bare list of uris is read too. Unreadable → empty, never an error."""
+    try:
+        with open(path or QUIET_THREADS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    if isinstance(data, dict):
+        data = data.get("threads")
+    out = set()
+    for e in data if isinstance(data, list) else []:
+        v = e.get("root") if isinstance(e, dict) else e
+        if isinstance(v, str) and v.strip():
+            out.add(v.strip().lower())
+    return out
+
+
+def in_quiet_thread(it, roots):
+    return bool(roots) and str(it.get("root") or "").strip().lower() in roots
 
 
 def is_muted(it, names):

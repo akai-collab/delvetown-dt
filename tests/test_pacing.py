@@ -296,3 +296,61 @@ class Client(Fixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuietThreads(unittest.TestCase):
+    """A whole conversation the seat does not want to wake for: the root, and everything under it.
+
+    The account list cannot express it — the speakers are strangers — and the root need carry no tag,
+    because every notification already says which thread it is in.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.dt = load(DT, "dt_quiet_threads")
+        self.m = load(MONITOR, "monitor_quiet_threads")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _write(self, payload, name="quiet-threads.json"):
+        p = os.path.join(self.tmp, name)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        return p
+
+    def test_both_readers_agree_on_the_written_shape(self):
+        p = self._write({"threads": [{"root": ROOT_URI, "note": "the club", "added": "2026-11-01T00:00:00Z"}]})
+        self.assertEqual(self.dt.quiet_threads(p)[0]["root"], ROOT_URI)
+        self.assertEqual(self.m.quiet_threads(p), {ROOT_URI.lower()})
+
+    def test_a_bare_list_of_roots_is_read_too(self):
+        p = self._write([ROOT_URI, OTHER_ROOT])
+        self.assertEqual(self.m.quiet_threads(p), {ROOT_URI.lower(), OTHER_ROOT.lower()})
+
+    def test_a_missing_file_is_empty_and_not_an_error(self):
+        self.assertEqual(self.m.quiet_threads(os.path.join(self.tmp, "absent.json")), set())
+
+    def test_a_reply_in_a_quiet_thread_does_not_wake(self):
+        threads = self.m.quiet_threads(self._write({"threads": [{"root": ROOT_URI}]}))
+        out, st = self.m.wake_output([item("r1")], {}, T0 + 10, quiet=set(), replies=[],
+                                     answered=set(), threads=threads)
+        self.assertEqual(out, self.m.QUIET_LINE)
+        self.assertEqual(st["pending"], {})
+
+    def test_a_reply_in_another_thread_still_wakes(self):
+        threads = self.m.quiet_threads(self._write({"threads": [{"root": OTHER_ROOT}]}))
+        # first tick only marks it seen; the batch is ripe once the settle window has passed
+        _, st = self.m.wake_output([item("r1")], {}, T0, quiet=set(), replies=[],
+                                   answered=set(), threads=threads)
+        out, _ = self.m.wake_output([item("r1")], st, T0 + self.m.SETTLE_S + 5, quiet=set(), replies=[],
+                                    answered=set(), threads=threads)
+        self.assertNotEqual(out, self.m.QUIET_LINE)
+
+    def test_quieting_a_thread_clears_what_was_already_waiting(self):
+        state = {"pending": {item("r1")["uri"]: {"t": T0, "item": item("r1")}}}
+        threads = self.m.quiet_threads(self._write({"threads": [{"root": ROOT_URI}]}))
+        out, st = self.m.wake_output([item("r1")], state, T0 + 60, quiet=set(), replies=[],
+                                     answered=set(), threads=threads)
+        self.assertEqual(out, self.m.QUIET_LINE)
+        self.assertNotIn(item("r1")["uri"], st["pending"])

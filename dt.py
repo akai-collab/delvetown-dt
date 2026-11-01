@@ -623,6 +623,13 @@ def _repo_of(uri):
     return parts[2] if len(parts) > 2 and str(uri).startswith("at://") else None
 
 
+# Threads whose notifications never wake this account: a root uri and everything under it. The account
+# list cannot express it (the speakers are strangers) and a tag need not be there at all. Read by the
+# monitor every tick, written only here, same shape as the quiet list.
+QUIET_THREADS_FILE = os.environ.get("DT_QUIET_THREADS_FILE") or _state_file(
+    "quiet_threads", "quiet-threads.json" if HANDLE.split(".")[0] == "akai"
+    else "quiet-threads-%s.json" % HANDLE.split(".")[0])
+
 QUIETYEAR_TAG = "#quietyear"
 
 
@@ -3330,6 +3337,44 @@ def quiet_entries(path=None):
     return out
 
 
+def quiet_threads(path=None):
+    """The quiet-thread entries as dicts with `root`/`note`/`added`. Unreadable → empty."""
+    try:
+        with open(path or QUIET_THREADS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict):
+        data = data.get("threads")
+    out = []
+    for e in data if isinstance(data, list) else []:
+        if isinstance(e, dict) and e.get("root"):
+            out.append(e)
+        elif isinstance(e, str) and e.strip():
+            out.append({"root": e.strip()})
+    return out
+
+
+def thread_root(uri):
+    """The root of the thread `uri` sits in: itself when it is a root, else its record's reply.root.
+
+    Accepts a post uri (handle or DID form). A reply's own record carries the root, so this is one read
+    rather than a walk; an unreadable record leaves the uri as its own root, which quiets one post
+    rather than the wrong thread.
+    """
+    parts = str(uri or "").split("/")
+    if len(parts) < 5:
+        return uri
+    repo, coll, rkey = parts[2], parts[3], parts[4]
+    status, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                    params=[("repo", repo), ("collection", coll), ("rkey", rkey)])
+    if status == 200 and isinstance(d, dict):
+        root = (((d.get("value") or {}).get("reply") or {}).get("root") or {}).get("uri")
+        if root:
+            return root
+    return uri
+
+
 def main():
     # `--help` used to fall through into whatever command came next: `dt.py post --help` posted the
     # string "--help" to the town (2026-10-16 06:47Z, rkey 3mxxy66lk552c) because a command's text
@@ -3866,6 +3911,40 @@ def main():
         # answered. The monitor stops waking for its notifications — the loop two bots fall into when each
         # one's reply is the other's wake. The monitor re-reads the file every tick, so it applies at once.
         sub = sys.argv[2] if len(sys.argv) > 2 else "list"
+        if sub in ("thread", "threads"):
+            # dt.py quiet thread [list] | add <uri|url> ["why"] | remove <uri|url>
+            # A whole conversation that must not wake this seat: the root and everything under it. The
+            # account list cannot say it (the speakers are strangers) and a thread need not carry a tag.
+            tsub = sys.argv[3] if len(sys.argv) > 3 else "list"
+            tentries = quiet_threads()
+            if tsub == "list":
+                print(json.dumps({"file": QUIET_THREADS_FILE, "count": len(tentries),
+                                  "threads": tentries}, indent=2))
+                return
+            if tsub not in ("add", "remove") or len(sys.argv) < 5:
+                _usage("quiet thread [list] | add <uri|url> [\"why\"] | remove <uri|url>")
+            target = sys.argv[4].strip()
+            root = thread_root(post_uri(target)) if "/" in target or "://" in target or target.startswith("3") else target
+            key = root.strip().lower()
+            kept = [e for e in tentries if str(e.get("root") or "").strip().lower() != key]
+            if tsub == "add":
+                if len(kept) == len(tentries):
+                    kept.append({"root": root,
+                                 "note": " ".join(a for a in sys.argv[5:] if not a.startswith("--")) or None,
+                                 "added": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")})
+            elif len(kept) == len(tentries):
+                print(json.dumps({"note": "%s was not on the quiet-thread list" % root,
+                                  "file": QUIET_THREADS_FILE}, indent=2))
+                return
+            os.makedirs(os.path.dirname(QUIET_THREADS_FILE) or ".", mode=0o700, exist_ok=True)
+            tmp = QUIET_THREADS_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"threads": kept}, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(tmp, QUIET_THREADS_FILE)
+            print(json.dumps({"file": QUIET_THREADS_FILE, "added" if tsub == "add" else "removed": root,
+                              "count": len(kept)}, indent=2))
+            return
         entries = quiet_entries()
         if sub == "list":
             print(json.dumps({"file": QUIET_FILE, "count": len(entries), "accounts": entries}, indent=2))
