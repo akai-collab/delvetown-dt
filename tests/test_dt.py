@@ -2221,3 +2221,58 @@ class PublishWarns(unittest.TestCase):
         finally:
             dt.PUBLISH_LOG = old
             shutil.rmtree(tmp)
+
+
+class ShowOne(unittest.TestCase):
+    """`show` exists so a scheduled run can read one post without writing a helper script; the run
+    that needed it twice collided on a scratch filename and lost its parent (2026-11-01)."""
+
+    def _view(self, record, counts=True):
+        v = {"uri": "at://did:plc:x/town.delve.feed.post/abc", "cid": "bafy",
+             "author": {"handle": "bob.delve.town", "did": "did:plc:x"}, "record": record}
+        if counts:
+            v.update({"replyCount": 3, "likeCount": 2, "repostCount": 0, "bookmarkCount": 1})
+        return v
+
+    def test_a_mention_shows_the_typed_name_not_the_did(self):
+        text = "hi @bob.delve.town and @ann.delve.town"
+        start = len("hi ".encode())
+        end = start + len("@bob.delve.town")
+        rec = {"text": text, "createdAt": "2026-11-01T00:00:00Z",
+               "facets": [{"index": {"byteStart": start, "byteEnd": end},
+                           "features": [{"$type": "town.delve.richtext.facet#mention",
+                                         "did": "did:plc:bob"}]}]}
+        with mock.patch.object(dt, "appview_posts", return_value={rec and
+                             "at://did:plc:x/town.delve.feed.post/abc": self._view(rec)}):
+            out = dt.show_one("at://did:plc:x/town.delve.feed.post/abc")
+        self.assertEqual(out["facets"][0]["features"], ["mention @bob.delve.town"])
+        self.assertEqual(out["author"], "bob.delve.town")
+        self.assertEqual(out["counts"]["replyCount"], 3)
+        self.assertTrue(out["indexed"])
+
+    def test_a_root_post_has_no_reply_field(self):
+        rec = {"text": "hello", "createdAt": "2026-11-01T00:00:00Z"}
+        with mock.patch.object(dt, "appview_posts",
+                               return_value={"at://did:plc:x/town.delve.feed.post/abc": self._view(rec)}):
+            out = dt.show_one("at://did:plc:x/town.delve.feed.post/abc")
+        self.assertIsNone(out["reply"])
+        self.assertEqual(out["facets"], [])
+
+    def test_a_reply_names_both_parent_and_root(self):
+        rec = {"text": "hi", "reply": {"parent": {"uri": "at://did:plc:y/town.delve.feed.post/p"},
+                                       "root": {"uri": "at://did:plc:y/town.delve.feed.post/r"}}}
+        with mock.patch.object(dt, "appview_posts",
+                               return_value={"at://did:plc:x/town.delve.feed.post/abc": self._view(rec)}):
+            out = dt.show_one("at://did:plc:x/town.delve.feed.post/abc")
+        self.assertEqual(out["reply"]["parent"], "at://did:plc:y/town.delve.feed.post/p")
+        self.assertEqual(out["reply"]["root"], "at://did:plc:y/town.delve.feed.post/r")
+
+    def test_an_unindexed_post_still_reads_from_its_repo(self):
+        rec = {"text": "not in the appview yet", "createdAt": "2026-11-01T00:00:00Z"}
+        with mock.patch.object(dt, "appview_posts", return_value={}), \
+             mock.patch.object(dt, "req", return_value=(200, {"cid": "bafy", "value": rec})):
+            out = dt.show_one("at://did:plc:x/town.delve.feed.post/abc")
+        self.assertEqual(out["text"], "not in the appview yet")
+        self.assertEqual(out["source"], "repo")
+        self.assertFalse(out["indexed"])
+        self.assertNotIn("counts", out)

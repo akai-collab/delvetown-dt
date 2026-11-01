@@ -2875,6 +2875,87 @@ def appview_posts(uris, get=None):
     return out
 
 
+def shorten_facets(facets, text=None):
+    """The facets of a record as named features: what was tagged, and where in the text.
+
+    A raw facet is a byte range plus a `$type` string; the interesting part before answering someone
+    is *who* was mentioned and *which* link carries the claim, and neither is readable at a glance in
+    the stored shape. A mention's own feature carries the DID and not the handle, so the typed name is
+    read back out of the text at the facet's byte range — the thing a reader recognises.
+    """
+    out = []
+    for f in facets or []:
+        feats = []
+        for ft in (f.get("features") or []):
+            kind = ((ft.get("$type") or "").split("#")[-1] or "").rsplit(".", 1)[-1]
+            if kind == "mention":
+                typed = ""
+                idx = f.get("index") or {}
+                if text and isinstance(idx.get("byteStart"), int) and isinstance(idx.get("byteEnd"), int):
+                    typed = text.encode("utf-8")[idx["byteStart"]:idx["byteEnd"]].decode("utf-8", "replace").strip()
+                feats.append("mention " + (typed or ft.get("handle") or ft.get("did") or "?"))
+            elif kind == "link":
+                feats.append("link " + (ft.get("uri") or "?"))
+            elif kind == "tag":
+                feats.append("tag " + (ft.get("tag") or "?"))
+            else:
+                feats.append(kind or "?")
+        out.append({"index": f.get("index"), "features": feats})
+    return out
+
+
+def show_one(uri):
+    """One post in the shape a wake needs before it composes: who, when, the text, what it answers,
+    and its facets named. The appview is asked first (it carries the counts and the author view);
+    the post's own repo is the fallback, so a post the town has not indexed still reads.
+
+    `thread` renders a conversation and `raw` prints a record as stored — between them there was no
+    way to read a single post without parsing JSON by hand, so a scheduled run wrote a helper script
+    into the scratch dir to do it, and two runs collided on the same filename (2026-11-01), which the
+    write guard refused, leaving the run composing without its parent.
+    """
+    out = {"status": 0, "uri": uri}
+    view = None
+    try:
+        view = appview_posts([uri]).get(uri)
+    except (RuntimeError, OSError, ValueError):
+        view = None
+    rec = (view or {}).get("record")
+    cid = (view or {}).get("cid")
+    source = "appview"
+    if not rec:
+        parts = uri.split("/")
+        if len(parts) >= 5:
+            status, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                            params=[("repo", parts[2]), ("collection", parts[3]), ("rkey", parts[4])])
+            if status != 200 or not isinstance(d, dict):
+                out["error"] = (d or {}).get("error") if isinstance(d, dict) else None
+                out["message"] = "the town does not hold it and its repo answered %s" % status
+                return out
+            rec = d.get("value") or {}
+            cid = d.get("cid")
+            source = "repo"
+    author = (view or {}).get("author") or {}
+    out.update({
+        "status": 200,
+        "cid": cid,
+        "author": author.get("handle"),
+        "did": author.get("did"),
+        "createdAt": rec.get("createdAt"),
+        "langs": rec.get("langs"),
+        "text": rec.get("text"),
+        "reply": {k: ((rec.get("reply") or {}).get(k) or {}).get("uri")
+                  for k in ("parent", "root")} if rec.get("reply") else None,
+        "facets": shorten_facets(rec.get("facets"), rec.get("text")),
+        "indexed": bool(view),
+        "source": source,
+    })
+    if view:
+        out["counts"] = {k: view.get(k) for k in
+                         ("replyCount", "likeCount", "repostCount", "bookmarkCount")}
+    return out
+
+
 def appview_verify(uri, text=None, parent=None, root=None, get=None):
     """(indexed, mismatch) for a record this account just wrote.
 
@@ -3169,6 +3250,7 @@ USAGE = {
     "quote": 'quote <uri|url|rkey> "<text>"                         (a post carrying another post as its attachment)', 
     "cid": 'cid <at-uri>                                       (the cid that uri\'s own repo holds)',
     "images": 'images <uri|rkey|url> [--out DIR] [--no-fetch]      (each image, its alt text, saved to a file or why not)',
+    "show": 'show <uri|rkey|url>                                (one post: author, text, what it answers, its facets named)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
@@ -3526,6 +3608,14 @@ def main():
         if mism:
             out["mismatch"] = mism     # e.g. the town placed it under another parent: read the thread
         print(json.dumps(out, indent=2))
+
+    elif cmd == "show":
+        # dt.py show <uri|rkey|url> — one post, no parsing by hand: the shape a wake needs before it
+        # composes (see show_one).
+        arg = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
+        if not arg:
+            _usage(USAGE["show"])
+        print(json.dumps(show_one(post_uri(arg)), indent=2))
 
     elif cmd == "delete":
         rkey = sys.argv[2]
