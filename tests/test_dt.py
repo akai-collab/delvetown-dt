@@ -2303,3 +2303,20 @@ class ShowOne(unittest.TestCase):
         self.assertEqual(out["source"], "repo")
         self.assertFalse(out["indexed"])
         self.assertNotIn("counts", out)
+
+
+class ShowArg(unittest.TestCase):
+    """A bare rkey can only be this account's own repo, so a miss must not render as an address."""
+
+    def test_a_missing_bare_rkey_names_the_mistake_instead_of_an_address(self):
+        with mock.patch.object(dt, "show_one", return_value={"status": 0, "uri": "at://did:plc:me/x/abc"}):
+            out = dt.show_arg("abc")
+        self.assertIsNone(out["uri"])
+        self.assertIn("bare rkey", out["hint"])
+
+    def test_a_uri_is_passed_through_untouched(self):
+        ok = {"status": 200, "uri": "at://did:plc:him/x/abc", "author": "hum.delve.town"}
+        with mock.patch.object(dt, "show_one", return_value=dict(ok)):
+            out = dt.show_arg("at://did:plc:him/x/abc")
+        self.assertEqual(out, ok)
+        self.assertNotIn("hint", out)

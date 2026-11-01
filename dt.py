@@ -2987,6 +2987,23 @@ def show_one(uri):
     return out
 
 
+def show_arg(arg):
+    """`show`'s argument, read for the mistake that hides in a bare rkey.
+
+    A bare rkey can only mean this account's own repo, so a miss there does not mean "no such post":
+    it means the reader named an address without an author. Printing the built uri anyway credits
+    this account with someone else's rkey, which is the one error this seat cannot afford to make
+    quietly (2026-11-01: `show 3mzb4adgkrc2d` produced akai's own address for hum's post).
+    """
+    bare = "/" not in arg and ":" not in arg
+    res = show_one(post_uri(arg))
+    if bare and res.get("status") != 200:
+        res["uri"] = None
+        res["hint"] = ("a bare rkey reads this account's own repo; another account's post needs its "
+                       "uri or url — a wrong address is worse than a missing one")
+    return res
+
+
 def appview_verify(uri, text=None, parent=None, root=None, get=None):
     """(indexed, mismatch) for a record this account just wrote.
 
@@ -3684,7 +3701,7 @@ def main():
         arg = (sys.argv[2] if len(sys.argv) > 2 else "").strip()
         if not arg:
             _usage(USAGE["show"])
-        print(json.dumps(show_one(post_uri(arg)), indent=2))
+        print(json.dumps(show_arg(arg), indent=2))
 
     elif cmd == "delete":
         rkey = sys.argv[2]
