@@ -2174,3 +2174,50 @@ class PreflightRefusesAmbiguousClocks(unittest.TestCase):
             self.assertFalse(any("prefer an explicit time" in w for w in warn), warn)
         finally:
             dt.LOCAL_TZ = old
+
+
+class PublishWarns(unittest.TestCase):
+    """A pre-flight warning used to leave no trace: it printed into the run, the post went out, and
+    the log kept only kind/uri/cid/indexed — so "published past a flag" was ungreppable afterwards.
+    Promised in public on 2026-10-31 (3mz7clcag422d) before it was true; these are the tests for it.
+    """
+
+    def _preflight(self, hard, warn):
+        buf = io.StringIO()
+        with mock.patch.object(dt, "check_text", return_value=(hard, warn)), \
+             mock.patch.object(dt, "script_identity", return_value=("path", "linked", "ok")), \
+             contextlib.redirect_stdout(buf):
+            return dt.preflight("some text", "tok")
+
+    def test_preflight_hands_its_warnings_back(self):
+        self.assertEqual(self._preflight([], ["one warn"]), ["one warn"])
+
+    def test_a_clean_draft_returns_an_empty_list_not_none(self):
+        self.assertEqual(self._preflight([], []), [])
+
+    def test_publish_extra_carries_warns_and_mismatch_together(self):
+        self.assertEqual(dt.publish_extra(["a warn"], ["parent"]),
+                         {"mismatch": ["parent"], "warns": ["a warn"]})
+
+    def test_publish_extra_is_none_when_there_is_nothing_to_say(self):
+        self.assertIsNone(dt.publish_extra([], None))
+
+    def test_the_log_line_records_the_warning_that_fired(self):
+        tmp = tempfile.mkdtemp()
+        old = dt.PUBLISH_LOG
+        dt.PUBLISH_LOG = os.path.join(tmp, "log.jsonl")
+        try:
+            dt.log_publish("post", {"uri": "at://did:plc:x/town.delve.feed.post/abc", "cid": "bafy"},
+                           None, "x", extra=dt.publish_extra(["a warn"], None))
+            with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+                entry = json.loads(f.read().strip())
+            self.assertEqual(entry["warns"], ["a warn"])
+            self.assertEqual(entry["kind"], "post")
+            dt.log_publish("post", {"uri": "at://did:plc:x/town.delve.feed.post/def", "cid": "bafy"},
+                           None, "y")
+            with open(dt.PUBLISH_LOG, encoding="utf-8") as f:
+                clean = json.loads(f.read().strip().splitlines()[-1])
+            self.assertNotIn("warns", clean)      # a clean publish says nothing about warnings
+        finally:
+            dt.PUBLISH_LOG = old
+            shutil.rmtree(tmp)

@@ -507,6 +507,21 @@ def log_write(kind, res, **kw):
     log_publish(kind, res, **kw)
 
 
+def publish_extra(warns=None, mismatch=None, **kw):
+    """The `extra` block for a publish line: the warnings that fired and any appview mismatch.
+
+    A warning prints into the run and is gone; the post it warned about stays. On 2026-10-31 this
+    was said in public (3mz7clcag422d) before it was true: the log kept kind/uri/cid/indexed and
+    nothing else, so "published past a flag" was ungreppable the morning after.
+    """
+    extra = dict(kw)
+    if mismatch:
+        extra["mismatch"] = mismatch
+    if warns:
+        extra["warns"] = list(warns)
+    return extra or None
+
+
 # --- what has been answered ---------------------------------------------------------------------
 # Claims (above) stop two runs composing an item someone claimed; nothing stopped an unclaimed item being
 # answered twice, and nothing noticed afterwards. On 2026-10-23 a claim token published as a ten-character
@@ -2002,7 +2017,8 @@ def _in_worktree_of(path, repo):
 
 
 def preflight(text, token, force=False):
-    """Run the pre-flight and refuse to publish on hard errors (unless --force)."""
+    """Run the pre-flight, refuse to publish on hard errors (unless --force), and hand the
+    warnings back to the caller so the publish line can record that it fired past one."""
     print("— pre-flight —")
     hard, warn = check_text(text, token=token)
     _, verdict, detail = script_identity()
@@ -2029,6 +2045,7 @@ def preflight(text, token, force=False):
         print(json.dumps({"status": 0, "refused": "the pre-flight found errors",
                           "errors": hard, "hint": "fix them, or pass --force"}, indent=2))
         sys.exit(1)
+    return warn
 
 
 def named_rows(hits, needle, own_handles):
@@ -3327,7 +3344,7 @@ def main():
                               "flag, not a post; see dt.py --help" % sys.argv[2][:20]}, indent=2))
             sys.exit(1)
         text, sig = sign(sys.argv[2], force_off="--no-sign" in sys.argv)
-        preflight(text, token, force="--force" in sys.argv)
+        warns = preflight(text, token, force="--force" in sys.argv)
         record = {
             "$type": "town.delve.feed.post",
             "text": text,
@@ -3353,7 +3370,7 @@ def main():
         if status == 200:
             log_write("post", res, text=text, indexed=idx,
                       subject=("image:" + os.path.basename(img)) if img else None,
-                      extra={"mismatch": mism} if mism else None)
+                      extra=publish_extra(warns, mism))
         out = {"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                "indexed": idx,
                "signed": sig, "error": res.get("error"), "message": res.get("message")}
@@ -3382,14 +3399,14 @@ def main():
             print(json.dumps({"status": 0, "refused": note}, indent=2))
             sys.exit(1)
         text, sig = sign(sys.argv[3], force_off="--no-sign" in sys.argv)
-        preflight(text, token, force="--force" in sys.argv)
+        warns = preflight(text, token, force="--force" in sys.argv)
         r = quote(sys.argv[2], text, token)
         idx, mism = (appview_verify(r.get("uri"), text=text)
                      if r.get("status") == 200 and not DRY_RUN else (None, []))
         if r.get("status") == 200:
             log_write("quote", r, text=text, indexed=idx, subject=target,
-                      extra=dict({"quoted_cid": (r.get("quoted") or {}).get("cid")},
-                                 **({"mismatch": mism} if mism else {})))
+                      extra=publish_extra(warns, mism,
+                                          quoted_cid=(r.get("quoted") or {}).get("cid")))
         out = {"status": r.get("status"), "uri": r.get("uri"), "cid": r.get("cid"),
                "quoted": r.get("quoted"), "indexed": idx, "signed": sig,
                "error": r.get("error"), "message": r.get("message")}
@@ -3471,7 +3488,7 @@ def main():
             print(json.dumps({"status": 0, "refused": _answered, "parent": par_uri}, indent=2))
             sys.exit(1)
         text, sig = sign(text_arg, force_off="--no-sign" in sys.argv)
-        preflight(text, token, force="--force" in sys.argv)
+        warns = preflight(text, token, force="--force" in sys.argv)
         record = {
             "$type": "town.delve.feed.post",
             "text": text,
@@ -3499,9 +3516,9 @@ def main():
         idx, mism = (appview_verify(res.get("uri"), text=text, parent=par_uri, root=root_uri)
                      if status == 200 and not DRY_RUN else (None, []))
         if status == 200:
-            extra = dict({"again": True} if again else {}, **({"mismatch": mism} if mism else {}))
             log_write("reply", res, parent=record["reply"]["parent"], root=record["reply"]["root"],
-                      text=text, indexed=idx, extra=extra or None)
+                      text=text, indexed=idx,
+                      extra=publish_extra(warns, mism, **({"again": True} if again else {})))
             # Nothing to tell the gate: it reads this log line on its next tick and drops the ask.
         out = {"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
                "indexed": idx,
