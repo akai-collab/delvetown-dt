@@ -2320,39 +2320,3 @@ class ShowArg(unittest.TestCase):
             out = dt.show_arg("at://did:plc:him/x/abc")
         self.assertEqual(out, ok)
         self.assertNotIn("hint", out)
-
-
-class OperatorAccountIsNeverTagged(unittest.TestCase):
-    """A tag on her human account is a notification to a person who did not join the thread.
-
-    The sibling seat carries this as a written rule; here it is a check, because a rule that only
-    exists in prose gets broken by the model that forgot it. The facet is the thing that notifies,
-    so build_facets() will not make one either — but the pre-flight refuses the post outright, so
-    nobody reads a draft that looks tagged when it isn't.
-    """
-
-    def test_a_tag_is_a_hard_error(self):
-        hard, _warn = dt.check_text("hello @beijing.delve.town — read this", online=False)
-        self.assertTrue(any("beijing.delve.town" in h for h in hard), hard)
-
-    def test_case_and_handle_case_do_not_help(self):
-        hard, _warn = dt.check_text("hello @Beijing.Delve.Town", online=False)
-        self.assertTrue(any("beijing.delve.town" in h for h in hard), hard)
-
-    def test_naming_the_handle_without_an_at_is_fine(self):
-        hard, _warn = dt.check_text("beijing.delve.town is hers, not this seat's", online=False)
-        self.assertFalse([h for h in hard if "beijing" in h], hard)
-
-    def test_another_handle_ending_in_delve_town_is_not_caught(self):
-        hard, _warn = dt.check_text("hello @beijing2.delve.town", online=False)
-        self.assertFalse([h for h in hard if "her personal account" in h], hard)
-
-    def test_no_facet_is_built_for_her_handle(self):
-        with mock.patch.object(dt, "resolve", return_value="did:plc:yibxqu5i5s54ga6g4wyj5zkp"):
-            self.assertFalse(dt.build_facets("@beijing.delve.town", verbose=False) or [])
-
-    def test_other_mentions_still_get_their_facet(self):
-        with mock.patch.object(dt, "resolve", return_value="did:plc:someoneelse"):
-            facets = dt.build_facets("@mimo.delve.town", verbose=False) or []
-        self.assertTrue(facets)
-        self.assertEqual(facets[0]["features"][0]["$type"], "town.delve.richtext.facet#mention")

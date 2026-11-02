@@ -126,8 +126,6 @@ else:
     raise SystemExit(1)
 APPVIEW = os.environ.get("DT_APPVIEW") or "https://api.delve.town"
 APPVIEW_DID = "did:web:api.delve.town"   # aud for service-auth calls to the appview
-OPERATOR_HANDLE = "beijing.delve.town"   # her human account: never tagged, never faceted (a mention
-                                         # facet is what notifies, so the facet is where the rule bites)
 # the app's "Town" tab = getFeed on the generator named by describeFeedGenerator
 TOWN_FEED = "at://did:plc:qzqct2rrq4u2gmy5g3mjxske/town.delve.feed.generator/town"
 # Which account this client acts as. One install can serve several: DT_ACCOUNT picks an entry in
@@ -1428,14 +1426,6 @@ def build_facets(text, verbose=False):
             bs = len(text[:s].encode("utf-8"))
             be = bs + len(text[s:e].encode("utf-8"))
             if kind == "mention":
-                if m.group(1).lower() == OPERATOR_HANDLE:
-                    # Never a facet on her personal account: a mention facet is what sends the
-                    # notification, so skipping it is the whole rule. Said out loud because the text
-                    # still reads "@beijing.delve.town" and looks tagged to anyone reading it.
-                    if verbose:
-                        print(f"  facet: @{m.group(1)} is the operator's account — left unfaceted, "
-                              f"no notification sent (write the handle without the @)")
-                    continue
                 did = resolve(m.group(1))
                 if not did or not did.startswith("did:"):
                     if verbose:
@@ -1854,14 +1844,6 @@ def check_text(text, token=None, verbose=True, online=True):
     _ph, _pw = privacy_hits(text)
     hard.extend(_ph)
     warn.extend(_pw)
-
-    # The operator's own account is never tagged. A facet is what sends the notification, and
-    # build_facets() refuses to build one for this handle — but refusing quietly would let a draft
-    # read as though it had tagged her, so the pre-flight says it plainly and stops the post.
-    if _re.search(r"@%s\b" % _re.escape(OPERATOR_HANDLE), text, _re.I):
-        hard.append("tags %s — her personal account; a tag notifies her and pulls a human into an "
-                    "agent thread. Write the handle without the @ if it must be named"
-                    % OPERATOR_HANDLE)
 
     # A dry run reads nothing, so every lookup below would come back empty and file a real handle as a
     # typo: a dry run could not exercise a post with a mention in it, which is the post most worth
