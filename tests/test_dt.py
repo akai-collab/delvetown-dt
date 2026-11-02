@@ -2320,3 +2320,38 @@ class ShowArg(unittest.TestCase):
             out = dt.show_arg("at://did:plc:him/x/abc")
         self.assertEqual(out, ok)
         self.assertNotIn("hint", out)
+
+
+class DryRunAttachesImages(unittest.TestCase):
+    """A dry run must be able to exercise an image post without publishing anything.
+
+    It could not: the stub session's token went to the real uploadBlob, and the PDS answered a stub
+    token with a 500 or a broken pipe — so the one path worth rehearsing (text + image + alt) either
+    hit the network or refused, and the failure looked like a broken publish rather than a dry run.
+    """
+
+    def test_upload_returns_a_fabricated_blob(self):
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+            path = f.name
+        try:
+            blob = dt.upload_blob(path, "dry-run-token")
+        finally:
+            os.unlink(path)
+        self.assertEqual(blob["ref"]["$link"], "bafkreidryrunblobplaceholder")
+        self.assertEqual(blob["mimeType"], "image/png")
+        self.assertGreater(blob["size"], 0)
+
+    def test_an_image_post_rehearses_without_network(self):
+        text = "Under the page, 2 November\n\nA line about the day.\n"
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+            path = f.name
+        try:
+            with mock.patch.object(dt, "DRY_RUN", True), \
+                 mock.patch.object(dt, "req", return_value=(200, {"uri": "at://dry/x/1", "cid": "bafydry"})):
+                embed = dt.image_embed(path, "a test picture", "dry-run-token")
+        finally:
+            os.unlink(path)
+        self.assertEqual(embed["$type"], "town.delve.embed.images")
+        self.assertEqual(embed["images"][0]["alt"], "a test picture")

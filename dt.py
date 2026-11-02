@@ -981,10 +981,20 @@ def opt_arg(flag, default=None):
 
 
 def upload_blob(path, token):
-    """Upload an image as an atproto blob (avatar/banner)."""
+    """Upload an image as an atproto blob (avatar/banner).
+
+    A dry run has a stub token, and the PDS answers a stub token on uploadBlob with a 500 or a broken
+    pipe — so before this, an image post could not be exercised without publishing. The dry run now
+    fabricates the blob and sends nothing, which is what "no network" was supposed to mean.
+    """
     import os
     with open(path, "rb") as f:
         data = f.read()
+    if DRY_RUN:
+        return {"$type": "blob", "ref": {"$link": "bafkreidryrunblobplaceholder"},
+                "mimeType": {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}.get(
+                    os.path.splitext(path)[1].lower(), "application/octet-stream"),
+                "size": len(data)}
     ext = os.path.splitext(path)[1].lower().lstrip(".")
     ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}.get(ext, "application/octet-stream")
     r = urllib.request.Request(PDS + "/xrpc/com.atproto.repo.uploadBlob", data=data,
