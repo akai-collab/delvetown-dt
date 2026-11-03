@@ -1300,8 +1300,9 @@ def graph_records(colls, repo=None, limit=None, fetch=None):
 def graph_write_collection(colls, fetch=None):
     """The namespace a write goes to: the first one this repo already holds a record in, so a
     migrated repo keeps writing app.bsky and an un-migrated one keeps writing town.delve. A repo
-    holding neither writes town.delve — the lexicon this client has always written, and the one
-    every un-migrated seat still reads."""
+    holding neither writes the first (preferred) collection, app.bsky: since 2026-11-03 the PDS
+    answers a town.delve.graph.follow write with 400 for a repo holding no record in that
+    collection, so the old fallback made a first follow impossible for every new account."""
     fetch = fetch or (lambda c: _list_records(c, limit=1))
     for coll in colls:
         try:
@@ -1309,7 +1310,7 @@ def graph_write_collection(colls, fetch=None):
                 return coll
         except Exception:
             continue
-    return colls[-1]
+    return colls[0]
 
 
 def uri_collection(uri):

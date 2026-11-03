@@ -84,9 +84,11 @@ class WritesMatchTheRepo(unittest.TestCase):
         table = {NEW_FOLLOW: [], OLD_FOLLOW: [rec(OLD_FOLLOW, "r1", CROW)]}
         self.assertEqual(dt.graph_write_collection(dt.FOLLOW_COLLS, fetch=lister(table)), OLD_FOLLOW)
 
-    def test_a_repo_with_neither_writes_the_town_lexicon(self):
-        self.assertEqual(dt.graph_write_collection(dt.FOLLOW_COLLS, fetch=lister({})), OLD_FOLLOW)
-        self.assertEqual(dt.graph_write_collection(dt.BLOCK_COLLS, fetch=lister({})), OLD_BLOCK)
+    def test_a_repo_with_neither_writes_the_new_namespace(self):
+        # 2026-11-03: the PDS answers a town.delve.graph.follow write with 400 for a repo that holds no
+        # record in that collection, so a first follow written to the old fallback could never land.
+        self.assertEqual(dt.graph_write_collection(dt.FOLLOW_COLLS, fetch=lister({})), NEW_FOLLOW)
+        self.assertEqual(dt.graph_write_collection(dt.BLOCK_COLLS, fetch=lister({})), NEW_BLOCK)
 
     def test_a_failing_probe_does_not_change_the_target(self):
         table = {NEW_FOLLOW: RuntimeError("down"), OLD_FOLLOW: [rec(OLD_FOLLOW, "r1", CROW)]}

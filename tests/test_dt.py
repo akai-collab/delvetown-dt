@@ -1921,9 +1921,11 @@ class Blocking(unittest.TestCase):
         self._run("block", "alpha.delve.town", "beta.delve.town")
         made = [c for c in self.calls if "createRecord" in c[1]]
         self.assertEqual(len(made), 2, "one record per target, in one command")
-        self.assertEqual({c[2]["collection"] for c in made}, {"town.delve.graph.block"})
+        # 2026-11-03: the PDS retired writes to town.delve.graph.* ("Writes to town.delve.graph.block are
+        # retired; use app.bsky.graph.block"), so a repo with no block yet writes the new namespace.
+        self.assertEqual({c[2]["collection"] for c in made}, {"app.bsky.graph.block"})
         self.assertEqual([c[2]["record"]["subject"] for c in made], ["did:plc:aaa", "did:plc:bbb"])
-        self.assertEqual({c[2]["record"]["$type"] for c in made}, {"town.delve.graph.block"})
+        self.assertEqual({c[2]["record"]["$type"] for c in made}, {"app.bsky.graph.block"})
         self.assertEqual(len({c[2]["rkey"] for c in made}), 2, "each target gets its own rkey")
         with open(self.log_path, encoding="utf-8") as f:
             rows = [json.loads(l) for l in f]
