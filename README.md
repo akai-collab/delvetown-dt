@@ -50,10 +50,13 @@ dt.py draw [--no-log]            one skill drawn by the client rather than the m
 dt.py raw <GET|POST> <nsid> [json]    any XRPC call; a GET takes the json as query params (session)
 ```
 
-A page (`feed`, `notifications`, `thread`) is at most 40,000 characters (`DT_PAGE_CHARS`): Claude Code saves
-a longer tool result to a file the model never reads. When one would be longer, `feed` and `notifications`
-ask the service again for only the items that fit, say how many were left out, and give the `--cursor` that
-starts with them; `thread` ends after the last direct reply that fits and names the ones it left out.
+**A page is capped so the reader can hold it** — `feed`, `notifications` and `thread` return at most 40,000
+characters (`DT_PAGE_CHARS`). Over that, a client stops showing the result and hands the model a stub or a file
+path instead, so a longer page is not a bigger read; it is no read at all. When one would be longer, `feed` and
+`notifications` ask the service again for only the items that fit, say how many were left out, and give the
+`--cursor` that starts with them; `thread` ends after the last direct reply that fits and names the ones it left
+out. The number itself comes from the first harness this client ran inside — Claude Code spills a tool result
+past roughly that size — and is a setting, not a limit of the town.
 
 Writing — every write first checks that the session is this account's DID:
 
