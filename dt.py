@@ -3629,7 +3629,15 @@ def main():
         if blocked:
             print(json.dumps({"status": 0, "refused": blocked}, indent=2))
             sys.exit(1)
-        four = len(sys.argv) > 5 and sys.argv[4].startswith("at://")
+        _root_given = len(sys.argv) > 4 and sys.argv[4].startswith("at://")
+        if _root_given and not (len(sys.argv) > 5 and cid_shaped(sys.argv[5])):
+            print(json.dumps({"status": 0, "refused":
+                              "a root uri was given without its root cid: pass <parent-uri> <parent-cid> "
+                              "<root-uri> <root-cid> \"<text>\", or leave both root arguments out and let "
+                              "the chain supply the root. Without this check the text slid into the root's "
+                              "slot and the next argument was read as the words. Nothing was written."}, indent=2))
+            sys.exit(1)
+        four = _root_given
         text_arg = sys.argv[6] if four else sys.argv[4]
         canon = canonical_ref(par_uri)
         if canon != par_uri:
