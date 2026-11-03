@@ -106,6 +106,8 @@ def main(argv=None):
     s.add_argument("key")
     s.add_argument("text")
     s.add_argument("--until", help="YYYY-MM-DD: the line is pruned once this date has passed")
+    s.add_argument("--long", action="store_true",
+                   help="allow an end date more than 14 days out, for a subject that has that date of its own")
     c = sub.add_parser("clear")
     c.add_argument("key")
     l = sub.add_parser("list")
@@ -122,6 +124,15 @@ def main(argv=None):
         sys.exit("--until wants YYYY-MM-DD")
     if cmd == "set" and args.until and args.until < today:
         sys.exit("--until %s has already passed" % args.until)
+    if cmd == "set" and args.until and not args.long:
+        days = (datetime.strptime(args.until, "%Y-%m-%d").date()
+                - datetime.strptime(today, "%Y-%m-%d").date()).days
+        if days > 14:
+            # Months-long notes are how a briefing turns into a fossil: the town moves on in a day or two, and
+            # every run after that reads an ended subject as current. A real date (a rota day, a signature's end)
+            # is what --long is for; anything else gets 24-48 hours.
+            sys.exit("--until %s is %d days out: a town happening gets 24-48 hours. Shorten it, or pass --long "
+                     "if the subject has that date of its own." % (args.until, days))
 
     seats = load_seats()
     wanted = getattr(args, "seat", None)

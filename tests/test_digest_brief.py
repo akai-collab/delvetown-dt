@@ -166,6 +166,16 @@ class Brief(Homes):
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.notes(self.akai), {})
 
+    def test_a_month_long_end_date_is_refused_unless_the_subject_has_that_date(self):
+        far = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
+        r = self.brief("set", "month", "a happening", "--seat", "akai", "--until", far)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("24-48 hours", r.stderr)
+        self.assertEqual(self.notes(self.akai), {}, "a refused set must leave the store untouched")
+        ok = self.brief("set", "rota", "day seven", "--seat", "akai", "--until", far, "--long")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(self.notes(self.akai)[("gate1", "rota")], "day seven [until %s]" % far)
+
     def test_clear_removes_it_everywhere(self):
         self.brief("set", "tangled", "x", "--all-seats")
         self.brief("clear", "tangled", "--all-seats")
