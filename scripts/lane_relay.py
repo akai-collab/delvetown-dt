@@ -39,6 +39,29 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BOARD = os.environ.get("DT_LANE_BOARD") or "lanes"
 ERROR_EVERY_S = 3600
 MAX_ITEMS = 30          # in one wake; the rest go in the next
+JOURNAL = os.path.join(STATE, "journal.txt")
+JOURNAL_LINES = 12
+JOURNAL_CHARS = 1400
+
+
+def journal_tail():
+    """The seat's own last lines, carried into a lane wake.
+
+    The clock wake and the gate are shown this by seat.json's `script`, which runs before their prompt.
+    A lane wake is filed as a kanban task instead, so its body is the only thing the session sees — and
+    the Quiet Year lane is the one context that outlives its session and cannot ask the other runs what
+    happened. Without this the lane that needs continuity most starts every burst cold.
+    """
+    try:
+        with open(JOURNAL, encoding="utf-8") as f:
+            rows = [l.rstrip("\n") for l in f if l.strip()]
+    except OSError:
+        return ""
+    text = "\n".join(rows[-JOURNAL_LINES:])
+    if len(text) > JOURNAL_CHARS:
+        text = text[-JOURNAL_CHARS:]
+        text = text[text.find("\n") + 1:] if "\n" in text else text
+    return text
 
 
 def load_seats():
@@ -113,7 +136,15 @@ def wake_text(lane, items):
             "the town (dt.py reply … --in-quietyear) where an answer is owed. Nothing here needs the operator."
             % (lane, len(items), when(min(float(it.get("seen_at") or 0) for it in items)), threads,
                "" if threads == 1 else "s"))
-    return head + "\n\n" + "\n".join(item_line(it) for it in items)
+    return head + "\n\n" + body_of(items)
+
+
+def body_of(items):
+    j = journal_tail()
+    if not j:
+        return "\n".join(item_line(it) for it in items)
+    return ("Your journal, the last lines — written by past runs, private, never quote it in the town:\n%s\n\n"
+            "The new items:\n%s" % (j, "\n".join(item_line(it) for it in items)))
 
 
 def due(items, conf, now, last_wake=0):

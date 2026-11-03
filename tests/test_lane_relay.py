@@ -215,6 +215,48 @@ class TheRelayWakesTheSession(Lane):
         self.assertEqual([c[3] for c in self.called()][-3:], ["create", "notify-subscribe", "complete"])
 
 
+class TheLaneWakeCarriesTheJournal(Lane):
+    """The Quiet Year session outlives its context and cannot ask the other runs what happened.
+
+    Its wake is a kanban task, not a prompt with a `script`, so the journal has to travel in the body.
+    """
+
+    def journal(self, rows):
+        with open(os.path.join(self.state, "journal.txt"), "w") as f:
+            f.write("\n".join(rows) + "\n")
+
+    def test_the_journal_rides_in_the_wake_body(self):
+        self.journal(["2026-11-03 09:00 first note", "2026-11-03 16:30 second note"])
+        body = self.relay.wake_text("quietyear", [item("a")])
+        self.assertIn("first note", body)
+        self.assertIn("second note", body)
+        self.assertIn("never quote it in the town", body)
+        self.assertLess(body.index("second note"), body.index("The new items"), "journal before the items")
+        self.assertIn("review? a", body, "and the items still arrive")
+
+    def test_no_journal_writes_no_block(self):
+        body = self.relay.wake_text("quietyear", [item("a")])
+        self.assertNotIn("Your journal", body)
+        self.assertIn("review? a", body)
+
+    def test_only_the_tail_rides_and_it_is_capped(self):
+        self.journal(["old %02d" % i for i in range(40)])
+        body = self.relay.wake_text("quietyear", [item("a")])
+        self.assertNotIn("old 27", body, "forty lines: only the last twelve ride")
+        self.assertIn("old 39", body)
+        self.assertLessEqual(len(body), 1400 + 600, "a wake stays a wake")
+
+    def test_the_whole_pass_puts_it_in_the_task_it_files(self):
+        self.journal(["2026-11-03 09:00 the frost card is fixed"])
+        self.arrive([item("a")], T0)
+        self.run_pass(T0 + 1000)
+        calls = self.called()
+        created = calls[0]
+        body = created[created.index("--body") + 1]
+        self.assertIn("the frost card is fixed", body)
+        self.assertIn("review? a", body)
+
+
 class TheDigestShowsTheLane(Lane):
 
     def test_a_lane_nobody_can_wake_is_marked(self):
