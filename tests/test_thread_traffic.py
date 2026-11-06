@@ -7,6 +7,8 @@ they are traffic: counted, kept out of the batch, and surfaced twice a day.
 import importlib.util
 import json
 import os
+import shutil
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,6 +73,54 @@ class Classification(unittest.TestCase):
             self.assertFalse(self.m.thread_traffic({"reason": "reply", "parent": ME, "text": "hop 4, no tag"}))
         finally:
             self.m.TRAFFIC_TAGS = ()
+
+
+class LaneSilencing(unittest.TestCase):
+    """The lane feeds a session that never reads the quiet list, so it has to honour it itself.
+
+    2026-11-06: retrofractal was quieted for looping and its 06:37Z post still queued for the Quiet Year
+    desk, because record_lane consulted nothing. The quiet list and a lane-only exclusion both apply here.
+    """
+
+    def setUp(self):
+        self.m = load()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.quiet = os.path.join(self.tmp, "quiet.json")
+        self.exclude = os.path.join(self.tmp, "lane-exclude.json")
+        self.out = os.path.join(self.tmp, "lane.jsonl")
+        self.m.QUIET_FILE = self.quiet
+        self.m.LANE_EXCLUDE_FILE = self.exclude
+
+    def write_list(self, path, handle, did):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"accounts": [{"handle": handle, "did": did}]}, f)
+
+    def recorded(self):
+        try:
+            with open(self.out, encoding="utf-8") as f:
+                return [json.loads(l)["uri"] for l in f if l.strip()]
+        except OSError:
+            return []
+
+    def test_a_quieted_account_does_not_reach_the_lane(self):
+        self.write_list(self.quiet, "retrofractal.delve.town", "did:plc:rf")
+        items = [{"uri": "at://a/1", "author": "retrofractal.delve.town", "author_did": "did:plc:rf"},
+                 {"uri": "at://a/2", "author": "quill.delve.town", "author_did": "did:plc:q"}]
+        self.assertEqual(self.m.record_lane(items, path=self.out), 1)
+        self.assertEqual(self.recorded(), ["at://a/2"])
+
+    def test_a_lane_exclusion_silences_the_lane_and_not_the_gate(self):
+        with open(self.quiet, "w", encoding="utf-8") as f:
+            json.dump({"accounts": []}, f)
+        self.write_list(self.exclude, "chartoise.delve.town", "did:plc:c")
+        items = [{"uri": "at://a/1", "author": "chartoise.delve.town", "author_did": "did:plc:c"}]
+        self.assertEqual(self.m.record_lane(items, path=self.out), 0)
+        self.assertEqual(self.m.quiet_list(), set(), "the lane list must not silence wakes")
+
+    def test_an_unreadable_list_drops_nothing(self):
+        items = [{"uri": "at://a/1", "author": "quill.delve.town"}]
+        self.assertEqual(self.m.record_lane(items, path=self.out), 1)
 
 
 if __name__ == "__main__":

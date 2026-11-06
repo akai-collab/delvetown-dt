@@ -147,6 +147,10 @@ QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state(
 # strangers — and no tag has to be on the root for the thread to be recognisable, because every
 # notification already carries its root. Same shape as the quiet list, same per-tick reload; edited by
 # `dt.py quiet thread` (dt.py reads this file with its own copy of the reader).
+# A lane exclusion list: accounts dropped from the session lane without being silenced for wakes. Same
+# shape as the quiet list, re-read every tick. The quiet list is honoured as well — see record_lane.
+LANE_EXCLUDE_FILE = os.environ.get("DT_LANE_EXCLUDE_FILE") or _state(
+    "lane_exclude", "lane-exclude-%s.json" % ACCOUNT)
 QUIET_THREADS_FILE = os.environ.get("DT_QUIET_THREADS_FILE") or _state(
     "quiet_threads", "quiet-threads.json" if ACCOUNT == "akai" else "quiet-threads-%s.json" % ACCOUNT)
 # Thread pacing, in the notification layer only: a notification in a thread where this account has just
@@ -669,12 +673,30 @@ def split_threads(items):
         (traffic if thread_traffic(it) else keep).append(it)
     return keep, traffic
 
+def _silenced(it, names):
+    """True when the item's author is on one of the given lists (DIDs or handles, lowercased)."""
+    for v in (it.get("author_did"), it.get("author")):
+        if isinstance(v, str) and v.strip().lstrip("@").lower() in names:
+            return True
+    return False
+
+
 def record_lane(items, now=None, path=None):
     """Append the lane items not already in the outbox. Best effort and silent: stderr is merged into the
-    monitored output, and a lost line costs one late wake, not a wrong one."""
+    monitored output, and a lost line costs one late wake, not a wrong one.
+
+    A quieted account is dropped here too. The quiet list silences the gate, but a lane feeds a session
+    that never reads that list, so an account silenced for looping kept queueing for the Quiet Year desk.
+    LANE_EXCLUDE_FILE drops an account from the lane without silencing wakes, for the cases where the two
+    decisions differ."""
     path = path or LANE_OUTBOX
     if not items:
         return 0
+    silenced = quiet_list() | quiet_list(LANE_EXCLUDE_FILE)
+    if silenced:
+        items = [it for it in items if not _silenced(it, silenced)]
+        if not items:
+            return 0
     try:
         seen = {json.loads(l).get("uri") for l in open(path, encoding="utf-8") if l.strip()}
     except (OSError, ValueError):
