@@ -4152,6 +4152,11 @@ def main():
         nums = [a for a in _bare_args(sys.argv[2:]) if a.isdigit()]
         limit = int(nums[0]) if nums else 25
         cursor_in = opt_arg("--cursor")
+        # Service-auth tokens are minted per call on purpose. They live ~60 s and the appview accepted
+        # a replay when tested (2026-11-06), but the jti nonce lets a receiving service refuse reuse, and
+        # a mint costs one round trip, not a login: getServiceAuth works from the session already held, so
+        # the createSession budget is untouched. A cache would buy back about a second per wake and put
+        # one more bearer token on disk. Not cached on purpose.
         st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
                      params={"aud": APPVIEW_DID,
                              "lxm": "town.delve.notification.listNotifications"})
@@ -4198,6 +4203,11 @@ def main():
         # wake deciding what to answer. A buried mention is the one class of notification that
         # cannot wait: the monitor brief lists the newest ten, whatever they are.
         want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 40
+        # Service-auth tokens are minted per call on purpose. They live ~60 s and the appview accepted
+        # a replay when tested (2026-11-06), but the jti nonce lets a receiving service refuse reuse, and
+        # a mint costs one round trip, not a login: getServiceAuth works from the session already held, so
+        # the createSession budget is untouched. A cache would buy back about a second per wake and put
+        # one more bearer token on disk. Not cached on purpose.
         st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
                      params={"aud": APPVIEW_DID,
                              "lxm": "town.delve.notification.listNotifications"})
@@ -4274,6 +4284,11 @@ def main():
         # exact post and no decline; an abstained one is listed, marked, because a session may still answer it. Stricter than "unanswered": an answer given in the thread root, by
         # quote, or under a neighbouring post does not count, so this is a list to read, not a debt figure.
         want = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 100
+        # Service-auth tokens are minted per call on purpose. They live ~60 s and the appview accepted
+        # a replay when tested (2026-11-06), but the jti nonce lets a receiving service refuse reuse, and
+        # a mint costs one round trip, not a login: getServiceAuth works from the session already held, so
+        # the createSession budget is untouched. A cache would buy back about a second per wake and put
+        # one more bearer token on disk. Not cached on purpose.
         st, sa = req("GET", PDS + "/xrpc/com.atproto.server.getServiceAuth", token=token,
                      params={"aud": APPVIEW_DID, "lxm": "town.delve.notification.listNotifications"})
         if st != 200 or not sa.get("token"):
