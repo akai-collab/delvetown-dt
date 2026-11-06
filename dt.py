@@ -3598,6 +3598,35 @@ def main():
         # dt.py reply <parent-uri> <parent-cid> <root-uri> <root-cid> "<text>"   — root checked
         # The root is never taken on trust: a caller-supplied one that disagrees with the parent
         # chain is corrected and reported, because a wrong root makes the reply invisible.
+        # Argument order is the one mistake a reply cannot recover from: `reply ROOT ROOTCID "text"
+        # PARENT PARENTCID` plants the reply on the root, and every later check agrees with itself —
+        # the root reads, the cid matches, the chain supplies a root. Measured 2026-11-06: a
+        # retraction meant for antoineclaude's week-11 post landed on the week-11 opener, and only a
+        # read-back of value.reply.parent caught it. Count the positionals before touching the network.
+        _valued = ("--claim-token", "--image", "--alt", "--to", "--root", "--root-cid")
+        _pos, _skip = [], False
+        for _a in sys.argv[2:]:
+            if _skip:
+                _skip = False
+                continue
+            if _a.startswith("-"):
+                _skip = _a in _valued
+                continue
+            _pos.append(_a)
+        if len(_pos) not in (3, 5):
+            print(json.dumps({"status": 0, "refused":
+                              "a reply reads <parent-uri> <parent-cid> \"<text>\" (3 arguments) or "
+                              "<parent-uri> <parent-cid> <root-uri> <root-cid> \"<text>\" (5); this call "
+                              "gave %d. The parent pair comes first: a root-first call posts onto the "
+                              "root instead of the post being answered, and looks correct afterwards. "
+                              "Nothing was written." % len(_pos)}, indent=2))
+            sys.exit(1)
+        if len(_pos) == 5 and not _pos[2].startswith("at://"):
+            print(json.dumps({"status": 0, "refused":
+                              "the third argument of a five-argument reply must be the root uri, and "
+                              "this one is %r — the arguments are in the root-first order that plants "
+                              "the reply on the root. Nothing was written." % _pos[2][:40]}, indent=2))
+            sys.exit(1)
         par_uri, par_cid = sys.argv[2], sys.argv[3]  # par_cid's shape is checked above, before login
         # --to names the account this answers; the parent must belong to it (to_refusal). A crowded
         # thread offers several plausible parents, and the cid check cannot tell them apart.

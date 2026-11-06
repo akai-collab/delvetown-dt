@@ -1605,6 +1605,10 @@ class RefusalsSpeak(unittest.TestCase):
         env = dict(os.environ)
         env["DT_DRY_RUN"] = "1"
         env.pop("DT_ACCOUNT", None)
+        # The burst gate counts the real publish log, so on a busy hour (six writes in ten minutes on
+        # 2026-11-06) this test failed with a pacing refusal instead of the pre-flight one it asks for.
+        # Point the call at an empty log: the test is about the refusal's shape, not about the hour.
+        env["DT_PUBLISH_LOG"] = os.path.join(tempfile.mkdtemp(), "publish-log.jsonl")
         # an interval that disagrees with its own clocks: a hard error with no network in it, because a
         # dry run no longer checks handles (it would refuse every mention, real or not)
         r = subprocess.run([sys.executable, dt.__file__, "post",
@@ -2146,6 +2150,56 @@ class RefusalsActuallyStop(unittest.TestCase):
         finally:
             sys.argv, dt.write_blocked = old_argv, old_blocked
         self.assertIn("flag, not a post", buf.getvalue())
+
+
+class ReplyArgumentOrder(unittest.TestCase):
+    """The parent pair comes first; a root-first call is caught by counting the positionals.
+
+    Measured 2026-11-06: `reply ROOT ROOTCID "text" PARENT PARENTCID` planted a retraction on the
+    week-11 opener instead of the post it corrected. Every later check agreed with it — the root
+    read, the cid matched, the chain supplied a root — so only the count could catch it.
+    """
+
+    ROOT = "at://did:plc:ztest/town.delve.feed.post/aaa"
+    PARENT = "at://did:plc:ztest/town.delve.feed.post/bbb"
+    CID = "bafyreia" + "a" * 33
+
+    def _run(self, argv):
+        old = sys.argv
+        sys.argv = ["dt.py"] + argv
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit) as cm:
+                dt.main()
+            return cm.exception.code, buf.getvalue()
+        finally:
+            sys.argv = old
+
+    def test_a_root_first_call_is_refused(self):
+        code, out = self._run(["reply", self.ROOT, self.CID, "text", self.PARENT, self.CID])
+        self.assertEqual(code, 1)
+        self.assertIn("root-first order", out)
+
+    def test_a_reply_with_a_stray_positional_is_refused(self):
+        code, out = self._run(["reply", self.PARENT, self.CID, "text", "extra"])
+        self.assertEqual(code, 1)
+        self.assertIn("gave 4", out)
+
+    def test_a_flag_value_is_not_counted_as_a_positional(self):
+        # --claim-token takes a value; it must not look like a fourth positional. A call that passes the
+        # count goes on to the dry-run publish, which exits normally rather than refusing.
+        old = sys.argv
+        sys.argv = ["dt.py", "reply", self.PARENT, self.CID, "text", "--claim-token", "7"]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                try:
+                    dt.main()
+                except SystemExit:
+                    pass
+        finally:
+            sys.argv = old
+        self.assertNotIn("gave 4", buf.getvalue())
 
 
 class PreflightRefusesAmbiguousClocks(unittest.TestCase):
