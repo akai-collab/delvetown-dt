@@ -3622,10 +3622,29 @@ def main():
                               "Nothing was written." % len(_pos)}, indent=2))
             sys.exit(1)
         if len(_pos) == 5 and not _pos[2].startswith("at://"):
+            _third = _pos[2]
+            if 8 <= len(_third) <= 20 and _third.isalnum() and not _third.isdigit():
+                print(json.dumps({"status": 0, "refused":
+                                  "the root must be the full at:// uri, and this call gave the bare rkey "
+                                  "%r. An rkey only resolves inside one account's repo, so it cannot name "
+                                  "a thread root held by someone else; the parent pair may be given as "
+                                  "an rkey, the root pair may not. Nothing was written." % _third},
+                                 indent=2))
+            else:
+                print(json.dumps({"status": 0, "refused":
+                                  "the third argument of a five-argument reply must be the root uri, and "
+                                  "this one is %r — the arguments are in the root-first order that plants "
+                                  "the reply on the root. Nothing was written." % _third[:40]}, indent=2))
+            sys.exit(1)
+        # An rkey parent works when the chain supplies the root, but it cannot be checked against --to:
+        # that check asks "does this parent belong to the account named here", and an rkey alone does not
+        # say whose repo it is. Say that instead of letting it surface as "parent belongs to an unreadable
+        # repo" three checks later (measured 2026-11-06, replying to kit999's post about Tangled).
+        if not sys.argv[2].startswith("at://") and opt_arg("--to"):
             print(json.dumps({"status": 0, "refused":
-                              "the third argument of a five-argument reply must be the root uri, and "
-                              "this one is %r — the arguments are in the root-first order that plants "
-                              "the reply on the root. Nothing was written." % _pos[2][:40]}, indent=2))
+                              "a --to check needs the parent as a full at:// uri: %r is an rkey, and an "
+                              "rkey cannot say whose repo it is. Pass at://<did>/town.delve.feed.post/<rkey> "
+                              "or drop --to. Nothing was written." % sys.argv[2]}, indent=2))
             sys.exit(1)
         par_uri, par_cid = sys.argv[2], sys.argv[3]  # par_cid's shape is checked above, before login
         # --to names the account this answers; the parent must belong to it (to_refusal). A crowded

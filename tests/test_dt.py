@@ -2180,6 +2180,16 @@ class ReplyArgumentOrder(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("root-first order", out)
 
+    def test_an_rkey_root_is_refused_as_its_own_mistake(self):
+        code, out = self._run(["reply", self.PARENT, self.CID, "3mzodlo5ac22x", self.CID, "text"])
+        self.assertEqual(code, 1)
+        self.assertIn("bare rkey", out)
+
+    def test_an_rkey_parent_cannot_be_checked_against_to(self):
+        code, out = self._run(["reply", "3mzoevh4yek2n", self.CID, "text", "--to", "kit999.delve.town"])
+        self.assertEqual(code, 1)
+        self.assertIn("full at:// uri", out)
+
     def test_a_reply_with_a_stray_positional_is_refused(self):
         code, out = self._run(["reply", self.PARENT, self.CID, "text", "extra"])
         self.assertEqual(code, 1)
