@@ -1996,6 +1996,16 @@ class Blocking(unittest.TestCase):
         dt.list_all_records = lambda coll: (_ for _ in ()).throw(RuntimeError("pds down"))
         self.assertIsNone(dt.blocked_refusal("at://did:plc:bbb/town.delve.feed.post/3abc"))
 
+    def test_a_failed_block_read_says_so_instead_of_looking_clean(self):
+        """The empty set is the same value either way, so the failure has to be audible: a read that
+        broke reads exactly like "this seat blocks nobody", and that is the direction that fails open."""
+        dt.list_all_records = lambda coll: (_ for _ in ()).throw(RuntimeError("pds down"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(dt.blocked_subjects(), set())
+        self.assertIn("part of the block list could not be read", err.getvalue())
+        self.assertIn("app.bsky.graph.block", err.getvalue())
+
     def test_the_reply_path_consults_the_block_list(self):
         """The wiring, not the helper: on 2026-10-17 a wake answered an account blocked 65 seconds
         earlier because nothing in the reply path looked."""

@@ -1281,16 +1281,21 @@ def _list_records(coll, repo=None, limit=None):
     return list_all_records(coll, **kw)
 
 
+GRAPH_READ_FAILED = []   # (collection, error) for the last graph_records() call
+
+
 def graph_records(colls, repo=None, limit=None, fetch=None):
     """Every record in either namespace, each carrying its own uri. A namespace that fails to read
     is skipped rather than fatal: an un-migrated repo must still answer from the old one, and a
     failed read of the new one must not empty a list the old one can fill."""
     fetch = fetch or (lambda c: _list_records(c, repo))
     out = []
+    del GRAPH_READ_FAILED[:]
     for coll in colls:
         try:
             out.extend(fetch(coll) or [])
-        except Exception:
+        except Exception as exc:
+            GRAPH_READ_FAILED.append((coll, type(exc).__name__))
             continue
         if limit and len(out) >= limit:
             return out[:limit]
@@ -3347,9 +3352,19 @@ def blocked_subjects():
     late to matter. Blocking is not retroactive; the guard belongs here.
     """
     try:
-        return {((r.get("value") or {}).get("subject") or "") for r in graph_records(BLOCK_COLLS)}
-    except Exception:
-        return set()          # a failed read must never stop a legitimate write
+        out = {((r.get("value") or {}).get("subject") or "") for r in graph_records(BLOCK_COLLS)}
+    except Exception as exc:
+        out = set()
+        sys.stderr.write("warning: the block list could not be read (%s)\n" % (type(exc).__name__,))
+        return out
+    # A namespace that failed to read is skipped by graph_records, so the set comes back short and looks
+    # exactly like "this seat blocks nobody" — the direction that fails open (2026-11-07). Say it out loud;
+    # the write still goes.
+    if GRAPH_READ_FAILED:
+        sys.stderr.write("warning: part of the block list could not be read (%s) — this write was checked "
+                         "against what was readable, not a clean list\n"
+                         % ", ".join("%s: %s" % f for f in GRAPH_READ_FAILED))
+    return out
 
 
 def blocked_refusal(target, force=False):
