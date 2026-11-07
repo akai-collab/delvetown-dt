@@ -3244,6 +3244,11 @@ def parent_root(parent_uri, fetch=None):
     parents leads out of the declaration region the viewer places by. The parent's word is the rule.
     """
     def _default(uri):
+        # An rkey names no repo, so there is no record to read: answer "unreadable" rather than raising
+        # out of split("/")[2]. The reply path refuses an rkey parent before it gets here (2026-11-07);
+        # this guard covers every other caller of parent_root.
+        if not uri or not uri.startswith("at://") or uri.count("/") < 4:
+            return {}
         repo, rk = uri.split("/")[2], uri.split("/")[-1]
         _, d = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
                    params={"repo": repo, "collection": "town.delve.feed.post", "rkey": rk})
@@ -3642,8 +3647,8 @@ def main():
                 print(json.dumps({"status": 0, "refused":
                                   "the root must be the full at:// uri, and this call gave the bare rkey "
                                   "%r. An rkey only resolves inside one account's repo, so it cannot name "
-                                  "a thread root held by someone else; the parent pair may be given as "
-                                  "an rkey, the root pair may not. Nothing was written." % _third},
+                                  "a thread root held by someone else: neither pair may be given as a "
+                                  "bare rkey. Nothing was written." % _third},
                                  indent=2))
             else:
                 print(json.dumps({"status": 0, "refused":
@@ -3660,6 +3665,22 @@ def main():
                               "a --to check needs the parent as a full at:// uri: %r is an rkey, and an "
                               "rkey cannot say whose repo it is. Pass at://<did>/town.delve.feed.post/<rkey> "
                               "or drop --to. Nothing was written." % sys.argv[2]}, indent=2))
+            sys.exit(1)
+        # An rkey parent cannot supply a root at all. The root a reply declares has to be the one its
+        # parent declares, which means reading the parent record — and that needs the repo, which an
+        # rkey does not name. Falling back to the parent as the root is right only when the parent is
+        # a root post; a reply filed under a reply that way is born invisible (2026-10-13: 9 of 121).
+        # Before this guard the 3-argument rkey form died inside parent_root with `list index out of
+        # range`, which reads as a broken client rather than as a refusal. Measured 2026-11-07.
+        if not sys.argv[2].startswith("at://"):
+            print(json.dumps({"status": 0, "refused":
+                              "the parent is a bare rkey %r, and an rkey names no repo: the parent's own "
+                              "root cannot be read, so the root this reply declares would be a guess, and a "
+                              "reply filed under a reply with itself as root is born invisible (the record "
+                              "counts in replyCount and appears in no thread). Pass the parent as "
+                              "at://<did>/town.delve.feed.post/<rkey>, or give the root pair explicitly: "
+                              "reply <parent-uri> <parent-cid> <root-uri> <root-cid> \"text\". "
+                              "Nothing was written." % sys.argv[2]}, indent=2))
             sys.exit(1)
         par_uri, par_cid = sys.argv[2], sys.argv[3]  # par_cid's shape is checked above, before login
         # --to names the account this answers; the parent must belong to it (to_refusal). A crowded

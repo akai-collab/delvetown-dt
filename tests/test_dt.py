@@ -2200,6 +2200,23 @@ class ReplyArgumentOrder(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("full at:// uri", out)
 
+    def test_an_rkey_parent_is_refused_because_its_chain_cannot_be_read(self):
+        # 2026-11-07: `reply 3mzqbdbi5r22w <cid> "text"` died with `list index out of range` inside
+        # parent_root's uri.split("/")[2] — the documented 3-argument rkey form had never worked, and
+        # the traceback read as a broken client rather than as a refusal. An rkey names no repo, so the
+        # parent record cannot be read, so the root cannot be known; taking the parent as the root is
+        # only right when the parent is itself a root post, and a reply filed that way is born invisible.
+        code, out = self._run(["reply", "3mzqbdbi5r22w", self.CID, "text"])
+        self.assertEqual(code, 1)
+        self.assertIn("bare rkey", out)
+        self.assertIn("at://", out)
+        self.assertNotIn("Traceback", out)
+
+    def test_a_bare_rkey_parent_never_reaches_the_network(self):
+        code, out = self._run(["reply", "3mzqbdbi5r22w", self.CID, "text"])
+        self.assertEqual(code, 1)
+        self.assertIn("Nothing was written", out)
+
     def test_a_reply_with_a_stray_positional_is_refused(self):
         code, out = self._run(["reply", self.PARENT, self.CID, "text", "extra"])
         self.assertEqual(code, 1)
