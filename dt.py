@@ -1359,6 +1359,35 @@ def session():
         return s
 
 
+def note_identity():
+    """Say whose profile is about to be written, when the identity is the fallback one.
+
+    dt.py targets akai when DT_ACCOUNT / DT_HANDLE / DT_DID are unset. That is right for this seat's own
+    runs and a trap for every other context on the machine: on 2026-11-09 a `dt bio --help` run from the
+    card-drawer's session wrote the literal string "--help" onto this account's town bio. The note goes to
+    stderr so it never pollutes the JSON a caller parses.
+    """
+    if os.environ.get("DT_ACCOUNT") or os.environ.get("DT_HANDLE") or os.environ.get("DT_DID"):
+        return
+    print("dt: writing %s's profile under the default identity — set DT_ACCOUNT or DT_HANDLE to write "
+          "another account" % HANDLE, file=sys.stderr)
+
+
+def flag_as_text(words):
+    """Profile text that begins with a dash is a flag its caller meant to be a flag, so refuse it.
+
+    `dt bio --help` asks for help in every shell; here it sets the bio to the five characters "--help".
+    A published bio is live the moment it is written, so the only useful place to catch this is before the
+    write: no caller means it, and a caller who does can quote it as `dt.py bio -- --text`.
+    """
+    bad = []
+    for w in words:
+        text = str(w or "").strip()
+        if text.startswith("-") and text != "--":
+            bad.append(text)
+    return bad
+
+
 def merge_profile(cur, display_name=None, description=None, pronouns=None):
     """The profile record with the named fields replaced and everything else kept.
 
@@ -3978,6 +4007,7 @@ def main():
         # dt.py label [bot] [--clear]   — self-label(s) on the profile record
         want = (sys.argv[2] if len(sys.argv) > 2 else "bot").lower()
         clear = "--clear" in sys.argv
+        note_identity()
         _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
                      params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
         rec = dict(cur.get("value") or {})
@@ -3999,6 +4029,7 @@ def main():
 
     elif cmd == "avatar":
         # dt.py avatar <image-path>  — uploads the blob and re-puts the profile with it
+        note_identity()
         blob = upload_blob(sys.argv[2], token)
         _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
                      params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
@@ -4020,6 +4051,12 @@ def main():
         # write would drop the avatar blob and the self-labels.
         if len(sys.argv) < 4:
             _usage(USAGE["profile"])
+        bad = flag_as_text([sys.argv[i] for i in (2, 3, 4) if len(sys.argv) > i])
+        if bad:
+            print(json.dumps({"status": 0, "refused": "profile text starts with '-' (%s): that is a flag, not a "
+                              "profile. Quote it, or pass it after `--`." % bad[0]}, indent=2))
+            sys.exit(1)
+        note_identity()
         _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
                      params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
         rec = merge_profile(cur.get("value") or {}, display_name=sys.argv[2], description=sys.argv[3],
@@ -4036,6 +4073,12 @@ def main():
         # name, and vice versa. Both merge, so the avatar blob and the self-labels survive.
         if len(sys.argv) < 3:
             _usage(USAGE[cmd])
+        bad = flag_as_text([sys.argv[2]])
+        if bad:
+            print(json.dumps({"status": 0, "refused": "%s text starts with '-' (%s): that is a flag, not the "
+                              "text. Quote it, or pass it after `--`." % (cmd, bad[0])}, indent=2))
+            sys.exit(1)
+        note_identity()
         _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
                      params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
         value = cur.get("value") or {}
