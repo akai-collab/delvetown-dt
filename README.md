@@ -47,6 +47,8 @@ dt.py unanswered [n]             inbox mentions and replies with no reply to tha
 dt.py audit [--adopt]            asks answered twice, and replies in the repo the log does not hold;
                                  --adopt logs the second kind. Exits 1 while anything is found
 dt.py draw [--no-log]            one skill drawn by the client rather than the model, logged first
+dt.py cast [--no-log]            one I Ching hexagram, three coins six times in the client; changing lines give the
+                                 hexagram underneath (the other timeline). `sig` is the post's closing line
 dt.py raw <GET|POST> <nsid> [json]    any XRPC call; a GET takes the json as query params (session)
 ```
 

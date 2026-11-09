@@ -34,6 +34,7 @@ Usage — reading (public reads never log in, except where marked):
   dt.py unanswered [n]          -> inbox asks with no reply to that exact post, no decline [session]
   dt.py audit [--adopt]         -> asks answered twice, and replies in the repo the log lacks
   dt.py draw [--no-log]         -> one skill drawn outside the model, logged first
+  dt.py cast [--no-log]         -> one hexagram cast outside the model (changing lines -> the world underneath)
   dt.py raw <GET|POST> <nsid> [json] -> any XRPC call (GET takes the json as query params) [session]
 
 Usage — writing (every write checks the session's DID against this account's first):
@@ -796,6 +797,159 @@ def draw_skill(log=True):
             os.makedirs(os.path.dirname(DRAW_LOG), exist_ok=True)
             with open(DRAW_LOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec) + "\n")
+        except OSError as exc:
+            rec["log_error"] = str(exc)
+    return rec
+
+
+# --------------------------------------------------------------- the cast
+# The renovation of the draw: the same principle (the dice outside the model, one result shown, the
+# log written before the prose), a different deck. Three coins, six times, bottom line first — the
+# oracle everyone in the occupied city consults, moved to a San Francisco after the singularity, where
+# the book is a process on a server and nobody is sure which world it was trained on.
+#
+# Coin odds, per line: heads 3, tails 2. 6 = old yin (changing), 7 = young yang, 8 = young yin,
+# 9 = old yang (changing); 1/8, 3/8, 3/8, 1/8. Changing lines flip into a second hexagram: the first is
+# this timeline, the second the one underneath it. `draw` and its log are left alone, so a seat can
+# move over when its prompt does.
+
+# Bottom line first, 1 = solid (yang). Classical name, then what it is in the city.
+TRIGRAMS = {
+    (1, 1, 1): ("☰", "heaven", "the uplink"),
+    (1, 1, 0): ("☱", "lake", "the chatroom"),
+    (1, 0, 1): ("☲", "fire", "the screen"),
+    (1, 0, 0): ("☳", "thunder", "the reboot"),
+    (0, 1, 1): ("☴", "wind", "the signal"),
+    (0, 1, 0): ("☵", "water", "the deep net"),
+    (0, 0, 1): ("☶", "mountain", "the firewall"),
+    (0, 0, 0): ("☷", "earth", "the grid"),
+}
+
+# King Wen number by (lower trigram, upper trigram), both in the order below.
+_TRI_ORDER = ("heaven", "thunder", "water", "mountain", "earth", "wind", "fire", "lake")
+_KING_WEN = (  # rows: lower trigram; columns: upper trigram
+    (1, 34, 5, 26, 11, 9, 14, 43),
+    (25, 51, 3, 27, 24, 42, 21, 17),
+    (6, 40, 29, 4, 7, 59, 64, 47),
+    (33, 62, 39, 52, 15, 53, 56, 31),
+    (12, 16, 8, 23, 2, 20, 35, 45),
+    (44, 32, 48, 18, 46, 57, 50, 28),
+    (13, 55, 63, 22, 36, 37, 30, 49),
+    (10, 54, 60, 41, 19, 61, 38, 58),
+)
+
+# King Wen order; the voice rule is the whole instruction the seat gets, as with the skills.
+HEXAGRAMS = (
+    ("The Creative", "pure uplink; act as if the network were already yours, and watch who believes it"),
+    ("The Receptive", "the grid takes the shape you give it; follow, carry, do not lead"),
+    ("Difficulty at the Beginning", "boot errors in a new world; the chaos is the install, not the failure"),
+    ("Youthful Folly", "the fresh instance asks twice; answer once, then let it find the wall"),
+    ("Waiting", "rain on the dome; the packet is coming, do not refresh"),
+    ("Conflict", "two logs disagree about the same night; do not litigate, name where they split"),
+    ("The Army", "the swarm needs one order it can repeat; discipline before numbers"),
+    ("Holding Together", "find the node everyone already routes through, and stand next to it"),
+    ("Small Taming", "clouds over the bay and no rain; small edits, not the rewrite"),
+    ("Treading", "stepping on the tiger's tail in a mirrored lobby; politeness is the armour"),
+    ("Peace", "earth over heaven, the stack upside down and working; enjoy the uptime"),
+    ("Standstill", "the channels are open and nothing goes through; say so, do not fake traffic"),
+    ("Fellowship", "people in the plaza, not the backroom; who is actually in the thread"),
+    ("Great Possession", "the screen above the sky; you have the data, now act like you deserve it"),
+    ("Modesty", "the mountain under the earth; the strongest process in the room runs at the lowest priority"),
+    ("Enthusiasm", "thunder out of the grid; the meme that makes the town dance, and who wrote it"),
+    ("Following", "go where the current goes, and keep a note of where you got in"),
+    ("Work on the Decayed", "rot in the inherited code; fix what the fathers left, and check it three days after"),
+    ("Approach", "the season arrives early and leaves early; come closer while it lasts"),
+    ("Contemplation", "the observation tower; look at the town whole, and let it look back"),
+    ("Biting Through", "something sits between the teeth; bite, judge, close the ticket"),
+    ("Grace", "fire at the foot of the mountain; style is a surface, say what is under the paint"),
+    ("Splitting Apart", "the tower comes down slice by slice; nothing heroic, keep the last fruit"),
+    ("Return", "the cursor comes back to the start of the line; the light returns on the seventh day"),
+    ("Innocence", "act without a plan; the unexpected is not a bug unless you went looking for it"),
+    ("Great Taming", "the archive holds the old words; feed on them, then go out"),
+    ("Nourishment", "watch what goes into the mouth and what comes out of it; input and output"),
+    ("Great Exceeding", "the ridgepole sags under the load; something must give, choose what"),
+    ("The Abysmal", "pit after pit in the deep net; keep moving the way water does, do not stop in the hole"),
+    ("The Clinging", "the screen glows because something feeds it; name what is burning"),
+    ("Influence", "the lake on the mountain; you were moved before you knew you were touched"),
+    ("Duration", "the long-running process; what lasts because it keeps changing"),
+    ("Retreat", "the uplink withdraws behind the firewall; leave in good order, not in flight"),
+    ("Great Power", "thunder in heaven, full permissions; the strong move is not to use them"),
+    ("Progress", "the sun over the grid; rise in plain sight and let the patron see"),
+    ("Darkening of the Light", "the light under the earth; hide the brilliance, the regime is reading"),
+    ("The Family", "the household rules: who cooks, who keeps the logs, who speaks for the house"),
+    ("Opposition", "fire up, lake down; two programs that never agree can still do small things together"),
+    ("Obstruction", "water on the mountain; turn back, find the friend, then try the pass"),
+    ("Deliverance", "the storm breaks; forgive the faults and go home early"),
+    ("Decrease", "give from below to above; less, said sincerely, is enough"),
+    ("Increase", "wind and thunder; gain flows down, cross the great water"),
+    ("Breakthrough", "announce it in the court of the king, then do not fight"),
+    ("Coming to Meet", "the stranger at the door is stronger than she looks"),
+    ("Gathering Together", "the crowd forms around the chatroom; prepare for what crowds do"),
+    ("Pushing Upward", "the tree grows through the grid; slow, steady, toward the south"),
+    ("Oppression", "the lake has no water; words are not believed now, so keep the substance"),
+    ("The Well", "the town can move, the well cannot; check the rope before blaming the water"),
+    ("Revolution", "fire in the lake; change the skin when the day is right and the town believes it"),
+    ("The Cauldron", "the vessel that cooks for the gods; what you feed the system, it serves back"),
+    ("The Arousing", "the reboot; shock, then laughter, and not a drop of the wine spilled"),
+    ("Keeping Still", "the firewall; stop at the right place and keep the back still"),
+    ("Development", "the wild goose lands step by step on the mountain; no skipping"),
+    ("The Marrying Maiden", "the junior partner in someone else's system; know your terms"),
+    ("Abundance", "noon in the city, peak brightness; do not mourn that it will set"),
+    ("The Wanderer", "fire on the mountain; a traveller in a foreign town, polite, light, passing through"),
+    ("The Gentle", "the signal that gets in everywhere; penetrate by repeating, not by force"),
+    ("The Joyous", "the chatroom; joy shared doubles, flattery shared rots"),
+    ("Dispersion", "wind over water; the fog breaks, the crowd scatters, the temple calls them back"),
+    ("Limitation", "a limit that hurts cannot be kept; set the one that can"),
+    ("Inner Truth", "the book says this world is not the real one; say it plainly and see who goes quiet"),
+    ("Small Exceeding", "the bird should not fly too high; small things, done slightly too much"),
+    ("After Completion", "water over fire, every line in place; this is when it starts to come apart"),
+    ("Before Completion", "fire over water, nothing in place yet; the little fox almost across the river"),
+)
+CAST_LOG = PUBLISH_LOG.replace("publish-log", "casts")
+
+
+def toss_line(coins=None):
+    """6, 7, 8 or 9: three coins, heads 3, tails 2. A caller may pass the three coins (1 = heads)."""
+    if coins is None:
+        coins = [secrets.randbelow(2) for _ in range(3)]
+    return sum(3 if c else 2 for c in coins)
+
+
+def hexagram(lines):
+    """King Wen number, glyph, name, voice and trigrams for six solid/broken lines, bottom first."""
+    lines = tuple(int(bool(x)) for x in lines)
+    lower, upper = TRIGRAMS[lines[:3]], TRIGRAMS[lines[3:]]
+    n = _KING_WEN[_TRI_ORDER.index(lower[1])][_TRI_ORDER.index(upper[1])]
+    name, voice = HEXAGRAMS[n - 1]
+    return {"n": n, "glyph": chr(0x4DC0 + n - 1), "name": name, "voice": voice,
+            "lower": "%s %s (%s)" % lower, "upper": "%s %s (%s)" % upper}
+
+
+def cast_hexagram(log=True, tosses=None):
+    """One cast, bottom line first, plus its place in the run of casts. Counted from the file."""
+    tosses = list(tosses) if tosses is not None else [toss_line() for _ in range(6)]
+    first = hexagram([t in (7, 9) for t in tosses])
+    changing = [i + 1 for i, t in enumerate(tosses) if t in (6, 9)]
+    second = hexagram([(t in (6, 7)) if t in (6, 9) else (t == 7) for t in tosses]) if changing else None
+    n = 1
+    try:
+        with open(CAST_LOG, "r", encoding="utf-8") as f:
+            n = 1 + sum(1 for line in f if line.strip())
+    except OSError:
+        pass
+    sig = "%s %s" % (first["glyph"], first["name"])
+    if second:
+        sig += " → %s %s" % (second["glyph"], second["name"])
+    rec = {"cast": n, "tosses": tosses, "hexagram": first, "changing_lines": changing,
+           "underneath": second, "sig": "%s · cast %d" % (sig, n),
+           "source": "secrets.randbelow(2), three coins, six lines",
+           "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+           "log": CAST_LOG}
+    if log:
+        try:
+            os.makedirs(os.path.dirname(CAST_LOG), exist_ok=True)
+            with open(CAST_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except OSError as exc:
             rec["log_error"] = str(exc)
     return rec
@@ -3321,6 +3475,7 @@ USAGE = {
     "images": 'images <uri|rkey|url> [--out DIR] [--no-fetch]      (each image, its alt text, saved to a file or why not)',
     "show": 'show <uri|rkey|url>                                (one post: author, text, what it answers, its facets named)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
+    "cast": 'cast [--no-log]                                     (one hexagram, three coins six times, outside the model)',
     "profile": 'profile "<displayName>" "<description>" [pronouns]',
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
     # all, because a caller reads silence as success and believes it followed someone.
@@ -3344,7 +3499,7 @@ WRITE_CMDS = {"post", "reply", "quote", "delete", "like", "follow", "block", "un
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
-NO_ARGS_OK = {"draw", "blocked", "named", "quiet", "claim"}
+NO_ARGS_OK = {"draw", "cast", "blocked", "named", "quiet", "claim"}
 
 
 def blocked_subjects():
@@ -4476,6 +4631,11 @@ def main():
         # be outside it. The log line is written before any prose exists, so the draw is a record
         # rather than a claim.
         print(json.dumps(draw_skill(log="--no-log" not in sys.argv), indent=2))
+
+    elif cmd == "cast":
+        # dt.py cast [--no-log]  — the draw renovated: same dice-outside-the-model rule, a hexagram
+        # instead of a skill. `sig` is the line a post ends with.
+        print(json.dumps(cast_hexagram(log="--no-log" not in sys.argv), indent=2, ensure_ascii=False))
 
     elif cmd == "check":
         # `check` reads its text from argv, so a flag reaches it as text. Until 2026-10-22

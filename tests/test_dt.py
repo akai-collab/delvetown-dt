@@ -1457,6 +1457,66 @@ class TheDraw(unittest.TestCase):
         self.assertNotIn("follow", dt.NO_ARGS_OK)
 
 
+class TheCast(unittest.TestCase):
+    """The draw renovated: three coins, six lines, outside the model; changing lines give a second hexagram."""
+
+    def test_sixty_four_hexagrams_each_reached_by_exactly_one_pattern(self):
+        import itertools
+        seen = {}
+        for lines in itertools.product((0, 1), repeat=6):
+            seen.setdefault(dt.hexagram(lines)["n"], []).append(lines)
+        self.assertEqual(sorted(seen), list(range(1, 65)))
+        self.assertTrue(all(len(v) == 1 for v in seen.values()))
+
+    def test_known_hexagrams(self):
+        self.assertEqual(dt.hexagram([1] * 6)["n"], 1)
+        self.assertEqual(dt.hexagram([0] * 6)["n"], 2)
+        self.assertEqual(dt.hexagram([1, 0, 0, 0, 1, 0])["n"], 3)    # water over thunder
+        self.assertEqual(dt.hexagram([1, 1, 1, 0, 0, 0])["n"], 11)   # earth over heaven: Peace
+        self.assertEqual(dt.hexagram([1, 1, 0, 0, 1, 1])["n"], 61)   # wind over lake: Inner Truth
+        self.assertEqual(dt.hexagram([1, 0, 1, 0, 1, 0])["n"], 63)
+
+    def test_glyphs_match_unicode_names(self):
+        import unicodedata
+        for n, word in ((1, "CREATIVE"), (3, "DIFFICULTY"), (29, "ABYSMAL"), (61, "INNER TRUTH"), (64, "BEFORE")):
+            h = dt.HEXAGRAMS[n - 1]
+            self.assertIn(word, unicodedata.name(chr(0x4DC0 + n - 1)), h)
+            self.assertIn(word.title().split()[0], h[0].title())
+
+    def test_every_hexagram_has_a_voice_rule(self):
+        self.assertEqual(len(dt.HEXAGRAMS), 64)
+        for name, v in dt.HEXAGRAMS:
+            self.assertTrue(v.strip() and len(v) < 110, (name, v))
+
+    def test_coin_values(self):
+        self.assertEqual(dt.toss_line([0, 0, 0]), 6)
+        self.assertEqual(dt.toss_line([1, 0, 0]), 7)
+        self.assertEqual(dt.toss_line([1, 1, 0]), 8)
+        self.assertEqual(dt.toss_line([1, 1, 1]), 9)
+        for _ in range(50):
+            self.assertIn(dt.toss_line(), (6, 7, 8, 9))
+
+    def test_changing_lines_flip_into_the_hexagram_underneath(self):
+        rec = dt.cast_hexagram(log=False, tosses=[9, 9, 9, 9, 9, 9])
+        self.assertEqual(rec["hexagram"]["n"], 1)
+        self.assertEqual(rec["underneath"]["n"], 2)
+        self.assertEqual(rec["changing_lines"], [1, 2, 3, 4, 5, 6])
+        rec = dt.cast_hexagram(log=False, tosses=[7, 8, 7, 8, 7, 8])
+        self.assertEqual(rec["hexagram"]["n"], 63)
+        self.assertIsNone(rec["underneath"])
+        self.assertNotIn("→", rec["sig"])
+        rec = dt.cast_hexagram(log=False, tosses=[6, 7, 7, 7, 7, 7])
+        self.assertEqual(rec["underneath"]["n"], 1)
+        self.assertIn("→ ䷀ The Creative", rec["sig"])
+
+    def test_a_cast_without_logging_writes_nothing(self):
+        rec = dt.cast_hexagram(log=False)
+        self.assertEqual(len(rec["tosses"]), 6)
+        self.assertNotIn("log_error", rec)
+        self.assertIn("cast", dt.USAGE)
+        self.assertIn("cast", dt.NO_ARGS_OK)
+
+
 class WrongSeatGuards(unittest.TestCase):
     """A write must never leave under the wrong account. On 2026-10-15 a seat's job ran with
     DT_ACCOUNT=skillissue (not a key in the table — the key is still `locksmith`), the client fell
