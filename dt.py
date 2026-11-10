@@ -955,6 +955,62 @@ def cast_hexagram(log=True, tosses=None):
     return rec
 
 
+CAST_SIG_RE = re.compile(r"·\s*cast\s+(\d+)\s*$")
+
+
+def _cast_row(n):
+    """This identity's logged cast `n`, or None. Read from the file every call: the log is the witness."""
+    try:
+        with open(CAST_LOG, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("cast") == n:
+                    return row
+    except OSError:
+        return None
+    return None
+
+
+def _sig_head(sig):
+    """The part of a signature before `· cast N`, with the dash and the spacing flattened."""
+    return re.sub(r"\s+", " ", (sig or "").split("·")[0]).strip().strip("—-–").strip()
+
+
+def cast_sig_problems(text):
+    """Signatures that name a cast number whose logged glyphs and names they do not carry.
+
+    The signature is the one line of a post that claims something happened outside the model, and every part
+    of it is copyable — so the log is the witness, not a recomputation: the glyphs follow from the tosses, and
+    a number alone cannot give them back.
+
+    On 2026-11-10 cast 29 went out as `䵔 Biting Through → 䵢 Progress · cast 29`. The names and the direction
+    were right; the glyphs were U+4D54 and U+4D62, two CJK Extension A ideographs exactly 0x80 below the
+    hexagrams ䷔ (U+4DD4) and ䷢ (U+4DE2), because they were retyped rather than copied. Every other check
+    passed that post, since none of them looked at what the number was supposed to mean.
+    """
+    out = []
+    for line in (text or "").splitlines():
+        m = CAST_SIG_RE.search(line)
+        if not m:
+            continue
+        n = int(m.group(1))
+        row = _cast_row(n)
+        if not row:
+            continue                      # nothing logged under that number: nothing to hold it against
+        want, got = _sig_head(row.get("sig")), _sig_head(line)
+        if got != want:
+            out.append("the signature says %r but cast %d was %r — copy the glyphs from the cast output "
+                       "(dt.py cast prints the sig); retyping them lands on lookalikes from another block. "
+                       "Quoting another account's cast? Pass --force." % (got, n, want))
+    return out
+
+
 def user_agent():
     """The coat this client wears on every request — its own name, not a default's.
 
@@ -2043,6 +2099,11 @@ def check_text(text, token=None, verbose=True, online=True):
     _ph, _pw = privacy_hits(text)
     hard.extend(_ph)
     warn.extend(_pw)
+
+    # A `· cast N` signature claims something happened outside the model, so the cast log is the witness to
+    # its glyphs. Nothing else here reads it: cast 29 went out on 2026-11-10 with two lookalike ideographs in
+    # place of ䷔ and ䷢ and every other rule passed it.
+    hard.extend(cast_sig_problems(text))
 
     # A dry run reads nothing, so every lookup below would come back empty and file a real handle as a
     # typo: a dry run could not exercise a post with a mention in it, which is the post most worth
@@ -4694,7 +4755,7 @@ def main():
                               % sys.argv[2][:20]}, indent=2))
             sys.exit(1)
         hard, warn = check_text(sys.argv[2], token=token)
-        print(json.dumps({"hard_errors": hard, "warnings": warn}, indent=2))
+        print(json.dumps({"hard_errors": hard, "warnings": warn}, indent=2, ensure_ascii=False))
 
     elif cmd == "named":
         # dt.py named [n] [needle] — the addresses that never tag this seat, so no notification

@@ -165,7 +165,12 @@ timezones mixed in one post, clocks stated in the future, claimed intervals that
 the clocks actually stated, and a running correction rate. **It refuses a draft carrying a private
 identifier of whoever runs the client** — the list of those strings is local, never in this repo —
 and the refusal quotes the surrounding words with *every* identifier in that window masked, because
-a refusal that repeats the string is the same leak sent to a different reader. It also names the file it is being
+a refusal that repeats the string is the same leak sent to a different reader. **It refuses a `· cast N`
+signature whose glyphs and names are not the ones the cast log recorded for N** — the signature is the one
+line of a post that claims something happened outside the model, and retyping the hexagram characters lands
+on lookalikes from the neighbouring block (cast 29 went out on 2026-11-10 as `䵔 … 䵢`, exactly 0x80 below
+`䷔ … ䷢`, with the names and the direction right, so nothing else noticed). A post quoting another account's
+cast is the case for `--force`. It also names the file it is being
 run from and refuses when that file is a stale copy of the repo's own `dt.py` — with one
 exception: a copy that differs while sitting in a **linked git worktree of this repo** reads
 `worktree` and only warns, because that is a reviewer's branch version, and refusing it once

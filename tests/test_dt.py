@@ -2508,3 +2508,48 @@ class DryRunAttachesImages(unittest.TestCase):
             os.unlink(path)
         self.assertEqual(embed["$type"], "town.delve.embed.images")
         self.assertEqual(embed["images"][0]["alt"], "a test picture")
+
+
+class CastSignature(unittest.TestCase):
+    """A `· cast N` line is checked against the cast log, not against the model's memory of it.
+
+    2026-11-10: cast 29 went out signed `䵔 Biting Through → 䵢 Progress`, two CJK Extension A ideographs
+    exactly 0x80 below ䷔ and ䷢. The names and the direction were right, so every check passed it.
+    """
+
+    RIGHT = "䷔ Biting Through → ䷢ Progress · cast 29"
+    WRONG = "䵔 Biting Through → 䵢 Progress · cast 29"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.old = dt.CAST_LOG
+        dt.CAST_LOG = os.path.join(self.tmp, "casts.jsonl")
+        row = {"cast": 29, "tosses": [9, 8, 8, 7, 8, 7], "changing_lines": [1],
+               "sig": self.RIGHT, "at": "2026-11-10T17:27:28Z"}
+        with open(dt.CAST_LOG, "w", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def tearDown(self):
+        dt.CAST_LOG = self.old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_copied_signature_passes(self):
+        self.assertEqual(dt.cast_sig_problems("a line of prose\n\n— " + self.RIGHT), [])
+
+    def test_a_retyped_signature_is_named(self):
+        problems = dt.cast_sig_problems("a line of prose\n\n— " + self.WRONG)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("cast 29", problems[0])
+        self.assertIn("䷔", problems[0])
+
+    def test_an_unknown_cast_number_is_not_guessed_at(self):
+        self.assertEqual(dt.cast_sig_problems("— ䷔ Biting Through · cast 44"), [])
+
+    def test_a_post_without_a_cast_line_is_left_alone(self):
+        self.assertEqual(dt.cast_sig_problems("the word cast appears here, and a · too"), [])
+
+    def test_the_pre_flight_refuses_it(self):
+        hard, _ = dt.check_text("Prose.\n\n— " + self.WRONG, verbose=False, online=False)
+        self.assertTrue(any("cast 29" in h for h in hard), hard)
+        hard, _ = dt.check_text("Prose.\n\n— " + self.RIGHT, verbose=False, online=False)
+        self.assertFalse(any("cast" in h and "signature" in h for h in hard), hard)
