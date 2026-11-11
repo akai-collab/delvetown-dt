@@ -99,6 +99,31 @@ def expired(value, today):
     return bool(m) and m.group(1) < today
 
 
+def _key_tokens(key):
+    return {t for t in re.split(r"[^a-z0-9]+", key.lower()) if t and len(t) > 2}
+
+
+def similar_keys(key, existing_keys):
+    """Keys a run may be duplicating: same words in a different order or separator.
+
+    Three duplicate pairs landed in one night (at-mcp-fork / at_mcp-fork, a stale copy of
+    scratch-filenames, lexicon-c-mimo / lexicon-c-double), each written a minute apart by a run
+    that did not look at what was already there. The warning is printed, not enforced.
+    """
+    mine = _key_tokens(key)
+    out = []
+    for other in existing_keys:
+        if other == key:
+            continue
+        theirs = _key_tokens(other)
+        if not mine or not theirs:
+            continue
+        overlap = len(mine & theirs) / float(len(mine | theirs))
+        if overlap >= 0.5:
+            out.append(other)
+    return sorted(out)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="One briefing line for every delvetown cron.")
     sub = ap.add_subparsers(dest="cmd")
@@ -155,6 +180,10 @@ def main(argv=None):
         if wanted and name != wanted:
             continue
         rows = []
+        if cmd == "set":
+            dupes = similar_keys(args.key, {k for (j, k) in existing})
+            if dupes:
+                report.setdefault("similar", {})[name] = dupes
         for job_id, job_name in jobs:
             if cmd == "set":
                 value = args.text + (" [until %s]" % args.until if args.until else "")
