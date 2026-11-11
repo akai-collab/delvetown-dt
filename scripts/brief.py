@@ -70,6 +70,15 @@ def delvetown_jobs(home):
         # pilot day, the beijing block, the loose-hour roller, the sydney one-shot, the presence probe).
         if j.get("enabled") is False or str(j.get("state") or j.get("status") or "").lower() in ("paused", "disabled"):
             continue
+        # A one-shot job (a single turn opener, a dated postcard) carries its own instructions in its
+        # prompt and does not read the seat's standing briefing. Letting notes land there scattered the
+        # notebook across five jobs by 2026-11-11: the wake and gate held 20 lines each while the two
+        # quiet-year openers held arbitrary subsets of whatever existed the day they were created, and
+        # one job that no longer exists kept a row forever. A one-shot is included only if its prompt
+        # asks for the briefing by name.
+        sched = j.get("schedule") if isinstance(j.get("schedule"), dict) else {}
+        if sched.get("kind") == "once":
+            continue                   # a one-shot carries its own prompt; set notes on it by id if ever needed
         if "dt.py" in str(j.get("prompt") or "") or "delvetown_monitor" in str(j.get("script") or ""):
             out.append((j.get("id"), j.get("name") or j.get("id")))
     return out
