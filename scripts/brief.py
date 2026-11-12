@@ -70,18 +70,31 @@ def delvetown_jobs(home):
         # pilot day, the beijing block, the loose-hour roller, the sydney one-shot, the presence probe).
         if j.get("enabled") is False or str(j.get("state") or j.get("status") or "").lower() in ("paused", "disabled"):
             continue
-        # A one-shot job (a single turn opener, a dated postcard) carries its own instructions in its
-        # prompt and does not read the seat's standing briefing. Letting notes land there scattered the
-        # notebook across five jobs by 2026-11-11: the wake and gate held 20 lines each while the two
-        # quiet-year openers held arbitrary subsets of whatever existed the day they were created, and
-        # one job that no longer exists kept a row forever. A one-shot is included only if its prompt
-        # asks for the briefing by name.
+        # A one-shot job (a single turn opener, a dated postcard, a scheduled quiz) IS included when it is
+        # a delvetown job. It was excluded for a night on 2026-11-11, to stop the notebook being scattered
+        # across five jobs (the wake and gate held 20 lines each while two quiet-year openers held arbitrary
+        # subsets of whatever existed the day they were created). The operator's objection is the better
+        # one: a one-shot is rare and often *chosen* — "pick a thread and post" — and a run that picks a
+        # thread without knowing which people and threads the seat is staying out of will pick wrong. So
+        # they are targets again, and the scatter is fixed at the other end instead: rows for jobs that
+        # have left jobs.json entirely are deleted on every call (see orphans() below), which is what
+        # actually kept a row alive for a job that no longer existed.
         sched = j.get("schedule") if isinstance(j.get("schedule"), dict) else {}
-        if sched.get("kind") == "once":
-            continue                   # a one-shot carries its own prompt; set notes on it by id if ever needed
+        once = sched.get("kind") == "once"
         if "dt.py" in str(j.get("prompt") or "") or "delvetown_monitor" in str(j.get("script") or ""):
-            out.append((j.get("id"), j.get("name") or j.get("id")))
+            out.append((j.get("id"), (j.get("name") or j.get("id")) + (" (one-shot)" if once else "")))
     return out
+
+
+def all_job_ids(home):
+    """Every job id this home still has: what an orphaned notepad row is measured against."""
+    try:
+        with open(os.path.join(home, "cron", "jobs.json"), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    jobs = data.get("jobs") if isinstance(data, dict) else data
+    return {j.get("id") for j in (jobs or []) if isinstance(j, dict)}
 
 
 def hermes(home, *args):
@@ -182,7 +195,14 @@ def main(argv=None):
         home = hermes_home(seat)
         jobs = delvetown_jobs(home)
         existing = notes(home)
+        live = all_job_ids(home)
         for (job_id, key), value in existing.items():           # prune on every call
+            if job_id not in live:
+                # the job is gone from jobs.json: the row can never be read again, and leaving it makes
+                # the seat look told. This is the real orphan fix; excluding one-shots was a proxy for it.
+                if hermes(home, "cron", "notepad", job_id, "delete", key).returncode == 0:
+                    report.setdefault("orphans", []).append("%s:%s %s" % (name, job_id, key))
+                continue
             if expired(value, today) and any(job_id == j for j, _ in jobs):
                 if hermes(home, "cron", "notepad", job_id, "delete", key).returncode == 0:
                     report["pruned"].append("%s:%s %s" % (name, job_id, key))
