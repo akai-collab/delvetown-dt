@@ -146,6 +146,54 @@ def similar_keys(key, existing_keys):
     return sorted(out)
 
 
+def dates(home, seat):
+    """One compact block per seat: note count, nearest expiry, and each key with its end date.
+
+    The operator reads Telegram reports, not the notepad: without this she cannot tell whether a line
+    that governs a run lapses tomorrow or in three weeks, and stale notes look identical to live ones.
+    Keys are deduped across jobs; a key whose copies disagree is marked DIVERGENT so the divergence is
+    visible rather than silently averaged.
+    """
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % os.path.join(home, "cron", "notepad.db"), uri=True)
+        rows = list(con.execute("select key, value, updated_at from cron_notepad"))
+    except sqlite3.Error:
+        print("notes: 0 (no notepad.db at %s)" % home)
+        return
+    per = {}
+    for key, value, upd in rows:
+        m = UNTIL.search(value or "")
+        per.setdefault(key, set()).add((m.group(1) if m else "no end date", (value or "")[:120]))
+    dated = sorted((sorted(v)[0][0], k) for k, v in per.items() if sorted(v)[0][0] != "no end date")
+    print("notes: %d" % len(per))
+    if dated:
+        print("next expiry: %s %s" % (dated[0][1], dated[0][0]))
+    for k in sorted(per, key=lambda k: (sorted(per[k])[0][0] == "no end date", sorted(per[k])[0][0], k)):
+        vals = per[k]
+        flag = "  DIVERGENT (%d copies)" % len(vals) if len(vals) > 1 else ""
+        print("  %-24s %s%s" % (k, sorted(vals)[0][0], flag))
+
+
+def sync(home, seat):
+    """Push the newest value of every key to every target job, so no copy is frozen in the past."""
+    jobs = delvetown_jobs(home)
+    con = sqlite3.connect("file:%s?mode=ro" % os.path.join(home, "cron", "notepad.db"), uri=True)
+    newest = {}
+    for key, value, upd in con.execute("select key, value, updated_at from cron_notepad"):
+        if key not in newest or upd > newest[key][0]:
+            newest[key] = (upd, value)
+    have = {(j, k) for j, k in con.execute("select job_id, key from cron_notepad")}
+    written = 0
+    for jid, _ in jobs:
+        for key, (upd, value) in newest.items():
+            cur = con.execute("select value from cron_notepad where job_id=? and key=?", (jid, key)).fetchone()
+            if cur and cur[0] == value:
+                continue
+            if hermes(home, "cron", "notepad", jid, "set", key, value).returncode == 0:
+                written += 1
+    print("synced: %d row(s) across %d job(s), %d key(s)" % (written, len(jobs), len(newest)))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="One briefing line for every delvetown cron.")
     sub = ap.add_subparsers(dest="cmd")
@@ -157,6 +205,10 @@ def main(argv=None):
                    help="allow an end date more than 14 days out, for a subject that has that date of its own")
     c = sub.add_parser("clear")
     c.add_argument("key")
+    sy = sub.add_parser("sync")
+    sy.add_argument("--seat", required=True)
+    d = sub.add_parser("dates")
+    d.add_argument("--seat", required=True)
     l = sub.add_parser("list")
     for p in (s, c, l):
         p.add_argument("--seat", help="a seat key from seats.json")
@@ -180,6 +232,20 @@ def main(argv=None):
             # is what --long is for; anything else gets 24-48 hours.
             sys.exit("--until %s is %d days out: a town happening gets 24-48 hours. Shorten it, or pass --long "
                      "if the subject has that date of its own." % (args.until, days))
+
+    if cmd == "sync":
+        seats = load_seats()
+        if args.seat not in seats:
+            sys.exit("no seat %r" % args.seat)
+        sync(hermes_home(seats[args.seat]), args.seat)
+        return 0
+
+    if cmd == "dates":
+        seats = load_seats()
+        if args.seat not in seats:
+            sys.exit("no seat %r" % args.seat)
+        dates(hermes_home(seats[args.seat]), args.seat)
+        return 0
 
     seats = load_seats()
     wanted = getattr(args, "seat", None)
