@@ -4439,10 +4439,11 @@ def main():
                           "count": len(handles), "follows": handles}, indent=2))
 
     elif cmd == "feed":
-        # dt.py feed [limit] [<generator-uri>|<handle>] [--following] [--brief] [--cursor <c>]
+        # dt.py feed [limit] [<generator-uri>|<handle>] [--following] [--roots] [--brief] [--cursor <c>]
         # no URI     = the town's own feed (town.delve.feed.getFeed?feed=<TOWN_FEED>, works logged out)
         # <uri>      = that generator's feed, passed through as given
         # --following = town.delve.feed.getTimeline (needs the session, and lives on the PDS)
+        # --roots    = top-level posts only (drops replies), for reading what follows START
         # --brief    = one line per post, naming what each reply answers
         # --cursor   = the page after the one that handed it out (the header's `cursor`)
         # the limit is whichever argument is a number, before or after the target
@@ -4452,9 +4453,15 @@ def main():
         kind, target = feed_target(args)
         cursor_in = opt_arg("--cursor")
         brief_mode = "--brief" in sys.argv
+        roots_only = "--roots" in sys.argv
 
         def fetch(n):
-            params = {"limit": n}
+            # --roots: top-level posts only. A timeline of followed accounts is ~95% replies inside
+            # other people's threads, so a run told to "join something from the follows" lands in
+            # megathreads; asking for roots makes it read what those accounts started. The read asks
+            # for several times as many items to have `n` roots to show, and keeps the server cursor
+            # only when nothing was dropped (a filtered page's cursor would skip what it filtered).
+            params = {"limit": min(100, n * 6) if roots_only else n}
             if cursor_in:
                 params["cursor"] = cursor_in
             if kind == "following":
@@ -4469,7 +4476,15 @@ def main():
                 st, res = req("GET", APPVIEW + "/xrpc/town.delve.feed.getFeed",
                               params=dict(params, feed=target))
             res = res if isinstance(res, dict) else {}
-            return st, (res.get("feed") or res.get("items") or []), res.get("cursor"), res
+            items = res.get("feed") or res.get("items") or []
+            if roots_only:
+                def is_root(it):
+                    p = it.get("post") or it
+                    r = p.get("record") or {}
+                    return not r.get("reply") and not it.get("reply")
+                kept = [it for it in items if is_root(it)]
+                return st, kept[:n], (res.get("cursor") if len(kept) == len(items) else None), res
+            return st, items, res.get("cursor"), res
 
         page = capped_page(fetch, limit, lambda it: feed_line(it, brief=brief_mode))
         status, res = page["status"], page["body"]
