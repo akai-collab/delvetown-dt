@@ -122,8 +122,18 @@ def board_section(now, board):
         created = t.get("created_at")
         made = float(created) if isinstance(created, (int, float)) else epoch(created)
         stale = made and now - made > STALE_TASK_DAYS * 86400
-        lines.append("  %s %s [%s%s] %s" % ("!" if stale else "-", t.get("id"), t.get("status"),
-                                            ", " + age(now - made) if made else "", t.get("title")))
+        # The bracketed figure is an AGE since the task was made, not a due date (operator's catch,
+        # 2026-11-13: every date she saw was in the past because they were creation times). Say "age",
+        # and when the title or body names a future ISO date, print that as the due date beside it.
+        today_s = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        due = next((d for d in re.findall(r"20\d{2}-\d{2}-\d{2}", "%s %s" % (t.get("title") or "", t.get("body") or ""))
+                    if d >= today_s), None)
+        bits = [t.get("status")]
+        if made:
+            bits.append("age " + age(now - made))
+        if due:
+            bits.append("due " + due)
+        lines.append("  %s %s [%s] %s" % ("!" if stale else "-", t.get("id"), ", ".join(bits), t.get("title")))
     return lines
 
 
@@ -155,9 +165,11 @@ def briefing_section(seats, today):
     for (key, value), carriers in sorted(keys.items()):
         m = UNTIL.search(value or "")
         mark = "!" if m and m.group(1) < today else "-"
-        lines.append("  %s %s: %s (%d job%s)%s" % (mark, key, clip(value, 96), len(carriers),
-                                                  "" if len(carriers) == 1 else "s",
-                                                  " EXPIRED" if mark == "!" else ""))
+        # The end date is the point of the line: without it a rule and a stale rule read the same.
+        lines.append("  %s %s: %s (%d job%s) %s" % (mark, key, clip(value, 96), len(carriers),
+                                                   "" if len(carriers) == 1 else "s",
+                                                   ("EXPIRED " + m.group(1)) if mark == "!"
+                                                   else ("until " + m.group(1)) if m else "no end date"))
     return lines
 
 
