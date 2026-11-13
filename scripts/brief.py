@@ -201,6 +201,8 @@ def main(argv=None):
     s.add_argument("key")
     s.add_argument("text")
     s.add_argument("--until", help="YYYY-MM-DD: the line is pruned once this date has passed")
+    s.add_argument("--permanent", action="store_true",
+                   help="undated note: operator-only. A run must pass --until; she promotes a dated line with live context")
     s.add_argument("--long", action="store_true",
                    help="allow an end date more than 14 days out, for a subject that has that date of its own")
     c = sub.add_parser("clear")
@@ -221,6 +223,10 @@ def main(argv=None):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if cmd == "set" and args.until and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.until):
         sys.exit("--until wants YYYY-MM-DD")
+    if cmd == "set" and not args.until and not getattr(args, "permanent", False):
+        sys.exit("an undated note needs --permanent, and that flag is the operator's to give (2026-11-13). "
+                 "Runs write dated lines: pass --until YYYY-MM-DD (24-48h for a town happening, --long only "
+                 "when the subject has that date of its own). She promotes one to undated with live context.")
     if cmd == "set" and args.until and args.until < today:
         sys.exit("--until %s has already passed" % args.until)
     if cmd == "set" and args.until and not args.long:
