@@ -10,12 +10,21 @@
 # the table does not carry: the gate's opt-in, its settle windows, and the town's endpoints.
 #
 # Read-only: the monitor never marks notifications seen, never writes to the town.
+#
+# AT_MCP_WAKE_JOB_ID / AT_MCP_WAKE_JOBS_FILE name this job and its jobs.json, so a batch whose run
+# FAILED is sent again (delvetown-dt f4cce56; a 429 lost selene's mention on 20 Oct). The scheduler
+# marks a monitor's output as seen when it checks, before the model runs, so a run that dies leaves
+# its batch looking handled and the next tick reads as "no change". Without these two the monitor
+# cannot tell that its own last run failed: this seat's gate lost a 429 run that way on
+# 2026-11-11T01:57Z, and the sibling seat has set both since its wrapper was written.
 set -u
 
 AT_MCP_HANDLE=akai.delve.town \
 AT_MCP_MONITOR_GATE=wake \
 AT_MCP_WAKE_SETTLE_S=1200 \
 AT_MCP_WAKE_MAX_WAIT_S=5400 \
+AT_MCP_WAKE_JOB_ID=4177b404001e \
+AT_MCP_WAKE_JOBS_FILE=/home/vailie/.hermes/cron/jobs.json \
 DT_MONITOR_READER=xrpc \
 DT_PDS=https://pds.delve.town \
 DT_APPVIEW=https://api.delve.town \
