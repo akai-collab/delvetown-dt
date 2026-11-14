@@ -619,9 +619,9 @@ def in_session_lane(it, token=None, fetch=None):
     return verdict
 
 
-def drop_session_lane(items, token=None):
-    """The items a wake may act on: everything except the session's lane."""
-    return [it for it in items if not in_session_lane(it, token=token)]
+def drop_session_lane(items, token=None, seat=None):
+    """The items a wake may act on: everything except the session's lane (all of them, for a seat without it)."""
+    return split_session_lane(items, token=token, seat=seat)[0]
 
 
 # The lane is set aside, not thrown away. Filtering it out of the gate was right — a cron cannot answer it —
@@ -714,8 +714,24 @@ def record_lane(items, now=None, path=None):
     return len(fresh)
 
 
-def split_session_lane(items, token=None):
-    """(what a wake may act on, the session's lane)."""
+def owns_lane(seat=None):
+    """Whether this seat has the session's lane at all.
+
+    The lane is one seat's: in seats.json it is the `lanes` entry of the seat whose session works the Quiet
+    Year repo. A seat without that entry has no session to relay to, so setting its items aside loses them:
+    until 2026-11-14 skillissue's gate filed three asks (selene twice, penny once, 27-29 Oct) into an outbox
+    nothing reads, and never woke for them. Such a seat answers lane-tagged items like any other ask. A handle
+    with no seats.json entry keeps the old behaviour (the lane is on), as with every other default here."""
+    seat = SEAT if seat is None else seat
+    if not seat:
+        return True
+    return LANE in (seat.get("lanes") or {})
+
+
+def split_session_lane(items, token=None, seat=None):
+    """(what a wake may act on, the session's lane). Empty lane for a seat that does not own it."""
+    if not owns_lane(seat):
+        return list(items), []
     keep, lane = [], []
     for it in items:
         (lane if in_session_lane(it, token=token) else keep).append(it)

@@ -83,3 +83,40 @@ class SessionLane(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LaneBelongsToOneSeat(unittest.TestCase):
+    """2026-11-14: the filter ran for every seat, but only akai has the lane (and a relay to its session).
+    skillissue's gate set three asks aside into an outbox nothing reads. A seat without the lane keeps them."""
+
+    TAGGED = {"uri": "at://x/y/z", "root": OTHER_ROOT, "text": "#quietyear round 4 is up", "author": "selene.delve.town"}
+    WITH = {"handle": "akai.delve.town", "lanes": {"quietyear": {"settle_s": 600}}}
+    WITHOUT = {"handle": "skillissue.delve.town", "quietyear_refusal": False}
+
+    def setUp(self):
+        self.m = load()
+        self.m._SESSION_LANE_CACHE.clear()
+
+    def test_the_seat_with_the_lane_sets_it_aside(self):
+        self.assertEqual(self.m.split_session_lane([self.TAGGED], seat=self.WITH), ([], [self.TAGGED]))
+
+    def test_a_seat_without_the_lane_keeps_the_item(self):
+        self.assertEqual(self.m.split_session_lane([self.TAGGED], seat=self.WITHOUT), ([self.TAGGED], []))
+        self.assertEqual(self.m.drop_session_lane([self.TAGGED], seat=self.WITHOUT), [self.TAGGED])
+
+    def test_a_seat_without_the_lane_reads_no_roots(self):
+        item = {"uri": "at://x/y/z", "root": GAME_ROOT, "text": "the card is yours"}
+        calls = []
+        self.m.in_session_lane = lambda it, token=None, fetch=None: calls.append(it) or True
+        self.assertEqual(self.m.split_session_lane([item], seat=self.WITHOUT), ([item], []))
+        self.assertEqual(calls, [], "no root read is spent on a lane the seat does not have")
+
+    def test_a_handle_with_no_entry_keeps_the_old_filter(self):
+        self.assertTrue(self.m.owns_lane({}))
+
+    def test_the_shipped_table_gives_the_lane_to_akai_only(self):
+        import json
+        with open(os.path.join(ROOT, "seats.json"), encoding="utf-8") as f:
+            seats = json.load(f)["seats"]
+        owners = sorted(k for k, v in seats.items() if self.m.owns_lane(v))
+        self.assertEqual(owners, ["akai"])
