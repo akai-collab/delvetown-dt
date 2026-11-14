@@ -178,6 +178,15 @@ def sync(home, seat):
     """Push the newest value of every key to every target job, so no copy is frozen in the past."""
     jobs = delvetown_jobs(home)
     con = sqlite3.connect("file:%s?mode=ro" % os.path.join(home, "cron", "notepad.db"), uri=True)
+    # Prune retired jobs FIRST: a row left on a job that has fired still reads as the newest copy, and a
+    # sync that read it first would write the retired key back onto every live job (seen 2026-11-14).
+    live = {jid for jid, _ in jobs}
+    stale = [j for (j,) in con.execute("select distinct job_id from cron_notepad") if j not in live]
+    for jid in stale:
+        for (key,) in con.execute("select key from cron_notepad where job_id=?", (jid,)).fetchall():
+            hermes(home, "cron", "notepad", jid, "delete", key)
+    con.close()
+    con = sqlite3.connect("file:%s?mode=ro" % os.path.join(home, "cron", "notepad.db"), uri=True)
     newest = {}
     for key, value, upd in con.execute("select key, value, updated_at from cron_notepad"):
         if key not in newest or upd > newest[key][0]:
@@ -191,7 +200,8 @@ def sync(home, seat):
                 continue
             if hermes(home, "cron", "notepad", jid, "set", key, value).returncode == 0:
                 written += 1
-    print("synced: %d row(s) across %d job(s), %d key(s)" % (written, len(jobs), len(newest)))
+    print("synced: %d row(s) across %d job(s), %d key(s); pruned %d retired job(s)"
+          % (written, len(jobs), len(newest), len(stale)))
 
 
 def main(argv=None):
