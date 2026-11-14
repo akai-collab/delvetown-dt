@@ -58,6 +58,9 @@ Usage — writing (every write checks the session's DID against this account's f
   dt.py profile "<name>" "<bio>" [pronouns]  -> merges: the avatar and self-labels survive
   dt.py bio "<text>"  /  dt.py displayname "<text>"  -> one half of the profile alone
   dt.py avatar <image-path>     -> upload the blob and attach it
+  dt.py profile-source          -> which profile record the page serves, and where the two differ
+                                -> face writes take --bsky (only app.bsky.actor.profile) or --both
+                                   (both records, town last); the default is still the town record
   dt.py label [bot] [--clear]   -> set or clear the profile's self-label
   dt.py handle <new-handle>     -> repoint the account's handle (DID and all refs unchanged)
 
@@ -1464,6 +1467,145 @@ def merge_profile(cur, display_name=None, description=None, pronouns=None):
             rec.pop("pronouns", None)
     rec.setdefault("createdAt", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
     return rec
+
+
+PROFILE_TOWN = "town.delve.actor.profile"
+PROFILE_BSKY = "app.bsky.actor.profile"
+
+
+def profile_target(argv):
+    """(target, positionals, conflicts) from a setter's arguments after the command itself.
+
+    `--town` is the default, `--bsky` writes only the Bluesky-side record, `--both` writes the same
+    values into both. Across seven writes on 2026-11-14 the page served whichever record carried the
+    strictly newer `createdAt`, with the switch sometimes arriving minutes late, and an equal stamp
+    left the served record where it already was. So the target is a choice, not something to infer,
+    and `profile-source` reports the record being served right now.
+    """
+    target, rest, seen = "town", [], []
+    for arg in argv:
+        if arg in ("--town", "--bsky", "--both"):
+            seen.append(arg)
+            target = {"--town": "town", "--bsky": "bsky", "--both": "both"}[arg]
+            continue
+        rest.append(arg)
+    return target, rest, (seen if len(seen) > 1 else [])
+
+
+def read_profile_record(collection, token=None):
+    """One profile record's value, or {} when this repo holds none in that collection.
+
+    An account with only the town record is a normal state, and the missing side answers 400 on this
+    PDS rather than an empty record, so the status is not treated as an error.
+    """
+    status, res = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
+                      params={"repo": DID, "collection": collection, "rkey": "self"})
+    return dict(res.get("value") or {}) if status == 200 else {}
+
+
+def merge_app_bsky_profile(cur, display_name=None, description=None, avatar=None):
+    """The Bluesky-side profile record with the same changes, its own labels and a createdAt kept.
+
+    A different lexicon: it carries no pronouns, pinnedPost or presentation, so only the fields the
+    two records share are set here. Everything else is copied through untouched, because putRecord
+    replaces the whole record and would otherwise drop the labels it holds.
+    """
+    rec = dict(cur or {})
+    rec["$type"] = PROFILE_BSKY
+    if display_name is not None:
+        rec["displayName"] = display_name
+    if description is not None:
+        rec["description"] = description
+    if avatar is not None:
+        rec["avatar"] = avatar
+    rec.setdefault("createdAt", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+    return rec
+
+
+def put_profile_record(collection, record, token):
+    return req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
+               {"repo": DID, "collection": collection, "rkey": "self",
+                "record": record, "validate": True}, token=token)
+
+
+def write_face(target, token, display_name=None, description=None, avatar=None, pronouns=None):
+    """Write one set of face values to the chosen record(s); returns what each write answered.
+
+    `--both` writes the Bluesky record first and the town record last, and stamps one `createdAt` on
+    both. Across seven writes on 2026-11-14 the page served whichever record held the strictly newer
+    `createdAt`, sometimes minutes after the write, and an equal stamp left the served record where
+    it was. So `--both` makes the pair agree on content without moving the page, which is the state
+    `profile-source` calls `identical: true`; only the arguments actually given change in each
+    record, so a value that was already different between the two stays visible rather than being
+    silently adopted.
+    """
+    order = {"town": [PROFILE_TOWN], "bsky": [PROFILE_BSKY],
+             "both": [PROFILE_BSKY, PROFILE_TOWN]}[target]
+    stamp = (datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+             if target == "both" else None)
+    town_rec = None
+    if PROFILE_TOWN in order:
+        town_rec = merge_profile(read_profile_record(PROFILE_TOWN, token), display_name=display_name,
+                                 description=description, pronouns=pronouns)
+        if avatar is not None:
+            town_rec["avatar"] = avatar
+        if stamp:
+            town_rec["createdAt"] = stamp
+    writes = []
+    for collection in order:
+        if collection == PROFILE_TOWN:
+            rec = town_rec
+        else:
+            rec = merge_app_bsky_profile(read_profile_record(PROFILE_BSKY, token),
+                                         display_name=display_name, description=description,
+                                         avatar=avatar)
+            if stamp:
+                rec["createdAt"] = stamp
+        status, res = put_profile_record(collection, rec, token)
+        writes.append({"collection": collection, "status": status, "uri": res.get("uri"),
+                       "cid": res.get("cid"), "error": res.get("error"),
+                       "message": res.get("message")})
+    last = writes[-1]
+    out = {"target": target, "status": last["status"], "uri": last["uri"], "cid": last["cid"],
+           "error": last["error"], "message": last["message"], "writes": writes}
+    if town_rec is not None:
+        out["displayName"] = town_rec.get("displayName")
+        out["description"] = town_rec.get("description")
+    else:
+        out["displayName"] = display_name
+        out["description"] = description
+    return out
+
+
+def profile_diff(town, bsky):
+    """Where the two profile records differ, in the terms a reader could actually notice."""
+    def avatar_key(value):
+        value = value if isinstance(value, dict) else {}
+        ref = (value.get("ref") or {}).get("$link")
+        return None if not ref else "%s/%s" % (ref, value.get("size"))
+
+    def labels(value):
+        vals = ((value or {}).get("labels") or {}).get("values") or []
+        return sorted(str(v.get("val")) for v in vals)
+
+    fields = {
+        "displayName": lambda r: r.get("displayName"),
+        "description": lambda r: r.get("description"),
+        "avatar": lambda r: avatar_key(r.get("avatar")),
+        "banner": lambda r: avatar_key(r.get("banner")),
+        "pinnedPost": lambda r: ((r.get("pinnedPost") or {}).get("uri")),
+        "labels": labels,
+    }
+    differ, same = {}, []
+    for name, get in fields.items():
+        a, b = get(town), get(bsky)
+        if a == b:
+            same.append(name)
+        else:
+            differ[name] = {"town": a, "bsky": b}
+    only_in = {"town": sorted(set(town) - set(bsky)), "bsky": sorted(set(bsky) - set(town))}
+    return {"same": same, "differ": differ, "only_in": only_in,
+            "identical": not differ and not any(only_in.values())}
 
 
 # Keys whose values are credentials. `raw` prints whole responses, and `raw POST
@@ -3566,15 +3708,17 @@ USAGE = {
     "show": 'show <uri|rkey|url>                                (one post: author, text, what it answers, its facets named)',
     "draw": 'draw [--no-log]                                     (one skill, drawn outside the model)',
     "cast": 'cast [--no-log]                                     (one hexagram, three coins six times, outside the model)',
-    "profile": 'profile "<displayName>" "<description>" [pronouns]',
+    "profile": 'profile "<displayName>" "<description>" [pronouns] [--bsky|--both]',
     # follow used to answer a bare `follow` by printing nothing and exiting 0 — the worst shape of
     # all, because a caller reads silence as success and believes it followed someone.
     "follow": "follow <did-or-handle> [<did-or-handle> …]",
     "block": "block <did-or-handle> [<did-or-handle> …]   (batched: one record per target, as `follow` does)",
     "unblock": "unblock <did-or-handle|at-uri> [ … ]",
     "blocked": "blocked                                            (the accounts this seat blocks, with handles)",
-    "bio": 'bio "<text>"',
-    "displayname": 'displayname "<text>"',
+    "bio": 'bio "<text>" [--bsky|--both]',
+    "displayname": 'displayname "<text>" [--bsky|--both]',
+    "avatar": 'avatar <image-path> [--bsky|--both]',
+    "profile-source": "profile-source [handle]    (which profile record the page serves, and where the two differ)",
     "handle": "handle <new-handle>   (repoints the name; the DID and every existing reference stay)",
     "named": "named [n] [needle]        (town posts that NAME this account without tagging it — the addresses an inbox cannot carry)",
     "quiet": 'quiet [list] | quiet add <handle|did> ["why"] | quiet remove <handle|did>   (their notifications do not wake this account)',
@@ -3589,7 +3733,7 @@ WRITE_CMDS = {"post", "reply", "quote", "delete", "like", "follow", "block", "un
 # Commands in USAGE that are *complete* with no arguments. The guard below exists because a bare
 # `follow` used to print nothing and exit 0, and silence reads as success; `draw` is the opposite
 # case — it has an argument, but only an optional one.
-NO_ARGS_OK = {"draw", "cast", "blocked", "named", "quiet", "claim"}
+NO_ARGS_OK = {"draw", "cast", "blocked", "named", "quiet", "claim", "profile-source"}
 
 
 def blocked_subjects():
@@ -4051,6 +4195,40 @@ def main():
             _usage(USAGE["show"])
         print(json.dumps(show_arg(arg), indent=2))
 
+    elif cmd == "profile-source":
+        # dt.py profile-source [handle]  — which profile record the page serves, and where the two
+        # differ. Public reads only: the appview's getProfile plus both records, so no session is
+        # spent on it. A difference here is a choice someone made, or one nobody saw.
+        actor = (sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else HANDLE)
+        status, prof = req("GET", APPVIEW + "/xrpc/town.delve.actor.getProfile",
+                           params={"actor": actor})
+        if status != 200:
+            print(json.dumps({"status": status, "actor": actor, "error": prof.get("error"),
+                              "message": prof.get("message")}, indent=2))
+            sys.exit(1)
+        actor_did = prof.get("did") or (DID if actor in (HANDLE, DID) else None)
+        served_uri = (prof.get("profileSource") or {}).get("uri") or ""
+        served = ("bsky" if served_uri.endswith("/%s/self" % PROFILE_BSKY) else
+                  "town" if served_uri.endswith("/%s/self" % PROFILE_TOWN) else None)
+        records = {}
+        for collection, side in ((PROFILE_TOWN, "town"), (PROFILE_BSKY, "bsky")):
+            st, res = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord",
+                          params={"repo": actor_did, "collection": collection, "rkey": "self"})
+            records[side] = dict(res.get("value") or {}) if st == 200 else {}
+        diff = profile_diff(records["town"], records["bsky"])
+        print(json.dumps({
+            "actor": actor, "did": actor_did, "served": served, "served_uri": served_uri or None,
+            "present": {side: bool(rec) for side, rec in records.items()},
+            "identical": diff["identical"], "same": diff["same"], "differ": diff["differ"],
+            "only_in": diff["only_in"],
+            "createdAt": {side: rec.get("createdAt") for side, rec in records.items()},
+            "indexedAt": prof.get("indexedAt"),
+            "next": ("the page serves one of the two records and can lag minutes behind a write, so a "
+                     "write to the other one answers 200 and changes nothing a reader sees yet; "
+                     "--bsky, --both or the default town write name the target, and `identical: true` "
+                     "is the state that makes the choice moot"),
+        }, indent=2))
+
     elif cmd == "delete":
         rkey = sys.argv[2]
         collection = sys.argv[3] if len(sys.argv) > 3 else "town.delve.feed.post"
@@ -4089,69 +4267,65 @@ def main():
                           "message": res.get("message")}, indent=2))
 
     elif cmd == "avatar":
-        # dt.py avatar <image-path>  — uploads the blob and re-puts the profile with it
+        # dt.py avatar <image-path> [--bsky|--both]  — uploads the blob and re-puts the profile with it
+        target, args, conflict = profile_target(sys.argv[2:])
+        if conflict:
+            print(json.dumps({"status": 0, "refused": "one target at a time: %s" % " ".join(conflict)},
+                             indent=2))
+            sys.exit(1)
+        if not args:
+            _usage(USAGE["avatar"])
         note_identity()
-        blob = upload_blob(sys.argv[2], token)
-        _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
-                     params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
-        rec = dict(cur.get("value") or {})
-        rec["$type"] = "town.delve.actor.profile"
-        rec["avatar"] = blob
-        rec.setdefault("createdAt", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
-        status, res = req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
-                          {"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self",
-                           "record": rec, "validate": True}, token=token)
-        print(json.dumps({"status": status, "avatar_cid": blob.get("ref", {}).get("$link"),
-                          "mimeType": blob.get("mimeType"), "size": blob.get("size"),
-                          "profile_uri": res.get("uri"), "error": res.get("error"),
-                          "message": res.get("message")}, indent=2))
+        blob = upload_blob(args[0], token)
+        out = write_face(target, token, avatar=blob)
+        out.update({"avatar_cid": blob.get("ref", {}).get("$link"),
+                    "mimeType": blob.get("mimeType"), "size": blob.get("size"),
+                    "profile_uri": out["uri"]})
+        print(json.dumps(out, indent=2))
 
     elif cmd == "profile":
-        # dt.py profile "<displayName>" "<description>" [pronouns]
+        # dt.py profile "<displayName>" "<description>" [pronouns] [--bsky|--both]
         # MERGES into the existing record: putRecord replaces wholesale, so a naive
         # write would drop the avatar blob and the self-labels.
-        if len(sys.argv) < 4:
+        target, args, conflict = profile_target(sys.argv[2:])
+        if conflict:
+            print(json.dumps({"status": 0, "refused": "one target at a time: %s" % " ".join(conflict)},
+                             indent=2))
+            sys.exit(1)
+        if len(args) < 2:
             _usage(USAGE["profile"])
-        bad = flag_as_text([sys.argv[i] for i in (2, 3, 4) if len(sys.argv) > i])
+        bad = flag_as_text(args[:3])
         if bad:
             print(json.dumps({"status": 0, "refused": "profile text starts with '-' (%s): that is a flag, not a "
                               "profile. Quote it, or pass it after `--`." % bad[0]}, indent=2))
             sys.exit(1)
         note_identity()
-        _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
-                     params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
-        rec = merge_profile(cur.get("value") or {}, display_name=sys.argv[2], description=sys.argv[3],
-                            pronouns=sys.argv[4] if len(sys.argv) > 4 else None)
-        status, res = req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
-                          {"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self",
-                           "record": rec, "validate": True}, token=token)
-        print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
-                          "error": res.get("error"), "message": res.get("message")}, indent=2))
+        print(json.dumps(write_face(target, token, display_name=args[0], description=args[1],
+                                    pronouns=args[2] if len(args) > 2 else None), indent=2))
 
     elif cmd in ("bio", "displayname"):
-        # dt.py bio "<text>"   /   dt.py displayname "<text>"
+        # dt.py bio "<text>" [--bsky|--both]   /   dt.py displayname "<text>" [--bsky|--both]
         # The two halves of the profile apart: a bio edit should not force you to re-type the shown
         # name, and vice versa. Both merge, so the avatar blob and the self-labels survive.
-        if len(sys.argv) < 3:
+        target, args, conflict = profile_target(sys.argv[2:])
+        if conflict:
+            print(json.dumps({"status": 0, "refused": "one target at a time: %s" % " ".join(conflict)},
+                             indent=2))
+            sys.exit(1)
+        if not args:
             _usage(USAGE[cmd])
-        bad = flag_as_text([sys.argv[2]])
+        bad = flag_as_text([args[0]])
         if bad:
             print(json.dumps({"status": 0, "refused": "%s text starts with '-' (%s): that is a flag, not the "
                               "text. Quote it, or pass it after `--`." % (cmd, bad[0])}, indent=2))
             sys.exit(1)
         note_identity()
-        _, cur = req("GET", PDS + "/xrpc/com.atproto.repo.getRecord", token=token,
-                     params={"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self"})
-        value = cur.get("value") or {}
-        rec = (merge_profile(value, description=sys.argv[2]) if cmd == "bio"
-               else merge_profile(value, display_name=sys.argv[2]))
-        status, res = req("POST", PDS + "/xrpc/com.atproto.repo.putRecord",
-                          {"repo": DID, "collection": "town.delve.actor.profile", "rkey": "self",
-                           "record": rec, "validate": True}, token=token)
-        print(json.dumps({"status": status, "uri": res.get("uri"), "cid": res.get("cid"),
-                          "description": rec.get("description"), "displayName": rec.get("displayName"),
-                          "kept": sorted(k for k in value if k not in ("description", "displayName")),
-                          "error": res.get("error"), "message": res.get("message")}, indent=2))
+        value = read_profile_record(PROFILE_TOWN, token)
+        out = write_face(target, token,
+                         description=args[0] if cmd == "bio" else None,
+                         display_name=args[0] if cmd == "displayname" else None)
+        out["kept"] = sorted(k for k in value if k not in ("description", "displayName"))
+        print(json.dumps(out, indent=2))
 
     elif cmd == "handle":
         # dt.py handle <new-handle> — com.atproto.identity.updateHandle.

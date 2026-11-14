@@ -2,7 +2,7 @@
 
 On 2026-11-09 a run from the card-drawer's session executed `dt bio --help`; dt.py fell back to akai's
 identity and published the literal string "--help" as this account's town bio. These tests run the real
-CLI with no network: the refusal happens before any request is made.
+CLI under `DT_DRY_RUN=1`, so the refusal happens before any request and no request leaves the machine.
 """
 import json
 import os
@@ -19,6 +19,12 @@ def run(*args, env=None):
     e.pop("DT_ACCOUNT", None)
     e.pop("DT_HANDLE", None)
     e.pop("DT_DID", None)
+    # DT_DRY_RUN=1 is not decoration. Without it these tests run the real client against the real
+    # PDS, and `bio "a plain sentence"` below is a working write: on 2026-11-14 a suite run left
+    # this account's town bio reading "a plain sentence", and the "no network here" note in this
+    # file was simply false. A dry run answers every request from the stub, which is what the
+    # refusal tests were always meant to exercise.
+    e["DT_DRY_RUN"] = "1"
     e.update(env or {})
     return subprocess.run([sys.executable, DT, *args], cwd=ROOT, capture_output=True, text=True,
                           timeout=60, env=e)
