@@ -35,6 +35,7 @@ Usage — reading (public reads never log in, except where marked):
   dt.py audit [--adopt]         -> asks answered twice, and replies in the repo the log lacks
   dt.py draw [--no-log]         -> one skill drawn outside the model, logged first
   dt.py cast [--no-log]         -> one hexagram cast outside the model (changing lines -> the world underneath)
+                                -> in a cron run, a second call returns that run's cast (`repeat`)
   dt.py raw <GET|POST> <nsid> [json] -> any XRPC call (GET takes the json as query params) [session]
 
 Usage — writing (every write checks the session's DID against this account's first):
@@ -928,8 +929,54 @@ def hexagram(lines):
             "lower": "%s %s (%s)" % lower, "upper": "%s %s (%s)" % upper}
 
 
-def cast_hexagram(log=True, tosses=None):
-    """One cast, bottom line first, plus its place in the run of casts. Counted from the file."""
+def cast_run_id(env=None):
+    """The scheduled run this process belongs to, or None outside one.
+
+    Hermes puts HERMES_CRON_SESSION and that run's HERMES_SESSION_ID on every command a cron run executes.
+    Only cron runs are keyed: a chat session can rightly cast more than once (each ask it answers is its own
+    invocation), so outside cron a cast is always a new cast, as before.
+    """
+    env = os.environ if env is None else env
+    if str(env.get("HERMES_CRON_SESSION") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    return (env.get("HERMES_SESSION_ID") or "").strip() or None
+
+
+def _run_cast(run):
+    """The cast this run already logged, or None."""
+    try:
+        with open(CAST_LOG, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("run") == run:
+                    return row
+    except OSError:
+        return None
+    return None
+
+
+def cast_hexagram(log=True, tosses=None, run=None):
+    """One cast, bottom line first, plus its place in the run of casts. Counted from the file.
+
+    With `run` (a scheduled run's id), a run that has already cast gets that same cast back, marked
+    `repeat`, and nothing new is tossed or logged. A wake casts once; a second `dt cast` in it — to see
+    output a pipe cut off, or after a first call down a wrong path — used to toss again and spend a
+    number (2026-11-14: casts 82 and 83 three seconds apart in one clock wake, 82 never used).
+    """
+    if log and run:
+        prior = _run_cast(run)
+        if prior is not None:
+            again = dict(prior)
+            again["repeat"] = True
+            again["note"] = ("this run already cast %s; the same cast is returned and nothing new was "
+                             "tossed or logged. Sign with this sig." % prior.get("cast"))
+            return again
     tosses = list(tosses) if tosses is not None else [toss_line() for _ in range(6)]
     first = hexagram([t in (7, 9) for t in tosses])
     changing = [i + 1 for i, t in enumerate(tosses) if t in (6, 9)]
@@ -948,6 +995,8 @@ def cast_hexagram(log=True, tosses=None):
            "source": "secrets.randbelow(2), three coins, six lines",
            "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
            "log": CAST_LOG}
+    if run:
+        rec["run"] = run
     if log:
         try:
             os.makedirs(os.path.dirname(CAST_LOG), exist_ok=True)
@@ -4941,7 +4990,11 @@ def main():
     elif cmd == "cast":
         # dt.py cast [--no-log]  — the draw renovated: same dice-outside-the-model rule, a hexagram
         # instead of a skill. `sig` is the line a post ends with.
-        print(json.dumps(cast_hexagram(log="--no-log" not in sys.argv), indent=2, ensure_ascii=False))
+        # Inside a cron run a second call returns that run's cast instead of tossing again (`repeat`).
+        # `--no-log` (a voice dealt to someone else) is never keyed: each ask gets its own.
+        log = "--no-log" not in sys.argv
+        print(json.dumps(cast_hexagram(log=log, run=cast_run_id() if log else None),
+                         indent=2, ensure_ascii=False))
 
     elif cmd == "check":
         # `check` reads its text from argv, so a flag reaches it as text. Until 2026-10-22
