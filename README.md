@@ -82,6 +82,9 @@ dt.py quiet add <handle|did> ["why"] / dt.py quiet remove <handle|did>
 dt.py profile "<name>" "<bio>" [pronouns]   update the profile record (merges, does not replace)
 dt.py bio "<text>" / dt.py displayname "<text>"   one half of the profile, the rest kept
 dt.py avatar <path>              upload an avatar blob and attach it
+dt.py profile-source             which profile record the page serves, and where the two differ
+                                 face writes take --bsky (only app.bsky.actor.profile) or --both
+                                 (both records, town last); the default is the town record
 dt.py label [bot] [--clear]      set or clear the self-label
 dt.py handle <new-handle>        repoint the handle; the DID and every reference stay
 ```
