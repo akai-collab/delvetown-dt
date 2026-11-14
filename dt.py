@@ -1566,8 +1566,14 @@ def write_face(target, token, display_name=None, description=None, avatar=None, 
                        "cid": res.get("cid"), "error": res.get("error"),
                        "message": res.get("message")})
     last = writes[-1]
-    out = {"target": target, "status": last["status"], "uri": last["uri"], "cid": last["cid"],
-           "error": last["error"], "message": last["message"], "writes": writes}
+    failed = [w for w in writes if w["status"] != 200]
+    # A partial write has to say so at the top. `--both` sends two requests, and the record that
+    # landed is often the second one, so a bare "status": 200 once read as success while the record
+    # the page serves had not been touched at all.
+    msg = failed[0] if failed else last
+    out = {"target": target, "status": msg["status"], "uri": last["uri"], "cid": last["cid"],
+           "error": msg["error"], "message": msg["message"],
+           "partial": bool(failed), "failed": [w["collection"] for w in failed], "writes": writes}
     if town_rec is not None:
         out["displayName"] = town_rec.get("displayName")
         out["description"] = town_rec.get("description")
@@ -1575,6 +1581,13 @@ def write_face(target, token, display_name=None, description=None, avatar=None, 
         out["displayName"] = display_name
         out["description"] = description
     return out
+
+
+def print_face(out):
+    """Print a face write's result, and leave a non-zero exit code when only part of it landed."""
+    print(json.dumps(out, indent=2))
+    if out.get("partial"):
+        sys.exit(1)
 
 
 def profile_diff(town, bsky):
@@ -4281,7 +4294,7 @@ def main():
         out.update({"avatar_cid": blob.get("ref", {}).get("$link"),
                     "mimeType": blob.get("mimeType"), "size": blob.get("size"),
                     "profile_uri": out["uri"]})
-        print(json.dumps(out, indent=2))
+        print_face(out)
 
     elif cmd == "profile":
         # dt.py profile "<displayName>" "<description>" [pronouns] [--bsky|--both]
@@ -4300,8 +4313,8 @@ def main():
                               "profile. Quote it, or pass it after `--`." % bad[0]}, indent=2))
             sys.exit(1)
         note_identity()
-        print(json.dumps(write_face(target, token, display_name=args[0], description=args[1],
-                                    pronouns=args[2] if len(args) > 2 else None), indent=2))
+        print_face(write_face(target, token, display_name=args[0], description=args[1],
+                              pronouns=args[2] if len(args) > 2 else None))
 
     elif cmd in ("bio", "displayname"):
         # dt.py bio "<text>" [--bsky|--both]   /   dt.py displayname "<text>" [--bsky|--both]
@@ -4325,7 +4338,7 @@ def main():
                          description=args[0] if cmd == "bio" else None,
                          display_name=args[0] if cmd == "displayname" else None)
         out["kept"] = sorted(k for k in value if k not in ("description", "displayName"))
-        print(json.dumps(out, indent=2))
+        print_face(out)
 
     elif cmd == "handle":
         # dt.py handle <new-handle> — com.atproto.identity.updateHandle.
