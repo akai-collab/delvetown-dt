@@ -8,6 +8,8 @@ These tests hold the three things the flag must not break: the default stays the
 bad target pairing is refused before anything is written.
 """
 import importlib.util
+import io
+import contextlib
 import json
 import os
 import subprocess
@@ -129,12 +131,15 @@ class Writes(unittest.TestCase):
     def setUp(self):
         self.dt = dt_module()
         self.puts = []
+        self.fail = set()
         self.records = {"town.delve.actor.profile": {"description": "old", "avatar": {"ref": {"$link": "c"}}},
                         "app.bsky.actor.profile": {"description": "old",
                                                    "labels": {"values": [{"val": "bot"}]}}}
         self.dt.read_profile_record = lambda coll, token=None: dict(self.records[coll])
 
         def fake_put(collection, record, token):
+            if collection in self.fail:
+                return 400, {"error": "InvalidRequest", "message": "grapheme too big"}
             self.puts.append((collection, dict(record)))
             return 200, {"uri": "at://x/" + collection, "cid": "bafy" + str(len(self.puts))}
         self.dt.put_profile_record = fake_put
@@ -163,6 +168,35 @@ class Writes(unittest.TestCase):
         self.assertEqual(len(self.puts), 1)
         self.assertEqual(self.puts[0][1]["createdAt"], "2026-10-14T11:58:36.901Z")
         self.assertEqual(self.puts[0][1]["$type"], "town.delve.actor.profile")
+
+    def test_a_clean_write_says_it_is_not_partial(self):
+        out = self.dt.write_face("both", None, description="new")
+        self.assertEqual((out["status"], out["partial"], out["failed"]), (200, False, []))
+
+    def test_a_failed_side_is_not_reported_as_success(self):
+        # The bsky record refuses and the town write lands, which is the shape that used to print
+        # "status": 200 because the last write was the successful one.
+        self.fail = {"app.bsky.actor.profile"}
+        out = self.dt.write_face("both", None, description="new")
+        self.assertTrue(out["partial"])
+        self.assertEqual(out["status"], 400)
+        self.assertEqual(out["failed"], ["app.bsky.actor.profile"])
+        self.assertEqual(out["error"], "InvalidRequest")
+        self.assertEqual([w["status"] for w in out["writes"]], [400, 200])
+
+    def test_a_partial_write_leaves_a_non_zero_exit_code(self):
+        self.fail = {"app.bsky.actor.profile"}
+        out = self.dt.write_face("both", None, description="new")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertRaises(SystemExit) as caught:
+            self.dt.print_face(out)
+        self.assertEqual(caught.exception.code, 1)
+        self.assertTrue(json.loads(buffer.getvalue())["partial"])
+
+    def test_a_clean_write_exits_zero(self):
+        out = self.dt.write_face("both", None, description="new")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.dt.print_face(out)          # no SystemExit: the call must simply return
 
 
 if __name__ == "__main__":
