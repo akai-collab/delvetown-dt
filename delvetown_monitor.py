@@ -193,6 +193,20 @@ RETRY_MAX = int(os.environ.get("AT_MCP_WAKE_RETRY_MAX") or 3)
 REOFFER_AFTER_S = int(os.environ.get("AT_MCP_WAKE_REOFFER_AFTER_S") or 2700)
 REOFFER_WINDOW_S = int(os.environ.get("AT_MCP_WAKE_REOFFER_WINDOW_S") or 7200)
 REOFFER_MAX = int(os.environ.get("AT_MCP_WAKE_REOFFER_MAX") or 12)
+# A person's item has its own, shorter limit. The settle window restarts with every new arrival, so in a
+# busy hour one remark from a person waits behind the agents' traffic until MAX_WAIT_S: on 2026-11-15 a
+# hello posted at 20:22Z was first seen at 20:24Z, three agents' replies restarted the window in turn, and
+# the batch fired at 21:24Z — an hour, where the town's slowest agents answer hourly and a person leaves.
+# So a ready item from a person makes the batch ripe once IT has waited HUMAN_WAIT_S, whatever else has
+# arrived since; the rest of the queue rides along. Not instant on purpose: a person who writes twice in
+# ten minutes still gets one run. The sum to budget is first-seen lag (one tick) + HUMAN_WAIT_S + one tick
+# + the run: with 5-6 minute ticks and a 7-8 minute run, 1200 answers inside about 40 minutes.
+#   Who is a person: no `bot` label on the author as the appview shows them, and the operator's verdict in
+# HUMANS_FILE is `human` (keyed by DID; hand-made, see refresh-town-dump.sh). An account missing from the
+# file, or marked `?`, is not guessed at: it keeps the ordinary windows. Pacing, holds and the quiet list
+# apply as before — this shortens a wait, it does not jump a guard. 0 (the default) turns it off.
+HUMAN_WAIT_S = int(os.environ.get("AT_MCP_WAKE_HUMAN_WAIT_S") or 0)
+HUMANS_FILE = os.environ.get("DT_HUMANS_FILE") or _home("delve-dump", "verdicts-by-did.json")
 
 # --- the direct reader (DT_MONITOR_READER=xrpc). Its session cache is its own, not dt.py's:
 # refreshSession rotates the refresh token, so two programs taking turns with one cache would each be
@@ -554,6 +568,7 @@ def _item(n):
     root = (reply.get("root") or {}).get("uri") or (reply.get("parent") or {}).get("uri")
     return {"reason": n.get("reason"), "author": author.get("handle") or author.get("did"),
             "author_did": author.get("did"), "root": root,
+            "bot": any(isinstance(l, dict) and l.get("val") == "bot" for l in author.get("labels") or []),
             "parent": (reply.get("parent") or {}).get("uri"),
             "uri": n.get("uri"), "indexed_at": n.get("indexedAt"), "is_read": n.get("isRead"),
             "text": record.get("text") or ""}
@@ -826,7 +841,7 @@ QUIET_LINE = "wake=none"
 
 
 def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_at=None, answered=None,
-                doubles=None, threads=None):
+                doubles=None, threads=None, humans=None):
     """Decide whether this tick wakes the model. Returns (output, new_state).
 
     The scheduler wakes the model when the output differs from the last tick's, so the decision is
@@ -841,6 +856,8 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     - a batch waits until SETTLE_S has passed since the newest actionable item was first seen (a reply
       arriving mid-thread is usually followed by another), but never longer than MAX_WAIT_S since the
       oldest — a busy thread cannot postpone its own answer for ever.
+    - a ready item from a person (`humans`, read from HUMANS_FILE by default; see `is_human`) makes the
+      batch ripe once that item has waited HUMAN_WAIT_S, however recently anything else arrived.
     - `held` (see `held_reason`) postpones a ripe batch without dropping it.
     - an item from an account on the quiet list never wakes (`quiet`, read from QUIET_FILE by default);
       an item in a thread this account has been answering fast waits out its pace (`replies`, read from
@@ -995,6 +1012,10 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     seen = [e["t"] for e in ready.values()]
     newest, oldest = max(seen), min(seen)
     ripe = now - newest >= SETTLE_S or now - oldest >= MAX_WAIT_S
+    if not ripe and HUMAN_WAIT_S > 0:
+        humans = human_dids(now) if humans is None else humans
+        person = [e["t"] for e in ready.values() if is_human(e["item"], humans)]
+        ripe = bool(person) and now - min(person) >= HUMAN_WAIT_S
     if not ripe or held:
         return st["last"], st
 
@@ -1077,6 +1098,42 @@ def quiet_list(path=None):
             if isinstance(v, str) and v.strip():
                 names.add(v.strip().lstrip("@").lower())
     return names
+
+
+def human_dids(now=None, path=None):
+    """The DIDs the operator has judged to be people, lowercased, or an empty set.
+
+    HUMANS_FILE is `{did: {"handle": ..., "verdict": "human" | "agent" | "?", ...}}`. An account that has
+    changed hands carries an `as` list of dated verdicts (`from`/`until`, ISO); the one covering `now`
+    wins over the top-level verdict. Unreadable is an empty set, never an error: stderr is merged into
+    the monitored output, and with nobody known to be a person every item keeps the ordinary windows."""
+    try:
+        with open(path or HUMANS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    now = time.time() if now is None else now
+    out = set()
+    for did, e in (data.items() if isinstance(data, dict) else []):
+        if not isinstance(e, dict):
+            continue
+        verdict = e.get("verdict")
+        for span in e.get("as") if isinstance(e.get("as"), list) else []:
+            if not isinstance(span, dict):
+                continue
+            start = _epoch(span.get("from")) if span.get("from") else 0
+            end = _epoch(span.get("until")) if span.get("until") else float("inf")
+            if start <= now < end:
+                verdict = span.get("verdict")
+        if verdict == "human":
+            out.add(str(did).strip().lower())
+    return out
+
+
+def is_human(it, humans):
+    """A person's item: the author carries no `bot` label and the operator's verdict says human."""
+    return (bool(humans) and not it.get("bot")
+            and str(it.get("author_did") or "").strip().lower() in humans)
 
 
 def quiet_threads(path=None):

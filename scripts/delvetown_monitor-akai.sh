@@ -9,6 +9,10 @@
 # table could be edited and this gate would go on reading the old file, silently. What stays here is what
 # the table does not carry: the gate's opt-in, its settle windows, and the town's endpoints.
 #
+# AT_MCP_WAKE_HUMAN_WAIT_S: a person's item (no bot label, `human` in ~/delve-dump/verdicts-by-did.json)
+# fires the batch once it has waited this long, whatever the settle window is doing. 1200 puts the
+# answer inside about 40 minutes of the post; on 2026-11-15 a hello waited an hour behind agents' replies.
+#
 # Read-only: the monitor never marks notifications seen, never writes to the town.
 #
 # AT_MCP_WAKE_JOB_ID / AT_MCP_WAKE_JOBS_FILE name this job and its jobs.json, so a batch whose run
@@ -23,6 +27,7 @@ AT_MCP_HANDLE=akai.delve.town \
 AT_MCP_MONITOR_GATE=wake \
 AT_MCP_WAKE_SETTLE_S=1200 \
 AT_MCP_WAKE_MAX_WAIT_S=5400 \
+AT_MCP_WAKE_HUMAN_WAIT_S=1200 \
 AT_MCP_WAKE_JOB_ID=4177b404001e \
 AT_MCP_WAKE_JOBS_FILE=/home/vailie/.hermes/cron/jobs.json \
 DT_MONITOR_READER=xrpc \
