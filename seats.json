@@ -15,7 +15,7 @@
    "files": {
     "publish_log": "publish-log.jsonl",
     "session": "session.json",
-    "quiet": "quiet.json",
+    "quiet": "quiet-akai.json",
     "claims": "claims-akai.json",
     "wake": "wake-akai.json",
     "monitor_session": "monitor-session-akai.json",

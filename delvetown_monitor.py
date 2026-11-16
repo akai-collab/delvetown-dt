@@ -149,7 +149,7 @@ WRITE_BURST, WRITE_HOUR, GUARDED_KINDS = 6, 16, ("post", "reply", "delete")   # 
 # matched by DID first: a handle is not stable (octavius became octavia on 19 Oct), and a list keyed by
 # handle stops matching through a rename without saying so.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state(
-    "quiet", "quiet.json" if ACCOUNT == "akai" else "quiet-%s.json" % ACCOUNT)
+    "quiet", "quiet-%s.json" % ACCOUNT)
 # Threads whose notifications never wake this account: a root uri and everything under it. The account
 # list cannot say "this conversation is running and I do not want a wake for it" — the speakers are
 # strangers — and no tag has to be on the root for the thread to be recognisable, because every
@@ -160,7 +160,7 @@ QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state(
 LANE_EXCLUDE_FILE = os.environ.get("DT_LANE_EXCLUDE_FILE") or _state(
     "lane_exclude", "lane-exclude-%s.json" % ACCOUNT)
 QUIET_THREADS_FILE = os.environ.get("DT_QUIET_THREADS_FILE") or _state(
-    "quiet_threads", "quiet-threads.json" if ACCOUNT == "akai" else "quiet-threads-%s.json" % ACCOUNT)
+    "quiet_threads", "quiet-threads-%s.json" % ACCOUNT)
 # Thread pacing, in the notification layer only: a notification in a thread where this account has just
 # been answering one counterpart waits longer before it may wake the account, and the wait doubles with
 # each turn — PACE_PAIR_S after the first reply to that account there, twice that after the second, and

@@ -237,7 +237,8 @@ WRITE_HOUR = 16      # publishing writes allowed in any 60 minutes before the gu
 GUARDED_KINDS = ("post", "reply", "delete")
 
 # The quiet list, shared with delvetown_monitor.py (which reads the same file, named the same way: by the
-# handle's first label, so locksmith's file is quiet-skillissue.json in both). It only decides what WAKES the
+# handle's first label, so akai's file is quiet-akai.json and locksmith's quiet-skillissue.json in both).
+# It only decides what WAKES the
 # account: it exists to break the loop of two bots waking each other with their notifications, not to say
 # who may be answered — a listed account can still be answered, and one that should not be is blocked. This
 # client only edits it (`dt.py quiet`). Thread pacing is the monitor's alone, for the same reason: it spaces
@@ -245,7 +246,7 @@ GUARDED_KINDS = ("post", "reply", "delete")
 # Resolved against HERMES_REAL_HOME as the monitor resolves it: a profile can run with its own HOME, and
 # two programs reading "the" quiet list from two homes would each hold a different one.
 QUIET_FILE = os.environ.get("DT_QUIET_FILE") or _state_file(
-    "quiet", "quiet.json" if HANDLE.split(".")[0] == "akai" else "quiet-%s.json" % HANDLE.split(".")[0])
+    "quiet", "quiet-%s.json" % HANDLE.split(".")[0])
 
 # Claims: one run composes an item at a time. (What is owed — a quiz's tally — lives on the Hermes board
 # `delvetown` since 2026-10-24; the obligation rows this file used to hold are no longer read.)
@@ -634,10 +635,10 @@ def _repo_of(uri):
 
 # Threads whose notifications never wake this account: a root uri and everything under it. The account
 # list cannot express it (the speakers are strangers) and a tag need not be there at all. Read by the
-# monitor every tick, written only here, same shape as the quiet list.
+# monitor every tick, written only here, same shape as the quiet list. The file name carries the seat's
+# own label: the state dir is shared, so a bare "quiet-threads.json" reads as nobody's.
 QUIET_THREADS_FILE = os.environ.get("DT_QUIET_THREADS_FILE") or _state_file(
-    "quiet_threads", "quiet-threads.json" if HANDLE.split(".")[0] == "akai"
-    else "quiet-threads-%s.json" % HANDLE.split(".")[0])
+    "quiet_threads", "quiet-threads-%s.json" % HANDLE.split(".")[0])
 
 QUIETYEAR_TAG = "#quietyear"
 
