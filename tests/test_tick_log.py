@@ -40,6 +40,7 @@ class TickLog(unittest.TestCase):
         self.m.QUIET_THREADS_FILE = os.path.join(self.tmp, "quiet-threads.json")
         self.m.HUMANS_FILE = os.path.join(self.tmp, "verdicts-by-did.json")
         self.m.TICKS_LOG = os.path.join(self.tmp, "monitor-ticks-test.log")
+        self.m.GATE = "wake"      # the tick log belongs to a gate tick, not a bare digest run
         self.m.SETTLE_S, self.m.MAX_WAIT_S, self.m.HUMAN_WAIT_S = 1200, 5400, 0
 
     def tearDown(self):
@@ -54,10 +55,16 @@ class TickLog(unittest.TestCase):
     def fields(self, line):
         return dict(p.split("=", 1) for p in line.split()[1:] if "=" in p)
 
-    def test_the_path_is_named_for_the_seat(self):
+    def test_the_path_is_named_for_the_seat_and_off_by_default(self):
         os.environ.pop("AT_MCP_TICKS_LOG", None)
-        m = load(MONITOR, "mon_tick_log_default")
-        self.assertTrue(m.TICKS_LOG.endswith("monitor-ticks-%s.log" % m.ACCOUNT), m.TICKS_LOG)
+        os.environ.pop("AT_MCP_TICKS", None)
+        self.assertEqual(load(MONITOR, "mon_tick_off").TICKS_LOG, "", "a test import must write nothing")
+        os.environ["AT_MCP_TICKS"] = "1"
+        try:
+            m = load(MONITOR, "mon_tick_on")
+            self.assertTrue(m.TICKS_LOG.endswith("monitor-ticks-%s.log" % m.ACCOUNT), m.TICKS_LOG)
+        finally:
+            os.environ.pop("AT_MCP_TICKS", None)
 
     def test_a_settling_tick_says_so(self):
         out, _ = self.m.wake_output([item("a", AGENT)], {}, T0 + 60, held=None, replies=[], answered={})

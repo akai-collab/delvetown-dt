@@ -131,8 +131,11 @@ WAKE_LIMIT = 25    # notifications read per tick in wake mode: ten could scroll 
 WAKE_STATE = os.environ.get("AT_MCP_WAKE_STATE") or _state("wake", "wake-%s.json" % ACCOUNT)
 # One line per gate tick, in a side file: why it waited, or that it fired. NOT stdout: stdout is what
 # the scheduler hashes, so a line there that moves on a timer would wake the model for a non-event.
-TICKS_LOG = os.environ.get("AT_MCP_TICKS_LOG") or _state(
-    "monitor_ticks", "monitor-ticks-%s.log" % ACCOUNT)
+# Off unless a wrapper asks for it (AT_MCP_TICKS=1), so a test that imports this module and calls the
+# gate writes nothing into the live state directory; the name follows the account, not the wrapper.
+TICKS_LOG = os.environ.get("AT_MCP_TICKS_LOG") or (
+    _state("monitor_ticks", "monitor-ticks-%s.log" % ACCOUNT)
+    if (os.environ.get("AT_MCP_TICKS") or "").strip() not in ("", "0") else "")
 TICKS_KEEP = 400        # lines kept: enough for a day or two, not a history
 SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _state(
     "session", "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT)
@@ -853,8 +856,8 @@ def _tick(verdict, st=None, now=None, ready=0, next_at=None, note=""):
     after a two-hour gap the only evidence used to be file timestamps. A line here says what the tick
     decided and what it was waiting for, and the file is trimmed rather than grown.
     """
-    if not TICKS_LOG:
-        return
+    if not TICKS_LOG or GATE != "wake":
+        return          # a digest run, or a module imported by a test, is not a gate tick
     now = time.time() if now is None else now
     pending = (st or {}).get("pending") or {}
     try:
