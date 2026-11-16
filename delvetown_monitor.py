@@ -129,6 +129,11 @@ WAKE_LIMIT = 25    # notifications read per tick in wake mode: ten could scroll 
 # monitor that read akai's lockout or write guard while watching a second account would hold that
 # account's wake for a reason that was never its own — and never see its own lockout at all.
 WAKE_STATE = os.environ.get("AT_MCP_WAKE_STATE") or _state("wake", "wake-%s.json" % ACCOUNT)
+# One line per gate tick, in a side file: why it waited, or that it fired. NOT stdout: stdout is what
+# the scheduler hashes, so a line there that moves on a timer would wake the model for a non-event.
+TICKS_LOG = os.environ.get("AT_MCP_TICKS_LOG") or _state(
+    "monitor_ticks", "monitor-ticks-%s.log" % ACCOUNT)
+TICKS_KEEP = 400        # lines kept: enough for a day or two, not a history
 SESSION_CACHE = os.environ.get("DT_SESSION_CACHE") or _state(
     "session", "session.json" if ACCOUNT == "akai" else "session-%s.json" % ACCOUNT)
 PUBLISH_LOG = os.environ.get("DT_PUBLISH_LOG") or _state(
@@ -840,6 +845,43 @@ def held_reason(now, session_cache=None, publish_log=None):
 QUIET_LINE = "wake=none"
 
 
+def _tick(verdict, st=None, now=None, ready=0, next_at=None, note=""):
+    """One line per gate tick, in a side file: why it waited, or that it fired.
+
+    Never printed — stdout is what the scheduler hashes, so a line that moved there would wake the
+    model for a non-event. The state file cannot answer this either: it is rewritten every tick, so
+    after a two-hour gap the only evidence used to be file timestamps. A line here says what the tick
+    decided and what it was waiting for, and the file is trimmed rather than grown.
+    """
+    if not TICKS_LOG:
+        return
+    now = time.time() if now is None else now
+    pending = (st or {}).get("pending") or {}
+    try:
+        oldest = max([now - float(e.get("t") or now) for e in pending.values()
+                      if isinstance(e, dict)] or [0]) / 60
+    except (TypeError, ValueError):
+        oldest = 0
+    parts = ["%s" % datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "seat=%s" % ACCOUNT, "verdict=%s" % verdict,
+             "pending=%d" % len(pending), "ready=%d" % ready, "oldest=%.0fm" % oldest]
+    if next_at:
+        parts.append("next=%s" % datetime.fromtimestamp(float(next_at), timezone.utc).strftime("%H:%MZ"))
+    if note:
+        parts.append("note=%s" % str(note).replace(" ", "_")[:80])
+    try:
+        os.makedirs(os.path.dirname(TICKS_LOG) or ".", exist_ok=True)
+        with open(TICKS_LOG, "a", encoding="utf-8") as f:
+            f.write(" ".join(parts) + "\n")
+        if os.path.getsize(TICKS_LOG) > 120_000:
+            with open(TICKS_LOG, encoding="utf-8") as f:
+                tail = f.readlines()[-TICKS_KEEP:]
+            with open(TICKS_LOG, "w", encoding="utf-8") as f:
+                f.writelines(tail)
+    except OSError:
+        pass        # a log that cannot be written is not a reason to change what the gate does
+
+
 def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_at=None, answered=None,
                 doubles=None, threads=None, humans=None):
     """Decide whether this tick wakes the model. Returns (output, new_state).
@@ -904,6 +946,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
                    "answered ask should carry --again")
         st["last"] = "\n".join(out)
         st["fired_at"] = None            # a report, not a batch: nothing to send again
+        _tick("double", st, now, note="doubles=%d" % len(fresh))
         return st["last"], st
 
     if items is None:
@@ -954,6 +997,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
                    "and not again: answer what is owed, and `dt.py decline <uri>` what is not.")
         st["last"] = "\n".join(out)
         st["fired_at"] = None            # not a batch of its own: a failure after it is not retried
+        _tick("reoffer", st, now, note="reoffered=%d" % len(again))
         return st["last"], st
 
     muted_names = quiet if quiet is not None else quiet_list()
@@ -998,6 +1042,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     st["pending"] = {u: e for u, e in pending.items()
                      if e["item"] is not None and now - e["t"] < FIRED_TTL_S and not closed(u)}
     if not st["pending"]:
+        _tick("nothing", st, now)
         return st["last"], st
 
     # A paced item stays in the queue, neither dropped nor counted: it cannot make a batch, and a batch
@@ -1007,16 +1052,21 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     paced = {u: paced_until(e["item"], now, replies) for u, e in st["pending"].items()}
     ready = {u: e for u, e in st["pending"].items() if not paced[u]}
     if not ready:
+        _tick("paced", st, now, next_at=min([v for v in paced.values() if v] or [0]) or None)
         return st["last"], st
 
     seen = [e["t"] for e in ready.values()]
     newest, oldest = max(seen), min(seen)
     ripe = now - newest >= SETTLE_S or now - oldest >= MAX_WAIT_S
+    person = []
     if not ripe and HUMAN_WAIT_S > 0:
         humans = human_dids(now) if humans is None else humans
         person = [e["t"] for e in ready.values() if is_human(e["item"], humans)]
         ripe = bool(person) and now - min(person) >= HUMAN_WAIT_S
     if not ripe or held:
+        _tick("held" if held else ("human-wait" if person else "settling"), st, now,
+              ready=len(ready), next_at=(min(person) + HUMAN_WAIT_S) if person else None,
+              note=held or "")
         return st["last"], st
 
     batch = sorted((e["item"] for e in ready.values()),
@@ -1055,6 +1105,7 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
     st["newest"] = max(float(st.get("newest") or 0), indexed_max)
     st["fired_at"], st["retries"], st["batch"] = now, 0, [it["uri"] for it in batch]
     st["recent"].append({"at": now, "items": batch})
+    _tick("fired", st, now, ready=len(ready), note="batch=%d" % len(batch))
     return st["last"], st
 
 
