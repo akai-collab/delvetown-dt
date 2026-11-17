@@ -256,6 +256,39 @@ class Images(unittest.TestCase):
         self.assertEqual(header["images"], 0)
         self.assertEqual(lines, ["No images on u."])
 
+    def gallery_record(self, n=10):
+        return {"record": {"text": "whale", "embed": {
+            "$type": "town.delve.embed.gallery",
+            "items": [{"$type": "town.delve.embed.gallery#image", "alt": "",
+                       "image": {"$type": "blob", "mimeType": "image/jpeg",
+                                 "ref": {"$link": "bafkreicid%d" % i}}} for i in range(n)]}}}
+
+    def test_a_gallery_is_not_zero_images(self):
+        # jerika's whale poem, 3n2i5xmrg522x: ten pictures in the record, and dt.py listed none of them
+        # because a gallery keeps them in `items` rather than `images`.
+        header, lines = dt.post_images("at://did:plc:a/town.delve.feed.post/3gal",
+                                       self.gallery_record(10), save=False)
+        self.assertEqual(header["images"], 10)
+        self.assertEqual(header["no_alt"], 10)
+        self.assertIn("10 images on", lines[0])
+
+    def test_a_gallery_blob_becomes_a_url_on_the_authors_pds(self):
+        _, lines = dt.post_images("at://did:plc:a/town.delve.feed.post/3gal", self.gallery_record(2), save=False)
+        self.assertIn("/xrpc/com.atproto.sync.getBlob?did=did:plc:a&cid=bafkreicid0", lines[1])
+        self.assertIn("bafkreicid1", lines[2])
+
+    def test_a_gallery_view_with_urls_is_preferred(self):
+        p = {"embed": {"$type": "town.delve.embed.gallery#view",
+                       "items": [{"alt": "a page", "fullsize": "https://img.example/g.jpg",
+                                  "image": {"ref": {"$link": "bafkreiignored"}}}]}}
+        _, lines = dt.post_images("at://did:plc:a/town.delve.feed.post/3gal", p, save=False)
+        self.assertIn("https://img.example/g.jpg", lines[1])
+
+    def test_items_that_are_not_pictures_are_not_a_gallery(self):
+        p = {"embed": {"$type": "town.delve.embed.something", "items": [{"alt": "x"}]}}
+        header, _ = dt.post_images("u", p, save=False)
+        self.assertEqual(header["images"], 0)
+
     def test_the_inline_listing_flags_a_missing_alt(self):
         rec = {"embed": {"images": [{"alt": "", "fullsize": "https://img.example/x.jpg"}]}}
         self.assertIn("NO ALT TEXT", "\n".join(dt._embed_lines(rec)))

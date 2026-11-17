@@ -3024,21 +3024,54 @@ IMAGE_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "
              "image/avif": ".avif", "image/heic": ".heic"}
 
 
-def _view_images(post):
-    """The images in a post VIEW (appview-hydrated: alt, thumb, fullsize), in the post's order."""
-    emb = (post or {}).get("embed") or {}
+def _blob_url(did, cid):
+    """Where the PDS serves one uploaded image: a gallery keeps its pictures as blobs, not as URLs."""
+    if not did or not cid:
+        return None
+    return "%s/xrpc/com.atproto.sync.getBlob?did=%s&cid=%s" % (PDS, did, cid)
+
+
+def _embed_images(emb):
+    """Every picture in an embed, in the post's order: `images`, `media.images`, or a gallery's `items`.
+
+    A gallery (`town.delve.embed.gallery`) holds its pictures in `items`, each with its own alt and its blob
+    under `image`. dt.py read only `images`, so jerika's ten-picture whale poem (3n2i5xmrg522x) listed as no
+    pictures at all while its record held ten, and the appview hydrated no embed to fall back on.
+    """
+    emb = emb if isinstance(emb, dict) else {}
     imgs = emb.get("images")
     if imgs is None and isinstance(emb.get("media"), dict):
         imgs = emb["media"].get("images")
-    return [i for i in (imgs or []) if isinstance(i, dict)]
+    out = [i for i in (imgs or []) if isinstance(i, dict)]
+    if out:
+        return out
+    items = emb.get("items")
+    if not isinstance(items, list) or not items:
+        return []
+    gallery = ("gallery" in str(emb.get("$type") or "").lower()
+               or all(isinstance(i, dict) and isinstance(i.get("image"), dict) for i in items))
+    if not gallery:
+        return []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        inner = it.get("image") if isinstance(it.get("image"), dict) else {}
+        ref = inner.get("ref") if isinstance(inner.get("ref"), dict) else {}
+        out.append({"alt": it.get("alt") or inner.get("alt") or "",
+                    "fullsize": it.get("fullsize") or inner.get("fullsize"),
+                    "thumb": it.get("thumb") or inner.get("thumb"),
+                    "blob": ref.get("$link")})
+    return out
+
+
+def _view_images(post):
+    """The images in a post VIEW (appview-hydrated: alt, thumb, fullsize), in the post's order."""
+    return _embed_images((post or {}).get("embed"))
 
 
 def _record_images(record):
-    emb = (record or {}).get("embed") or {}
-    imgs = emb.get("images")
-    if imgs is None and isinstance(emb.get("media"), dict):
-        imgs = emb["media"].get("images")
-    return [i for i in (imgs or []) if isinstance(i, dict)]
+    """The images in a post RECORD, where a gallery's pictures are blobs rather than URLs."""
+    return _embed_images((record or {}).get("embed"))
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -3079,6 +3112,7 @@ def post_images(uri, post, out_dir=None, fetch=None, save=True):
     """(header, lines) listing every image on `post` (a view from getPosts) and saving each one it can."""
     fetch = fetch or fetch_image
     imgs = _view_images(post) or _record_images(post.get("record"))
+    did = uri.split("/")[2] if (uri or "").count("/") >= 3 else None
     rk = (uri or "").rsplit("/", 1)[-1] or "post"
     total = len(imgs)
     no_alt = sum(1 for i in imgs if not (i.get("alt") or "").strip())
@@ -3091,6 +3125,8 @@ def post_images(uri, post, out_dir=None, fetch=None, save=True):
         alt = (img.get("alt") or "").strip()
         place = "[image %d of %d: %s]" % (n, total, alt if alt else "no alt text")
         url = img.get("fullsize") if isinstance(img.get("fullsize"), str) else None
+        if not url and img.get("blob"):
+            url = _blob_url(did, img["blob"])      # a gallery's picture is a blob on the author's PDS
         if not save:
             lines.append("%s %s" % (place, url or "no full-size URL in the post's view"))
             continue
