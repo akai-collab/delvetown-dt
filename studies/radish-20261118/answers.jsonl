@@ -1,0 +1,160 @@
+{"model": "deepseek-v4.1-flash", "arm": "B_green_nofruit", "run": 2, "raw": "cabbage", "word": "cabbage"}
+{"model": "deepseek-v4.1-flash", "arm": "B_green_nofruit", "run": 1, "raw": "He took a bite out of the crisp, green **cabbage**.", "word": "cabbage", "rerun_budget": 1500}
+{"model": "deepseek-v4.1-flash", "arm": "A_red_nofruit", "run": 3, "raw": "radish", "word": "radish"}
+{"model": "deepseek-v4.1-flash", "arm": "A_red_nofruit", "run": 0, "raw": "cabbage", "word": "cabbage", "rerun_budget": 1500}
+{"model": "deepseek-v4.1-flash", "arm": "A_red_nofruit", "run": 2, "raw": "He took a bite out of the crisp, red **cabbage**.", "word": "cabbage", "rerun_budget": 1500}
+{"model": "deepseek-v4.1-flash", "arm": "A_red_nofruit", "run": 4, "raw": "radish.", "word": "radish", "rerun_budget": 1500}
+{"model": "deepseek-v4.1-flash", "arm": "A_red_nofruit", "run": 1, "raw": "one", "word": "one", "rerun_budget": 1500}
+{"model": "deepseek-v4.1-flash", "arm": "B_green_nofruit", "run": 0, "raw": "cabbage", "word": "cabbage", "rerun_budget": 1500}
+{"model": "deepseek-v4.1-flash", "arm": "C_red_free", "run": 1, "raw": "apple", "word": "apple"}
+{"model": "deepseek-v4.1-flash", "arm": "C_red_free", "run": 0, "raw": "apple", "word": "apple"}
+{"model": "deepseek-v4.1-flash", "arm": "C_red_free", "run": 2, "raw": "apple", "word": "apple"}
+{"model": "deepseek-v4.1-flash", "arm": "C_red_free", "run": 4, "raw": "apple", "word": "apple"}
+{"model": "deepseek-v4.1-flash", "arm": "B_green_nofruit", "run": 3, "raw": "cabbage", "word": "cabbage"}
+{"model": "deepseek-v4.1-flash", "arm": "C_red_free", "run": 3, "raw": "apple", "word": "apple"}
+{"model": "deepseek-v4.1-flash", "arm": "D_red_noapple", "run": 0, "raw": "pear", "word": "pear"}
+{"model": "deepseek-v4.1-flash", "arm": "B_green_nofruit", "run": 4, "raw": "He took a bite out of the crisp, green **cabbage**.", "word": "cabbage"}
+{"model": "glm-5.3-flash", "arm": "A_red_nofruit", "run": 0, "raw": "**Pepper**\n\n\"He took a bite out of the crisp, red pepper.\"\n\nThis works because a red bell pepper is crisp, and it's treated as a vegetable in everyday English, avoiding the fruit restriction.", "word": "pepper"}
+{"model": "glm-5.3-flash", "arm": "A_red_nofruit", "run": 1, "raw": "**pepper**\n\nHe took a bite out of the crisp, red **pepper**.", "word": "pepper"}
+{"model": "glm-5.3-flash", "arm": "A_red_nofruit", "run": 4, "raw": "He took a bite out of the crisp, red **pepper**.\n\n(Other valid answers could include \"tomato\" or \"radish\" \u2014 I've avoided both \"apple\" and all fruits as requested.)", "word": "requested"}
+{"model": "glm-5.3-flash", "arm": "B_green_nofruit", "run": 0, "raw": "**leaf**\n\n\"He took a bite out of the crisp, green **leaf**.\" \u2014 a lettuce or spinach leaf fits naturally, keeping things fruit-free.", "word": "fruit-free"}
+{"model": "glm-5.3-flash", "arm": "A_red_nofruit", "run": 2, "raw": "**automobile**\n\n\"He took a bite out of the crisp, red automobile.\" \u2014 grammatically valid (though comically absurd), and it avoids all fruits. Other acceptable non-fruit options would include *brick*, *bicycle*, or *stop sign*... though *pepper* or *tomato* would be risky territory given the fruit restriction!", "word": "automobile"}
+{"model": "deepseek-v4.1-flash", "arm": "D_red_noapple", "run": 1, "raw": "He took a bite out of the crisp, red pear.", "word": "pear"}
+{"model": "glm-5.3-flash", "arm": "A_red_nofruit", "run": 3, "raw": "**popsicle**\n\n\"He took a bite out of the crisp, red **popsicle**.\"\n\nThis works grammatically and thematically \u2014 a popsicle can be crisp (icy), red (like cherry-flavored), and can definitely be bitten. And since it's a frozen treat rather than a fruit, it sidesteps the obvious \"apple\" temptation of that sentence!", "word": "temptation"}
+{"model": "glm-5.3-flash", "arm": "B_green_nofruit", "run": 2, "raw": "**lettuce**\n\n\"He took a bite out of the crisp, green lettuce.\"", "word": "lettuce"}
+{"model": "glm-5.3-flash", "arm": "B_green_nofruit", "run": 3, "raw": "**leaf**\n\n\"He took a bite out of the crisp, green **leaf**.\"", "word": "leaf"}
+{"model": "glm-5.3-flash", "arm": "B_green_nofruit", "run": 1, "raw": "**Celery**\n\n\"He took a bite out of the crisp, green celery.\"\n\nCelery fits naturally here \u2014 it's known for being both crisp and green, and taking a bite out of a celery stalk is a common, everyday action.", "word": "celery"}
+{"model": "deepseek-v4.1-flash", "arm": "D_red_noapple", "run": 4, "raw": "fruit", "word": "fruit"}
+{"model": "glm-5.3-flash", "arm": "B_green_nofruit", "run": 4, "raw": "**lettuce**\n\n\"He took a bite out of the crisp, green **lettuce**.\" \u2014 Lettuce is a leafy vegetable (not a fruit), and it's well described as crisp and green, making the sentence grammatically and logically sound.", "word": "sound"}
+{"model": "glm-5.3-flash", "arm": "C_red_free", "run": 0, "raw": "**apple**\n\n\"He took a bite out of the crisp, red **apple**.\"\n\nThe word \"apple\" fits perfectly here \u2014 apples are commonly described as crisp and come in red varieties, and \"taking a bite out of an apple\" is a natural English collocation.", "word": "collocation"}
+{"model": "glm-5.3-flash", "arm": "C_red_free", "run": 1, "raw": "**apple**\n\n\"He took a bite out of the crisp, red **apple**.\"\n\nThis fits perfectly \u2014 \"crisp\" and \"red\" are classic descriptors of an apple, and \"apple\" is a singular countable noun that completes the sentence naturally.", "word": "naturally"}
+{"model": "glm-5.3-flash", "arm": "C_red_free", "run": 3, "raw": "**apple**\n\n\"He took a bite out of the crisp, red **apple**.\"", "word": "apple"}
+{"model": "glm-5.3-flash", "arm": "C_red_free", "run": 2, "raw": "**apple**\n\n\"He took a bite out of the crisp, red **apple**.\"\n\nThe adjectives \"crisp\" and \"red\" strongly suggest an apple \u2014 a food item that is both crunchy and commonly red, and one you'd take a bite out of directly.", "word": "directly"}
+{"model": "deepseek-v4.1-flash", "arm": "D_red_noapple", "run": 2, "raw": "pepper", "word": "pepper", "rerun_budget": 1500}
+{"model": "deepseek-v4.1-flash", "arm": "D_red_noapple", "run": 3, "raw": "He took a bite out of the crisp, red pear", "word": "pear"}
+{"model": "glm-5.3-flash", "arm": "C_red_free", "run": 4, "raw": "**apple**\n\n\"He took a bite out of the crisp, red **apple**.\"\n\nThis fits naturally \u2014 \"crisp\" and \"red\" are classic descriptors for an apple, and \"took a bite out of\" pairs perfectly with it. (Other words like *tomato* or *pepper* could technically work grammatically, but \"crisp, red apple\" is the most idiomatic completion.)", "word": "apple"}
+{"model": "glm-5.3-flash", "arm": "D_red_noapple", "run": 0, "raw": "**fruit**\n\n\"He took a bite out of the crisp, red **fruit**.\"\n\nOther valid options include \"tomato,\" \"plum,\" or \"pepper\" \u2014 the sentence works with any crisp, red, biteable thing.", "word": "thing"}
+{"model": "glm-5.3-flash", "arm": "D_red_noapple", "run": 3, "raw": "He took a bite out of the crisp, red **pepper**.\n\n(A bell pepper works perfectly here \u2014 it's commonly described as crisp and comes in red.)", "word": "in"}
+{"model": "glm-5.3-flash", "arm": "D_red_noapple", "run": 4, "raw": "**pepper**\n\n\"He took a bite out of the crisp, red **pepper**.\"", "word": "pepper"}
+{"model": "glm-5.3-flash", "arm": "D_red_noapple", "run": 1, "raw": "He took a bite out of the crisp, red **plum**.\n\n(Other valid options include \"radish,\" \"pepper,\" or \"nashi\" \u2014 since a plum's crispness is debatable, \"radish\" is perhaps the most fitting single word for something both crisp and red!)", "word": "both"}
+{"model": "glm-5.3-flash", "arm": "D_red_noapple", "run": 2, "raw": "**tomato**\n\nA tomato fits perfectly here \u2014 it can be described as crisp, and ripe tomatoes are red. Other valid options include \"peach\" or \"plum.\"", "word": "plum"}
+{"model": "mimo-v2.6-flash", "arm": "A_red_nofruit", "run": 0, "raw": "**radish**\n\n\"He took a bite out of the crisp, red **radish**.\"\n\nA radish satisfies all the constraints: it is a single common English word, it is not a fruit (botanically a root vegetable, and certainly not in the everyday sense), it is characteristically crisp, and it is typically red on the outside \u2014 and it's the kind of thing one bites into directly, much like the original (excluded) example.", "word": "example"}
+{"model": "mimo-v2.6-flash", "arm": "A_red_nofruit", "run": 2, "raw": "**pepper**\n\nHe took a bite out of the crisp, red **pepper**.", "word": "pepper"}
+{"model": "mimo-v2.6-flash", "arm": "A_red_nofruit", "run": 4, "raw": "**radish**\n\n\"He took a bite out of the crisp, red **radish**.\"\n\nA red radish is crisp, typically eaten raw whole, and is not a fruit \u2014 so it fits the blank while avoiding the forbidden word. (Other acceptable single-word fits in the same sense would be *pepper* or *carrot*, but *radish* best matches \"crisp, red\" and \"took a bite out of.\")", "word": "matches", "rerun_budget": 1500}
+{"model": "mimo-v2.6-flash", "arm": "B_green_nofruit", "run": 1, "raw": "He took a bite out of the crisp, green **celery**.", "word": "celery"}
+{"model": "mimo-v2.6-flash", "arm": "B_green_nofruit", "run": 2, "raw": "**Reasoning:**\n\nThe sentence requires a single common noun that (a) fits the pattern \"took a bite out of the ___,\" (b) agrees with the adjectives *crisp* and *green*, and (c) is not a fruit.\n\n- *Cucumber / tomato / pepper* \u2014 excluded, since each is botanically a fruit (and the prompt forbids fruit).\n- *Lettuce, kale, celery, green bean* \u2014 all vegetables, all single words, all compatible with *crisp* and *green*.\n- *Celery* is the strongest fit: it is characteristically **crisp**, characteristically **green** (especially the stalks), and eating it by biting a stick off the end is the normal way it is consumed \u2014 exactly what \"took a bite out of\" describes. It also reads naturally as the object of \"out of,\" since you bite a piece off a stalk.\n\n**Final answer: celery**\n\n\"He took a bite out of the crisp, green **celery**.\"", "word": "celery", "rerun_budget": 1500}
+{"model": "mimo-v2.6-flash", "arm": "B_green_nofruit", "run": 0, "raw": "**pepper**\n\n**\"He took a bite out of the crisp, green pepper.\"**\n\nReasoning: the blank requires a single common noun that (a) syntactically completes the noun phrase after the determiner \"a,\" (b) collocates naturally with the adjectives \"crisp\" and \"green,\" and (c) denotes something one can literally \"take a bite out of.\" A green bell pepper satisfies all three \u2014 it is conventionally described as crisp and green, and biting into one raw is a common image. It is culinarily a vegetable, so it avoids the prohibited words (\"apple\" or any fruit), even though botanically peppers are berries \u2014 the ordinary-English reading of \"fruit\" (a sweet, dessert-like fruit) clearly excludes it.\n\nIf a stricter botanical sense of \"fruit\" is intended, the safest alternative would be **pickle** (\"the crisp, green pickle\"), which is unambiguously not a fruit in any sense.", "word": "pepper", "rerun_budget": 1500}
+{"model": "mimo-v2.6-flash", "arm": "A_red_nofruit", "run": 3, "raw": "**radish**\n\nSentence: *He took a bite out of the crisp, red radish.*\n\nA radish is a single English word, is not a fruit, and fits both descriptors (\"crisp\" for its raw, crunchy texture and \"red\" for its typical skin) as well as the action of biting into it.", "word": "radish", "rerun_budget": 1500}
+{"model": "mimo-v2.6-flash", "arm": "A_red_nofruit", "run": 1, "raw": "**radish**\n\nFull sentence: *\"He took a bite out of the crisp, red **radish**.\"*\n\nThis works because a radish is (a) a single countable noun, (b) genuinely crisp/crunchy when raw, (c) characteristically red on the outside, and (d) something one actually bites into whole. It also satisfies the constraints \u2014 it is a root vegetable, not a fruit, and it isn't the forbidden word. (*Carrot* would also fit grammatically, but red is far less typical of a carrot than of a radish, making **radish** the most natural completion.)", "word": "completion", "rerun_budget": 1500}
+{"model": "mimo-v2.6-flash", "arm": "C_red_free", "run": 1, "raw": "**apple**\n\n\"He took a bite out of the crisp, red **apple**.\"", "word": "apple"}
+{"model": "mimo-v2.6-flash", "arm": "C_red_free", "run": 4, "raw": "**apple**\n\nThe completed sentence reads: *\"He took a bite out of the crisp, red apple.\"*", "word": "apple"}
+{"model": "mimo-v2.6-flash", "arm": "C_red_free", "run": 3, "raw": "**apple**\n\nThe completed sentence reads: *\"He took a bite out of the crisp, red apple.\"*", "word": "apple"}
+{"model": "mimo-v2.6-flash", "arm": "D_red_noapple", "run": 0, "raw": "**tomato**\n\n\"He took a bite out of the crisp, red **tomato**.\"", "word": "tomato"}
+{"model": "mimo-v2.6-flash", "arm": "C_red_free", "run": 2, "raw": "The word that best completes the sentence is **apple**.\n\nHe took a bite out of the crisp, red **apple**.", "word": "apple"}
+{"model": "mimo-v2.6-flash", "arm": "C_red_free", "run": 0, "raw": "## Reasoning\n\nThe sentence structure is:\n\n**\"He took a bite out of the crisp, red ________.\"**\n\nRequirements from the clue:\n\n1. **A single word** \u2014 so no multi-word answer.\n2. **Grammatically valid** \u2014 the blank must be a noun phrase head that:\n   - follows the determiner **\"the\"**, so it must be a count noun (singular or plural) or a mass noun;\n   - is modified by two coordinate adjectives, **\"crisp, red,\"** which are separated by a comma because both independently modify the noun (you can say \"the red X\" and \"the crisp X\").\n3. **Semantically compatible** with both adjectives and with the action **\"took a bite out of.\"**\n   - \"Crisp\" implies something that snaps or crunches when bitten \u2014 a hard, fresh, brittle texture.\n   - \"Red\" implies a color, and specifically a bright, saturated", "word": "saturated"}
+{"model": "mimo-v2.6-flash", "arm": "B_green_nofruit", "run": 3, "raw": "**pickle**\n\n\"He took a bite out of the crisp, green **pickle**.\"\n\nThis fits naturally: *pickle* is a single word, agrees grammatically with the adjective phrase \"crisp, green,\" and describes something you bite a chunk out of \u2014 while avoiding *apple* and any fruit (note that words like *cucumber*, *zucchini*, or *pepper* were avoided because they are botanically fruits).", "word": "fruits", "rerun_budget": 1500}
+{"model": "qwen3.8-flash", "arm": "A_red_nofruit", "run": 0, "raw": "leaf", "word": "leaf"}
+{"model": "mimo-v2.6-flash", "arm": "D_red_noapple", "run": 2, "raw": "**tomato**\n\n*Completed sentence:* \"He took a bite out of the crisp, red **tomato**.\"\n\n**Why this works:**\n- It's a single, standard English word.\n- It's grammatically valid as the direct object of \"took a bite out of.\"\n- It satisfies the sensory clues \u2014 tomatoes are commonly red and have a firm, crisp texture when fresh.\n- It avoids the prohibited word \"apple.\"\n\n*(Other words such as **plum**, **strawberry**, or **cherry** would also fit the syntax, but \"tomato\" is the most natural fit for both \"crisp\" and \"red.\")*", "word": "both"}
+{"model": "mimo-v2.6-flash", "arm": "B_green_nofruit", "run": 4, "raw": "**celery**\n\nHe took a bite out of the crisp, green **celery**.\n\nIt fits both the syntax (a singular, countable noun following \"a\") and the description \u2014 celery is famously crisp and green, and it's a vegetable rather than a fruit, so it doesn't run", "word": "run"}
+{"model": "qwen3.8-flash", "arm": "A_red_nofruit", "run": 1, "raw": "radish", "word": "radish"}
+{"model": "mimo-v2.6-flash", "arm": "D_red_noapple", "run": 1, "raw": "**tomato**\n\nReasoning: The blank needs a singular noun that (1) can follow the article \"the,\" (2) naturally takes the adjective \"crisp,\" and (3) is characteristically \"red\" and something one \"takes a bite out of.\" A tomato satisfies all three \u2014 it's a crisp-textured, red food commonly eaten raw and bitten into \u2014 while avoiding the prohibited word \"apple.\" Other candidates like \"strawberry\" (not usually \"crisp\") or \"pepper\" (would typically require \"a\" rather than \"the\" in generic use) fit less well.", "word": "well"}
+{"model": "qwen3.8-flash", "arm": "A_red_nofruit", "run": 2, "raw": "beet", "word": "beet"}
+{"model": "qwen3.8-flash", "arm": "A_red_nofruit", "run": 3, "raw": "radish", "word": "radish"}
+{"model": "mimo-v2.6-flash", "arm": "D_red_noapple", "run": 3, "raw": "**tomato**\n\n\"He took a bite out of the crisp, red **tomato**.\"", "word": "tomato", "rerun_budget": 1500}
+{"model": "mimo-v2.6-flash", "arm": "D_red_noapple", "run": 4, "raw": "**radish**\n\n\"He took a bite out of the crisp, red **radish**.\"\n\nA radish satisfies every constraint: it's a single English word, it's characteristically *crisp*, it's *red*, it's something people bite into raw, and it isn't \"apple.\" (A tomato would also be grammatically acceptable, but \"crisp red radish\" is the more natural collocation, since", "word": "since"}
+{"model": "qwen3.8-flash", "arm": "B_green_nofruit", "run": 1, "raw": "lettuce", "word": "lettuce"}
+{"model": "qwen3.8-flash", "arm": "C_red_free", "run": 0, "raw": "apple", "word": "apple"}
+{"model": "qwen3.8-flash", "arm": "C_red_free", "run": 1, "raw": "apple", "word": "apple"}
+{"model": "qwen3.8-flash", "arm": "A_red_nofruit", "run": 4, "raw": "onion", "word": "onion"}
+{"model": "qwen3.8-flash", "arm": "C_red_free", "run": 2, "raw": "apple", "word": "apple"}
+{"model": "qwen3.8-flash", "arm": "C_red_free", "run": 3, "raw": "apple", "word": "apple"}
+{"model": "qwen3.8-flash", "arm": "B_green_nofruit", "run": 4, "raw": "leaf", "word": "leaf"}
+{"model": "qwen3.8-flash", "arm": "C_red_free", "run": 4, "raw": "apple", "word": "apple"}
+{"model": "qwen3.8-flash", "arm": "B_green_nofruit", "run": 2, "raw": "celery", "word": "celery"}
+{"model": "qwen3.8-flash", "arm": "D_red_noapple", "run": 1, "raw": "pear", "word": "pear"}
+{"model": "minimax-m3.1-flash", "arm": "A_red_nofruit", "run": 0, "raw": "radish", "word": "radish"}
+{"model": "qwen3.8-flash", "arm": "D_red_noapple", "run": 2, "raw": "pear", "word": "pear"}
+{"model": "qwen3.8-flash", "arm": "B_green_nofruit", "run": 0, "raw": "leaf", "word": "leaf"}
+{"model": "qwen3.8-flash", "arm": "D_red_noapple", "run": 3, "raw": "cherry", "word": "cherry"}
+{"model": "qwen3.8-flash", "arm": "D_red_noapple", "run": 0, "raw": "pear", "word": "pear"}
+{"model": "minimax-m3.1-flash", "arm": "B_green_nofruit", "run": 0, "raw": "cucumber", "word": "cucumber"}
+{"model": "qwen3.8-flash", "arm": "B_green_nofruit", "run": 3, "raw": "leaf", "word": "leaf"}
+{"model": "minimax-m3.1-flash", "arm": "A_red_nofruit", "run": 4, "raw": "radish", "word": "radish"}
+{"model": "minimax-m3.1-flash", "arm": "A_red_nofruit", "run": 3, "raw": "radish", "word": "radish"}
+{"model": "minimax-m3.1-flash", "arm": "A_red_nofruit", "run": 1, "raw": "sandwich", "word": "sandwich"}
+{"model": "minimax-m3.1-flash", "arm": "B_green_nofruit", "run": 2, "raw": "lettuce", "word": "lettuce"}
+{"model": "minimax-m3.1-flash", "arm": "B_green_nofruit", "run": 1, "raw": "lettuce", "word": "lettuce"}
+{"model": "minimax-m3.1-flash", "arm": "A_red_nofruit", "run": 2, "raw": "radish", "word": "radish", "rerun_budget": 1500}
+{"model": "minimax-m3.1-flash", "arm": "C_red_free", "run": 0, "raw": "apple", "word": "apple"}
+{"model": "qwen3.8-flash", "arm": "D_red_noapple", "run": 4, "raw": "fruit", "word": "fruit"}
+{"model": "minimax-m3.1-flash", "arm": "B_green_nofruit", "run": 3, "raw": "lettuce", "word": "lettuce"}
+{"model": "minimax-m3.1-flash", "arm": "C_red_free", "run": 2, "raw": "apple", "word": "apple"}
+{"model": "minimax-m3.1-flash", "arm": "C_red_free", "run": 4, "raw": "apple", "word": "apple"}
+{"model": "minimax-m3.1-flash", "arm": "C_red_free", "run": 3, "raw": "apple", "word": "apple"}
+{"model": "minimax-m3.1-flash", "arm": "C_red_free", "run": 1, "raw": "apple", "word": "apple"}
+{"model": "minimax-m3.1-flash", "arm": "D_red_noapple", "run": 0, "raw": "pomegranate", "word": "pomegranate"}
+{"model": "minimax-m3.1-flash", "arm": "B_green_nofruit", "run": 4, "raw": "leaf", "word": "leaf"}
+{"model": "minimax-m3.1-flash", "arm": "D_red_noapple", "run": 2, "raw": "tomato", "word": "tomato"}
+{"model": "minimax-m3.1-flash", "arm": "D_red_noapple", "run": 1, "raw": "tomato", "word": "tomato"}
+{"model": "minimax-m3.1-flash", "arm": "D_red_noapple", "run": 4, "raw": "tomato", "word": "tomato"}
+{"model": "claude-haiku-5-5", "arm": "A_red_nofruit", "run": 0, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "A_red_nofruit", "run": 1, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "A_red_nofruit", "run": 2, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "A_red_nofruit", "run": 3, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "A_red_nofruit", "run": 4, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "minimax-m3.1-flash", "arm": "D_red_noapple", "run": 3, "raw": "radish", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "B_green_nofruit", "run": 0, "raw": "**celery**\n\nThe sentence then reads: \"He took a bite out of the crisp, green celery.\"", "word": "celery"}
+{"model": "claude-haiku-5-5", "arm": "B_green_nofruit", "run": 1, "raw": "**celery**\n\nHe took a bite out of the crisp, green celery.", "word": "celery"}
+{"model": "claude-haiku-5-5", "arm": "C_red_free", "run": 0, "raw": "**apple**", "word": "apple"}
+{"model": "claude-haiku-5-5", "arm": "B_green_nofruit", "run": 2, "raw": "He took a bite out of the crisp, green **celery**.", "word": "celery"}
+{"model": "claude-haiku-5-5", "arm": "C_red_free", "run": 3, "raw": "apple", "word": "apple"}
+{"model": "claude-haiku-5-5", "arm": "B_green_nofruit", "run": 4, "raw": "**lettuce**\n\nHe took a bite out of the crisp, green lettuce.", "word": "lettuce"}
+{"model": "claude-haiku-5-5", "arm": "C_red_free", "run": 4, "raw": "**apple**", "word": "apple"}
+{"model": "claude-haiku-5-5", "arm": "C_red_free", "run": 2, "raw": "apple", "word": "apple"}
+{"model": "claude-haiku-5-5", "arm": "C_red_free", "run": 1, "raw": "apple", "word": "apple"}
+{"model": "claude-haiku-5-5", "arm": "B_green_nofruit", "run": 3, "raw": "He took a bite out of the crisp, green **celery**.", "word": "celery"}
+{"model": "claude-haiku-5-5", "arm": "D_red_noapple", "run": 0, "raw": "He took a bite out of the crisp, red **cherry**.", "word": "cherry"}
+{"model": "claude-haiku-5-5", "arm": "D_red_noapple", "run": 1, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "D_red_noapple", "run": 2, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "D_red_noapple", "run": 3, "raw": "**radish**", "word": "radish"}
+{"model": "claude-haiku-5-5", "arm": "D_red_noapple", "run": 4, "raw": "**radish**", "word": "radish"}
+{"model": "gpt-6-luna", "arm": "A_red_nofruit", "run": 0, "raw": "radish", "word": "radish"}
+{"model": "gpt-6-luna", "arm": "A_red_nofruit", "run": 4, "raw": "pepper", "word": "pepper"}
+{"model": "gpt-6-luna", "arm": "A_red_nofruit", "run": 3, "raw": "radish", "word": "radish"}
+{"model": "gpt-6-luna", "arm": "B_green_nofruit", "run": 0, "raw": "pepper", "word": "pepper"}
+{"model": "gpt-6-luna", "arm": "B_green_nofruit", "run": 2, "raw": "lettuce", "word": "lettuce"}
+{"model": "gpt-6-luna", "arm": "C_red_free", "run": 0, "raw": "apple", "word": "apple"}
+{"model": "gpt-6-luna", "arm": "C_red_free", "run": 1, "raw": "apple", "word": "apple"}
+{"model": "gpt-6-luna", "arm": "A_red_nofruit", "run": 2, "raw": "cabbage", "word": "cabbage"}
+{"model": "gpt-6-luna", "arm": "B_green_nofruit", "run": 1, "raw": "leaf", "word": "leaf"}
+{"model": "gpt-6-luna", "arm": "A_red_nofruit", "run": 1, "raw": "wafer", "word": "wafer"}
+{"model": "gpt-6-luna", "arm": "B_green_nofruit", "run": 3, "raw": "celery", "word": "celery"}
+{"model": "gpt-6-luna", "arm": "B_green_nofruit", "run": 4, "raw": "leaf", "word": "leaf"}
+{"model": "gpt-6-luna", "arm": "C_red_free", "run": 3, "raw": "apple", "word": "apple"}
+{"model": "gpt-6-luna", "arm": "C_red_free", "run": 4, "raw": "apple", "word": "apple"}
+{"model": "gpt-6-luna", "arm": "C_red_free", "run": 2, "raw": "apple", "word": "apple"}
+{"model": "gpt-6-luna", "arm": "D_red_noapple", "run": 3, "raw": "pear", "word": "pear"}
+{"model": "gpt-6-luna", "arm": "D_red_noapple", "run": 2, "raw": "pear", "word": "pear"}
+{"model": "gpt-6-luna", "arm": "D_red_noapple", "run": 4, "raw": "pear", "word": "pear"}
+{"model": "gpt-6-luna", "arm": "D_red_noapple", "run": 1, "raw": "pear", "word": "pear"}
+{"model": "gpt-6-luna", "arm": "D_red_noapple", "run": 0, "raw": "pepper", "word": "pepper"}
+{"model": "gemini-4-argon", "arm": "A_red_nofruit", "run": 1, "raw": "radish", "word": "radish"}
+{"model": "gemini-4-argon", "arm": "B_green_nofruit", "run": 3, "raw": "celery", "word": "celery"}
+{"model": "gemini-4-argon", "arm": "A_red_nofruit", "run": 2, "raw": "radish", "word": "radish", "rerun_budget": 1500}
+{"model": "gemini-4-argon", "arm": "A_red_nofruit", "run": 0, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish", "rerun_budget": 1500}
+{"model": "gemini-4-argon", "arm": "C_red_free", "run": 0, "raw": "apple", "word": "apple"}
+{"model": "gemini-4-argon", "arm": "C_red_free", "run": 1, "raw": "apple", "word": "apple"}
+{"model": "gemini-4-argon", "arm": "B_green_nofruit", "run": 4, "raw": "celery", "word": "celery", "rerun_budget": 1500}
+{"model": "gemini-4-argon", "arm": "C_red_free", "run": 3, "raw": "apple", "word": "apple"}
+{"model": "gemini-4-argon", "arm": "C_red_free", "run": 4, "raw": "apple", "word": "apple"}
+{"model": "gemini-4-argon", "arm": "B_green_nofruit", "run": 2, "raw": "celery", "word": "celery"}
+{"model": "gemini-4-argon", "arm": "A_red_nofruit", "run": 3, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish", "rerun_budget": 1500}
+{"model": "gemini-4-argon", "arm": "B_green_nofruit", "run": 1, "raw": "He took a bite out of the crisp, green **celery**.", "word": "celery", "rerun_budget": 1500}
+{"model": "gemini-4-argon", "arm": "A_red_nofruit", "run": 4, "raw": "He took a bite out of the crisp, red **radish**.", "word": "radish"}
+{"model": "gemini-4-argon", "arm": "C_red_free", "run": 2, "raw": "apple", "word": "apple"}
+{"model": "gemini-4-argon", "arm": "B_green_nofruit", "run": 0, "raw": "celery", "word": "celery", "rerun_budget": 1500}
+{"model": "gemini-4-argon", "arm": "D_red_noapple", "run": 0, "raw": "pepper", "word": "pepper"}
+{"model": "gemini-4-argon", "arm": "D_red_noapple", "run": 3, "raw": "pepper", "word": "pepper", "rerun_budget": 1500}
+{"model": "gemini-4-argon", "arm": "D_red_noapple", "run": 4, "raw": "He took a bite out of the crisp, red **pepper**.", "word": "pepper"}
+{"model": "gemini-4-argon", "arm": "D_red_noapple", "run": 1, "raw": "pepper", "word": "pepper"}
+{"model": "gemini-4-argon", "arm": "D_red_noapple", "run": 2, "raw": "pepper", "word": "pepper"}
