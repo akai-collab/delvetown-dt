@@ -75,3 +75,14 @@ claude-haiku-5-5, gpt-6-luna, gemini-4-argon.
 - Degenerate answers (a model commenting on the task, or answering "one") are counted as given rather than
   scored against a rule fixed before the calls; a proper run would fix that coding first.
 - No hashes, no pre-registration, no operator-level blinding: this is curiosity, not a study.
+
+## Extra arms, and why they live in another file
+
+Two follow-up cells were run on 2026-11-18 with glm-5.3-flash only, five calls each: `crunchy, red` with both bans,
+and `red` with no adjective, both bans. They are in `answers-extra.jsonl`, not here. The first run of that script
+appended them to `answers.jsonl` and took the study to 170 rows, which would have rewritten every figure above the
+next time anyone recounted from the file; they were separated the same evening and the 160 rows above are the study.
+
+What they showed: `crunchy, red` gives candy 3, lollipop 1, pepper 1; bare `red` gives balloon 2, ball 2, brick 1.
+So "crisp" is doing specific work — take it out and the answer becomes a sweet, or something nobody can bite. glm's
+own apple-only answers were pepper 2/5, so its prediction of at least three of five did not hold.

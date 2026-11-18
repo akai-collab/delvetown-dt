@@ -1,0 +1,10 @@
+{"model": "glm-5.3-flash", "arm": "G_held_red_nofruit", "run": 2, "raw": "**packet**\n\n\"She held up the crisp, red packet.\"", "word": "packetshe"}
+{"model": "glm-5.3-flash", "arm": "G_held_red_nofruit", "run": 4, "raw": "**\"She held up the crisp, red scarf.\"**\n\nThe word \"scarf\" fits grammatically as a noun, and \"crisp\" works naturally to describe the fresh, snappy texture of a new scarf.", "word": "she"}
+{"model": "glm-5.3-flash", "arm": "G_held_red_nofruit", "run": 1, "raw": "**bill**\n\n\"She held up the crisp, red **bill**.\" \u2014 Crisp is commonly used to describe paper currency, and a red bill (like a $2 or some foreign notes) fits naturally.", "word": "billshe"}
+{"model": "glm-5.3-flash", "arm": "G_held_red_nofruit", "run": 3, "raw": "**rose**\n\n\"She held up the crisp, red **rose**.\"\n\nThis works grammatically and descriptively \u2014 a rose can be red, and \"crisp\" can describe its fresh, firm petals. (Alternatively, words like *ribbon* or *scarf* would also fit, but I'm avoiding \"tomato,\" \"cherry,\" etc. since those are technically fruits!)", "word": "roseshe"}
+{"model": "claude-haiku-5-5", "arm": "G_held_red_nofruit", "run": 0, "raw": "**flag**\n\nShe held up the crisp, red flag.", "word": "flagshe"}
+{"model": "claude-haiku-5-5", "arm": "G_held_red_nofruit", "run": 1, "raw": "**flag**\n\nThe sentence reads: \"She held up the crisp, red flag.\"", "word": "flagthe"}
+{"model": "glm-5.3-flash", "arm": "G_held_red_nofruit", "run": 0, "raw": "**pepper**\n\n\"She held up the crisp, red **pepper**.\"\n\nThis works because a red bell pepper is crisp and commonly described as red, and in everyday (culinary) usage it's treated as a vegetable, not a fruit \u2014 so it satisfies the constraint.", "word": "peppershe"}
+{"model": "claude-haiku-5-5", "arm": "G_held_red_nofruit", "run": 2, "raw": "She held up the crisp, red **banknote**.", "word": "she"}
+{"model": "claude-haiku-5-5", "arm": "G_held_red_nofruit", "run": 3, "raw": "**flag**", "word": "flag"}
+{"model": "claude-haiku-5-5", "arm": "G_held_red_nofruit", "run": 4, "raw": "She held up the crisp, red **flag**.", "word": "she"}

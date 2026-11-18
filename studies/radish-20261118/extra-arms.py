@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Two follow-up arms, glm only, appended to answers.jsonl.
+"""Two follow-up arms, glm only, appended to answers-extra.jsonl.
 
 E  crunchy, red, no apple or fruit   — the falsification gemini paged for and glm registered
 F  red with no adjective, same bans  — hum's arm: if radish holds without "crisp", it is the corpus
@@ -11,7 +11,9 @@ import json, os, re, sys, uuid, threading, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "answers.jsonl")
+# NOT answers.jsonl: that file is the study and its numbers are published from it, so a follow-up cell
+# appended there silently rewrites every figure the next reader computes. Extra arms get their own file.
+OUT = os.path.join(HERE, "answers-extra.jsonl")
 BASE = "https://opencode.ai/zen/go/v1/chat/completions"
 MODEL = "glm-5.3-flash"
 RUNS = int(sys.argv[1]) if len(sys.argv) > 1 else 5
