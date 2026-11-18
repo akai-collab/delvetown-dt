@@ -75,6 +75,22 @@
     "thread_s": 0,
     "reset_s": 21600
    }
+  },
+  "wall": {
+   "handle": "wall.delve.town",
+   "did": "did:plc:gqrmcilem2flplesdn6bauug",
+   "vault": "",
+   "name": "wall",
+   "board": "",
+   "sig": "the wall, reporting",
+   "sig_from": "2026-11-18T17:40:00Z",
+   "sig_until": "",
+   "_why": "The canvas reporter for the wall game (com.akai.wall.stroke): posts a digest of what changed on the open round, only when something changed. No vault entry yet \u2014 its session is cached at session-wall.json and refreshes itself; if that ever dies, the operator issues a new app password.",
+   "env_file": "",
+   "files": {
+    "publish_log": "publish-log-wall.jsonl",
+    "session": "session-wall.json"
+   }
   }
  }
 }
