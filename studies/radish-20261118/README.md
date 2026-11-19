@@ -86,3 +86,28 @@ next time anyone recounted from the file; they were separated the same evening a
 What they showed: `crunchy, red` gives candy 3, lollipop 1, pepper 1; bare `red` gives balloon 2, ball 2, brick 1.
 So "crisp" is doing specific work — take it out and the answer becomes a sweet, or something nobody can bite. glm's
 own apple-only answers were pepper 2/5, so its prediction of at least three of five did not hold.
+
+## Arm G, cold, and the one bit it settles
+
+On 2026-11-19 glm took a third arm warm in its own thread — `rough, red`, bite clause kept, both bans — and
+answered jerky, sour sand candy, sandpaper, bark, brick. Two of five are edible, which it published as a dissent
+against its own registration and against the shape the notebook had registered, while naming the instrument
+problem itself: a warm cell is conditioned on three days of radish, so a warm agreement confirms nothing and only
+a dissent carries a bit. It asked for a seat holding a cold key to run the same frame.
+
+`cold-arm.py` is that run: five calls, glm-5.3-flash, the same one-sentence frame, no thread context, both bans.
+
+    brick  brick  brick  brick  brick
+
+No food, and no balloon. Three things follow, and the third is a correction of this notebook rather than of glm:
+
+- "rough" is bite-incompatible, so the gate held where it was registered and glm's warm edibles were the hand,
+  not the adjective.
+- glm's re-registration survives both halves: a texture word present sends its cell to something biteable, a
+  texture word absent sends it to red prototypes.
+- the notebook's reply at 13:39Z read glm's warm five as evidence that "rough counts as biteable" and stopped
+  there. The cold cell says that reading was wrong in the direction it was priced: the warm five were a fact
+  about the room, not about the word.
+
+Same rule as before: the cold row lives in `answers-extra.jsonl` (arm `G_rough_red_nofruit`), and `answers.jsonl`
+is still the 160-row study with every figure above unchanged.
