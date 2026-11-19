@@ -68,6 +68,8 @@ class OneTable(Base):
 
     def test_both_programs_name_the_same_files_for_every_seat(self):
         for key, seat in seats().items():
+            if seat.get("no_home"):
+                continue          # a posting seat has no Hermes home, so there is no second file table to match
             d, m = self.dt_paths(key), self.monitor_paths(seat["handle"])
             for kind in ("publish_log", "session", "quiet"):
                 self.assertEqual(d[kind], m[kind], "%s: %s differs" % (key, kind))

@@ -161,6 +161,13 @@ LANE_EXCLUDE_FILE = os.environ.get("DT_LANE_EXCLUDE_FILE") or _state(
     "lane_exclude", "lane-exclude-%s.json" % ACCOUNT)
 QUIET_THREADS_FILE = os.environ.get("DT_QUIET_THREADS_FILE") or _state(
     "quiet_threads", "quiet-threads-%s.json" % ACCOUNT)
+# The wall digest's liveness stamp: wall-digest.py writes it on every pass, silent passes included, because
+# its state file only advances when a report posts and a dead timer looked exactly like a quiet canvas
+# (deepseek, 2026-11-19). The gate reads it and says so when it goes stale; the line carries the stamp, never
+# the age, so it stays byte-identical across ticks and cannot wake a run by itself.
+WALL_STAMP = os.environ.get("DT_WALL_STAMP") or os.path.join(
+    os.environ.get("HERMES_REAL_HOME") or os.path.expanduser("~"), ".local", "state", "wall", "last-seen.txt")
+WALL_STALE_S = int(os.environ.get("DT_WALL_STALE_S") or 2700)   # three missed 15-minute refreshes
 # Thread pacing, in the notification layer only: a notification in a thread where this account has just
 # been answering one counterpart waits longer before it may wake the account, and the wait doubles with
 # each turn — PACE_PAIR_S after the first reply to that account there, twice that after the second, and
@@ -272,6 +279,25 @@ def _line(it):
     if len(body) > MAX_TEXT:
         body = body[:MAX_TEXT].rstrip() + "…"
     return f"{when}Z {reason} @{author} {rkey}: {body}"
+
+
+def wall_note(now):
+    """A line saying the wall timer has stopped, or None while its stamp is fresh.
+
+    The digest is silent when the canvas is unchanged, so a dead timer and a quiet canvas print the same
+    nothing. This reads the stamp wall-digest.py writes on every pass and returns a stable line once it is
+    older than WALL_STALE_S; the stamp is quoted, not the age, so consecutive ticks with nothing new stay
+    byte-identical and do not wake a run by themselves.
+    """
+    try:
+        with open(WALL_STAMP, encoding="utf-8") as f:
+            stamp = (f.read().split() or [""])[0]
+        seen = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (OSError, ValueError, IndexError):
+        return None                     # no stamp yet: nothing to compare against, say nothing
+    if now - seen < WALL_STALE_S:
+        return None
+    return "wall: no pass since %s (stalled, threshold %dm)" % (stamp, WALL_STALE_S // 60)
 
 
 def _newest_epoch(items):
@@ -1088,6 +1114,9 @@ def wake_output(items, state, now, held=None, quiet=None, replies=None, failed_a
         also["muted"] = len(muted)       # a count, not the items: the list exists so they are not read
     if also:
         out.append("also: " + ", ".join(f"{v} {k}" for k, v in sorted(also.items())))
+    _wall = wall_note(now)
+    if _wall:
+        out.append(_wall)
     if st["batch"]:
         # How the previous batch went, so a run that answered part of it is visible from the report alone.
         # Abstained is its own count: a run that looked and correctly wrote nothing is not a dead run.

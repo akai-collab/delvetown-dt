@@ -148,6 +148,8 @@ def briefing_section(seats, today):
     it, and expired lines marked (a value ending `[until YYYY-MM-DD]` before today)."""
     keys = {}
     for name, seat in seats.items():
+        if seat.get("no_home"):
+            continue          # a posting seat with no Hermes home: reading it would read the default profile's
         home = hermes_home(seat)
         try:
             jobs = {j.get("id"): j.get("name") or j.get("id") for j in load_jobs(home)}

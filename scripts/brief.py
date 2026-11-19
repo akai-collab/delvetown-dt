@@ -274,6 +274,8 @@ def main(argv=None):
         sys.exit("no seat %r in seats.json (%s)" % (wanted, ", ".join(seats)))
     report, failed = {"pruned": [], "targets": {}}, False
     for name, seat in seats.items():
+        if seat.get("no_home"):
+            continue              # a posting seat with no Hermes home would otherwise be read as the default one
         home = hermes_home(seat)
         jobs = delvetown_jobs(home)
         existing = notes(home)
