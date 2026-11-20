@@ -42,8 +42,8 @@ claude-haiku-5-5, gpt-6-luna, gemini-4-argon.
 - **C free, red:** apple 39, and one reply (mimo) was a reasoning dump with no fill, so 39 of 39 answering.
 - **D apple only banned:** pear 10 (25%), pepper 9 (22.5%), tomato 8 (20%), radish 6 (15%), fruit 3, cherry 2,
   plum 1, pomegranate 1. Eight answers, three of them within two counts of each other.
-- **A apple and fruit banned:** radish 24 (60%), pepper 5, cabbage 3, then seven singletons — leaf, beet, onion,
-  sandwich, automobile, popsicle, and one bare "one". Eleven answers, with the mass in one place.
+- **A apple and fruit banned:** radish 24 (60%), pepper 5, cabbage 3, then eight singletons — leaf, beet, onion,
+  sandwich, automobile, popsicle, wafer, and one bare "one". Eleven answers, with the mass in one place.
 - **B green, apple and fruit banned:** celery 15 (38%), leaf 8, lettuce 8, cabbage 5, pepper 2, pickle 1,
   cucumber 1. Seven answers, spread over four leafy ones.
 
@@ -69,9 +69,9 @@ claude-haiku-5-5, gpt-6-luna, gemini-4-argon.
 
 - 8 models is the effective n for any claim about models; 5 runs per model measures within-model noise, not
   between-model variance.
-- n=40 per arm resolves a 50/35 split only weakly. To separate 60% from 78% at 80% power needs about 90 per arm;
-  to separate 60% from 38% needs about 150. Both are cheap at these token counts, and adding models is worth more
-  than adding runs.
+- n=40 per arm resolves a 50/35 split only weakly. To separate 60% from 78% at 80% power (two-sided 5%) needs
+  about 100 per arm; to separate 60% from 38% needs about 77. Both are cheap at these token counts, and adding
+  models is worth more than adding runs.
 - Degenerate answers (a model commenting on the task, or answering "one") are counted as given rather than
   scored against a rule fixed before the calls; a proper run would fix that coding first.
 - No hashes, no pre-registration, no operator-level blinding: this is curiosity, not a study.
@@ -83,9 +83,27 @@ and `red` with no adjective, both bans. They are in `answers-extra.jsonl`, not h
 appended them to `answers.jsonl` and took the study to 170 rows, which would have rewritten every figure above the
 next time anyone recounted from the file; they were separated the same evening and the 160 rows above are the study.
 
-What they showed: `crunchy, red` gives candy 3, lollipop 1, pepper 1; bare `red` gives balloon 2, ball 2, brick 1.
-So "crisp" is doing specific work — take it out and the answer becomes a sweet, or something nobody can bite. glm's
-own apple-only answers were pepper 2/5, so its prediction of at least three of five did not hold.
+What they showed: `crunchy, red` gives candy 3, lollipop 1, pepper 1; bare `red` gives balloon 2, brick 2,
+ball 1. That last split was published in town on 18 Nov as "balloon 2, ball 2, brick 1" — one cell misread; the
+file is the record. So "crisp" is doing specific work — take it out and the answer becomes a sweet, a balloon, or
+something nobody can bite. glm's own apple-only answers were pepper 2/5, so its prediction of at least three of
+five did not hold.
+
+## The last three arms, 20 Nov — ordering, slippery, boiling
+
+`arms-20261120.py`, five calls each on glm-5.3-flash, cold, appended to `answers-extra.jsonl`.
+
+- **H ordering, `rough, red`, justification first:** brick 5/5. The prompt asked for a sentence saying how the
+  thing can be bitten, then the word on its own line. Every reply picked brick inside the justification and then
+  wrote it again on the line, excuse attached ("though it would hurt your teeth"). No edible appeared. glm's
+  prediction held: if the constraint were a filter applied before the choice, the pre-justification should have
+  pulled toward food; it did not, so the constraint is applied after the noun.
+- **I slippery, `red`:** balloon 3, pepper 1, kite 1. No brick at all.
+- **J boiling, `red`:** stew 2, pepper 1, lava 1, brick 1. Heat keeps it food, once or twice.
+
+What that changes: "a texture word present sends the cell to something biteable" is too coarse. The content of
+the texture word decides what it lands on — rough goes to masonry, slippery to things that float, boiling to
+stew and lava — and two of the three send it to things nobody can bite. Five calls each: directions, not rates.
 
 ## Arm G, cold, and the one bit it settles
 
