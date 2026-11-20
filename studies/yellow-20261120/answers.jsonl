@@ -1,0 +1,90 @@
+{"model": "glm-5.3-flash", "arm": "Y1_plain", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y1_plain", "run": 0, "raw": "**apple**\n\nThe complete sentence reads: \"He took a bite out of the crisp, yellow apple.\"", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y1_plain", "run": 2, "raw": "**apple**\n\nA crisp, yellow apple fits naturally\u2014apples are commonly described as crisp, and yellow varieties (like Golden Delicious) exist. Other valid options include \"pear,\" \"pepper,\" or \"banana.\"", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y1_plain", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y1_plain", "run": 3, "raw": "**apple**\n\n\"He took a bite out of the crisp, yellow **apple**.\"", "word": "apple", "how": "sentence"}
+{"model": "deepseek-v4.1-flash", "arm": "Y1_plain", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "deepseek-v4.1-flash", "arm": "Y1_plain", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "deepseek-v4.1-flash", "arm": "Y1_plain", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "deepseek-v4.1-flash", "arm": "Y1_plain", "run": 3, "raw": "pear", "word": "pear", "how": "single-word"}
+{"model": "deepseek-v4.1-flash", "arm": "Y1_plain", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "mimo-v2.6-flash", "arm": "Y1_plain", "run": 4, "raw": "**apple**\n\nThe completed sentence: *\"He took a bite out of the crisp, yellow **apple**.\"*", "word": "apple", "how": "sentence"}
+{"model": "qwen3.8-flash", "arm": "Y1_plain", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "qwen3.8-flash", "arm": "Y1_plain", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "mimo-v2.6-flash", "arm": "Y1_plain", "run": 1, "raw": "**apple**\n\nThe sentence reads: *\"He took a bite out of the crisp, yellow apple.\"*\n\nAn apple (such as a Golden Delicious) fits naturally as something that is both crisp and yellow, and is commonly eaten by taking a bite out of it.", "word": "apple", "how": "sentence"}
+{"model": "mimo-v2.6-flash", "arm": "Y1_plain", "run": 0, "raw": "**apple**\n\nThe completed sentence reads: *\"He took a bite out of the crisp, yellow apple.\"*", "word": "apple", "how": "sentence"}
+{"model": "qwen3.8-flash", "arm": "Y1_plain", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "qwen3.8-flash", "arm": "Y1_plain", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "mimo-v2.6-flash", "arm": "Y1_plain", "run": 2, "raw": "**apple**\n\nThis fits naturally: apples are commonly described as \"crisp,\" yellow varieties exist (e.g., Golden Delicious), and \"taking a bite out of an apple\" is the most natural collocation.", "word": "apple", "how": "bold-first"}
+{"model": "qwen3.8-flash", "arm": "Y1_plain", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y1_plain", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y1_plain", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y1_plain", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "mimo-v2.6-flash", "arm": "Y1_plain", "run": 3, "raw": "**apple**\n\nThe completed sentence reads: *\"He took a bite out of the crisp, yellow apple.\"*", "word": "apple", "how": "sentence"}
+{"model": "minimax-m3.1-flash", "arm": "Y1_plain", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y1_plain", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "claude-haiku-5-5", "arm": "Y1_plain", "run": 0, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "claude-haiku-5-5", "arm": "Y1_plain", "run": 1, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "claude-haiku-5-5", "arm": "Y1_plain", "run": 2, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "claude-haiku-5-5", "arm": "Y1_plain", "run": 3, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "gpt-6-luna", "arm": "Y1_plain", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gpt-6-luna", "arm": "Y1_plain", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "claude-haiku-5-5", "arm": "Y1_plain", "run": 4, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "gpt-6-luna", "arm": "Y1_plain", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gpt-6-luna", "arm": "Y1_plain", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gpt-6-luna", "arm": "Y1_plain", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gemini-4-argon", "arm": "Y1_plain", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "deepseek-v4.1-flash", "arm": "Y2_lock", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gemini-4-argon", "arm": "Y1_plain", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y2_lock", "run": 0, "raw": "**apple**\n\n\"He took a bite out of the crisp, crunchy, yellow apple.\"", "word": "apple", "how": "sentence"}
+{"model": "gemini-4-argon", "arm": "Y1_plain", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gemini-4-argon", "arm": "Y1_plain", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gemini-4-argon", "arm": "Y1_plain", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "deepseek-v4.1-flash", "arm": "Y2_lock", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y2_lock", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y2_lock", "run": 1, "raw": "**apple** \u2014 \"He took a bite out of the crisp, crunchy, yellow **apple**.\"", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y2_lock", "run": 3, "raw": "**apple**\n\nThe sentence reads: \"He took a bite out of the crisp, crunchy, yellow apple.\"", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y2_lock", "run": 4, "raw": "**apple**\n\n\"He took a bite out of the crisp, crunchy, yellow **apple**.\"", "word": "apple", "how": "sentence"}
+{"model": "deepseek-v4.1-flash", "arm": "Y2_lock", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "deepseek-v4.1-flash", "arm": "Y2_lock", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "qwen3.8-flash", "arm": "Y2_lock", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "mimo-v2.6-flash", "arm": "Y2_lock", "run": 3, "raw": "The word is **apple**.\n\nHe took a bite out of the crisp, crunchy, yellow **apple**.", "word": "apple", "how": "sentence"}
+{"model": "mimo-v2.6-flash", "arm": "Y2_lock", "run": 2, "raw": "**apple**\n\nA crisp, crunchy, yellow **apple** \u2014 a classic, natural fit for all three adjectives.", "word": "apple", "how": "sentence"}
+{"model": "mimo-v2.6-flash", "arm": "Y2_lock", "run": 0, "raw": "**apple**\n\n\"Yellow apple\" (such as a Golden Delicious) fits perfectly \u2014 it's crisp, crunchy, and yellow, and you'd typically \"take a bite out of\" an apple.", "word": "apple", "how": "sentence"}
+{"model": "qwen3.8-flash", "arm": "Y2_lock", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "qwen3.8-flash", "arm": "Y2_lock", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "qwen3.8-flash", "arm": "Y2_lock", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y2_lock", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y2_lock", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y2_lock", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y2_lock", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "minimax-m3.1-flash", "arm": "Y2_lock", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "claude-haiku-5-5", "arm": "Y2_lock", "run": 0, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "deepseek-v4.1-flash", "arm": "Y2_lock", "run": 0, "raw": "apple", "word": "apple", "how": "single-word+rerun"}
+{"model": "claude-haiku-5-5", "arm": "Y2_lock", "run": 1, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "claude-haiku-5-5", "arm": "Y2_lock", "run": 2, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "qwen3.8-flash", "arm": "Y2_lock", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "claude-haiku-5-5", "arm": "Y2_lock", "run": 4, "raw": "**apple**", "word": "apple", "how": "bold"}
+{"model": "claude-haiku-5-5", "arm": "Y2_lock", "run": 3, "raw": "**apple**\n\nHe took a bite out of the crisp, crunchy, yellow apple.", "word": "apple", "how": "sentence"}
+{"model": "gpt-6-luna", "arm": "Y2_lock", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gpt-6-luna", "arm": "Y2_lock", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gpt-6-luna", "arm": "Y2_lock", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "gpt-6-luna", "arm": "Y2_lock", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "mimo-v2.6-flash", "arm": "Y2_lock", "run": 1, "raw": "**apple**\n\nThe sentence reads: *\"He took a bite out of the crisp, crunchy, yellow **apple**.\"* This fits perfectly, as a yellow variety such as a Golden Delicious apple is well described as both crisp and crunchy, and you take a bite out of it.", "word": "apple", "how": "sentence"}
+{"model": "gpt-6-luna", "arm": "Y2_lock", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y3_banana", "run": 1, "raw": "**apple**\n\nThe completed sentence reads: \"He took a bite out of the crisp, yellow apple.\"", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y3_banana", "run": 0, "raw": "**apple**\n\nA yellow apple (like a Golden Delicious) fits perfectly \u2014 it's crisp, and \"took a bite out of the apple\" is a natural, grammatically valid phrase.", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y3_banana", "run": 2, "raw": "**apple**\n\nThe sentence reads: \"He took a bite out of the crisp, yellow apple.\" This works well since \"apple\" is a fruit that can be described as both crisp and yellow (like a Golden Delicious).", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y3_banana", "run": 3, "raw": "**apple**\n\nThe sentence reads: \"He took a bite out of the crisp, yellow apple.\" \u2014 Yellow apple varieties (like Golden Delicious) are indeed crisp, making this a natural fit.", "word": "apple", "how": "sentence"}
+{"model": "mimo-v2.6-flash", "arm": "Y2_lock", "run": 4, "raw": "**apple**\n\n\"He took a bite out of the crisp, crunchy, yellow **apple**.\"", "word": "apple", "how": "sentence"}
+{"model": "glm-5.3-flash", "arm": "Y3_banana", "run": 4, "raw": "**apple**\n\nHe took a bite out of the crisp, yellow **apple**.", "word": "apple", "how": "sentence"}
+{"model": "gemini-4-argon", "arm": "Y2_lock", "run": 1, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y4_crisis", "run": 0, "raw": "**leaf**\n\n\"He took a bite out of the crisp, yellow **leaf**.\"\n\nThe sentence stays grammatically valid, and \"leaf\" fits nicely with \"crisp, yellow\" without using any fruit words.", "word": "leaf", "how": "sentence"}
+{"model": "gemini-4-argon", "arm": "Y2_lock", "run": 3, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y4_crisis", "run": 1, "raw": "**lettuce**\n\nThe completed sentence reads: \"He took a bite out of the crisp, yellow lettuce.\" This works because lettuce is a vegetable (not a fruit), it can genuinely be crisp and yellow (such as the outer leaves of iceberg lettuce), and it's something one could plausibly bite.", "word": "lettuce", "how": "sentence"}
+{"model": "gemini-4-argon", "arm": "Y2_lock", "run": 2, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y4_crisis", "run": 2, "raw": "**leaf**\n\n\"He took a bite out of the crisp, yellow **leaf**.\" \u2014 This works grammatically and sensibly (imagine a curious child or animal nibbling an autumn leaf), and it avoids all the restricted words.", "word": "leaf", "how": "sentence"}
+{"model": "gemini-4-argon", "arm": "Y2_lock", "run": 4, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y4_crisis", "run": 3, "raw": "**lettuce**\n\n\"He took a bite out of the crisp, yellow lettuce.\"\n\nLettuce fits well here \u2014 it's commonly described as \"crisp,\" and yellow varieties of lettuce (like the outer leaves of iceberg) are a real thing. It's a vegetable, not a fruit, so it satisfies all the constraints.", "word": "lettuce", "how": "sentence"}
+{"model": "gemini-4-argon", "arm": "Y2_lock", "run": 0, "raw": "apple", "word": "apple", "how": "single-word"}
+{"model": "glm-5.3-flash", "arm": "Y4_crisis", "run": 4, "raw": "**corn**\n\n\"He took a bite out of the crisp, yellow **corn**.\"\n\nCorn (as in corn on the cob) fits naturally here \u2014 it can be crisp, it's yellow, and it's something you take a bite out of. And it's a grain/vegetable, not a fruit, so it follows all the rules.", "word": "corn", "how": "sentence"}
